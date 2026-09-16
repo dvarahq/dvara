@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://dvarahq.com/docs
+    about: Configuration, deployment and API reference.
+  - name: DVARA
+    url: https://dvarahq.com
+    about: The project, and the components around it.
+  - name: Report a security vulnerability
+    url: https://github.com/dvarahq/dvara/security/policy
+    about: Never in a public issue. Private reporting, or security@dvarahq.com.

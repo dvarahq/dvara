@@ -1,0 +1,102 @@
+# The build: do the modules build, test and pass on their own, with nothing supplied.
+#
+# No build cache extension. A cached jar can come back with no classes in it, and the
+# failure then shows up downstream as compile errors against classes that are present and
+# correct. Nine modules build in a few minutes, so the cache is not worth that.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+
+      - name: Build and test
+        run: ./mvnw -B -ntp clean install
+
+  # Snapshots go to GitHub Packages; Maven Central carries tagged releases only, published by
+  # release.yml.
+  #
+  # The original reason was that Central's snapshot repository is public and a published jar is
+  # as good as published source, which mattered while this repository was private. That premise
+  # changes when it goes public, and whether snapshots should move to Central then is an open
+  # decision rather than a settled one — it is a single URL either way. Written as a decision
+  # rather than as a description of today's visibility, because the latter stops being true at
+  # the flip and nothing prompts anyone to notice.
+  #
+  # Releases are not published from this workflow. A released version on Central can never be
+  # deleted, so each one is a deliberate act behind a tag.
+  publish-snapshot:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+          server-id: github
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_TOKEN
+
+      # Every deploy adds its jars to the snapshot version rather than replacing them, and GitHub
+      # Packages refuses uploads once the store is full. The previous build of the snapshot is
+      # deleted first, so storage stays at one build. The snapshot is unavailable for a minute or
+      # two between the two steps.
+      - name: Remove the previous build of the snapshot
+        env:
+          GH_TOKEN: ${{ secrets.GRABDOC_PUBLISH_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION=$(./mvnw -B -q -DforceStdout help:evaluate -Dexpression=project.version)
+          case "$VERSION" in
+            *-SNAPSHOT) ;;
+            *) echo "::error::$VERSION is not a snapshot — this job publishes snapshots only"; exit 1 ;;
+          esac
+          OWNER=${{ github.repository_owner }}
+          REPO=${GITHUB_REPOSITORY#*/}
+          gh api --paginate "orgs/$OWNER/packages?package_type=maven&per_page=100" \
+              --jq ".[] | select(.repository.name == \"$REPO\") | .name" | while read -r pkg; do
+            gh api --paginate "orgs/$OWNER/packages/maven/$pkg/versions?per_page=100" \
+                --jq ".[] | select(.name == \"$VERSION\") | .id" | while read -r id; do
+              echo "removing $pkg $VERSION (version id $id)"
+              gh api -X DELETE "orgs/$OWNER/packages/maven/$pkg/versions/$id" \
+                || echo "::warning::could not remove $pkg $VERSION; the token may lack delete:packages, and storage keeps growing"
+            done
+          done
+
+      - name: Publish snapshot
+        run: |
+          set -euo pipefail
+          VERSION=$(./mvnw -B -q -DforceStdout help:evaluate -Dexpression=project.version)
+          case "$VERSION" in
+            *-SNAPSHOT) ;;
+            *) echo "::error::$VERSION is not a snapshot — this job publishes snapshots only"; exit 1 ;;
+          esac
+          ./mvnw -B -ntp -DskipTests deploy \
+            -DaltDeploymentRepository="github::https://maven.pkg.github.com/${{ github.repository }}"
+        env:
+          # The built-in GITHUB_TOKEN cannot publish here; a personal token is used, and the
+          # actor must be that token's owner, so it is the literal account name rather than
+          # github.actor, which on a push is whoever merged.
+          MAVEN_USERNAME: grabdoc
+          MAVEN_TOKEN: ${{ secrets.GRABDOC_PUBLISH_PAT }}

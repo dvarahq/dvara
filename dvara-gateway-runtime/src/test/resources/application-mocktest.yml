@@ -1,0 +1,13 @@
+dvara:
+  llm-gateway:
+    providers:
+      mock:
+        enabled: true
+        response: "Mock integration test response"
+        latency-ms: 0
+        stream-token-delay-ms: 0
+        error-rate: 0.0
+        matchers:
+          - name: custom-model
+            when: "request.model == 'mock/custom'"
+            response: "Custom model response"

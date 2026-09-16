@@ -1,0 +1,11 @@
+com.dvarahq.autoconfigure.GatewayAutoConfiguration
+com.dvarahq.autoconfigure.secret.SecretAutoConfiguration
+com.dvarahq.autoconfigure.ProviderAutoConfiguration
+com.dvarahq.autoconfigure.RoutingAutoConfiguration
+com.dvarahq.autoconfigure.ObservabilityAutoConfiguration
+com.dvarahq.autoconfigure.resilience.ResilienceAutoConfiguration
+com.dvarahq.autoconfigure.RegionAutoConfiguration
+com.dvarahq.autoconfigure.config.yaml.repo.YamlConfigStoreAutoConfiguration
+com.dvarahq.autoconfigure.workspace.WorkspaceLookupScopeAutoConfiguration
+com.dvarahq.autoconfigure.actuator.ActuatorAuthAutoConfiguration
+com.dvarahq.autoconfigure.cache.InMemoryResponseCacheAutoConfiguration

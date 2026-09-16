@@ -1,0 +1,246 @@
+# The gate.
+#
+# Eight checks on every push and pull request:
+#
+#   1. The GitHub user is grabdoc (pushes only).
+#   2. No commit message carries an assistant trailer.
+#   3. No forbidden file is in the tree.
+#   4. README.md exists and links to the website.
+#   5. The product name is capitalised in human-readable text.
+#   6. Only allow-listed documents ship inside a jar.
+#   7. Every optional dependency says what guards its absence.
+#   8. No commercial vocabulary, in code or in prose.
+#
+# Keep this list in step with the steps below. It said "four" while eight ran,
+# which is the same defect the checks themselves exist to catch.
+#
+# It does NOT scan file contents for "claude". Anthropic is a supported provider
+# and its model ids are claude-*, so a content scan would fail on real source.
+
+name: gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only grabdoc
+        if: github.event_name == 'push'
+        run: |
+          if [ "${{ github.actor }}" != "grabdoc" ]; then
+            echo "::error::${{ github.actor }} is not grabdoc — only grabdoc may push to this repository"
+            exit 1
+          fi
+          echo "user ok: ${{ github.actor }}"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: No assistant trailers
+        run: |
+          set -euo pipefail
+          BAD=$(git log --format='%H %B' \
+                | grep -inE 'co-authored-by:[[:space:]]*claude|claude-session|generated with \[?claude|@anthropic\.com>' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::a commit message carries an assistant trailer:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "commit messages ok"
+
+      - name: No forbidden files
+        run: |
+          set -euo pipefail
+          FAIL=0
+          for p in 'CLAUDE.md' '**/CLAUDE.md' '.claude/**' '**/.claude/**' '.mcp.json' 'AGENTS.md' \
+                   'docs/**' 'open-core/**' 'manual-tests/**' 'lead/**'; do
+            HITS=$(git ls-files -- "$p" || true)
+            if [ -n "$HITS" ]; then
+              echo "::error::forbidden path present: $p"
+              echo "$HITS" | sed 's/^/    /'
+              FAIL=1
+            fi
+          done
+          [ "$FAIL" = "0" ] || exit 1
+          echo "file paths ok"
+
+      - name: README exists and points to the website
+        run: |
+          set -euo pipefail
+          if [ ! -f README.md ]; then
+            echo "::error::README.md is missing"
+            exit 1
+          fi
+          if ! grep -q 'dvarahq\.com' README.md; then
+            echo "::error::README.md must link to https://dvarahq.com"
+            exit 1
+          fi
+          echo "readme ok"
+
+      # Branding guard. A gate step rather than a test, because a repository-scanning test only
+      # sees the module it lives in. `git grep` reads tracked files only, which is the right
+      # scope: untracked and ignored files do not exist on a runner.
+      - name: The product name is capitalised in human-readable text
+        run: |
+          set -uo pipefail
+          # Assembled so this workflow file cannot match itself.
+          NEEDLE="D""vara"
+          if git grep -n -I -P "(?<![[:alnum:]_-])${NEEDLE}(?![[:alnum:]_-])" -- . ':!.github/workflows/gate.yml'; then
+            echo "::error::The product name must be capitalised in human-readable text."
+            echo "Every legitimate use is lower-case with a delimiter attached (dvara-gateway-core,"
+            echo "com.dvarahq, dvara.llm-gateway.*) or camel-case with a letter attached"
+            echo "(DvaraUserDetails); the word boundaries above exclude both. So a hit here is prose."
+            echo "Fix the text — do not add an exclusion, which is how a guard starts rotting."
+            exit 1
+          fi
+          echo "brand name ok"
+
+      # Documents that ship inside a published jar. Anything under src/main/resources is packaged
+      # into the artifact and published, where a release can be superseded but never withdrawn.
+      # This is an allow-list, not a ban: a shipped document can be right, such as a provenance
+      # note for a bundled data file, but each one is added here on purpose.
+      - name: Only allow-listed documents ship inside a jar
+        run: |
+          set -uo pipefail
+          # Empty on purpose: nothing ships a document today.
+          ALLOWED=""
+          FAIL=0
+          for f in $(git ls-files | grep -E '^[^/]+/src/main/resources/.*\.(md|markdown|adoc|rst)$' || true); do
+            case " $ALLOWED " in
+              *" $f "*) continue ;;
+            esac
+            echo "::error file=$f::$f is packaged into a published jar and is not allow-listed"
+            FAIL=1
+          done
+          if [ "$FAIL" = "1" ]; then
+            echo "A document under src/main/resources ships inside the artifact and reaches Maven"
+            echo "Central permanently. Ask who it is written for: a consumer opening the jar, or us."
+            echo "If it is for a consumer, add it to ALLOWED above with a one-line reason. If it is"
+            echo "for us, move it out of src/main/resources — the repository keeps it either way."
+            exit 1
+          fi
+          echo "shipped documents ok"
+
+      # An <optional>true</optional> dependency is in no published jar: Maven does not pass it to
+      # consumers, while the module's own tests still see it, so the build is green and the
+      # artifact is missing something. The rule is not "do not use optional" but "say what happens
+      # when it is absent": a `guarded-by:` comment next to the declaration naming the probe, the
+      # condition, or the artifact that supplies it anyway. If nothing guards it, write that down.
+      - name: Every optional dependency says what guards its absence
+        run: |
+          python3 - <<'PY'
+          import glob, re, sys
+
+          EXEMPT = {"lombok"}   # compile-time only; nothing needs it at runtime
+          missing = []
+          checked = 0
+
+          for pom in sorted(glob.glob("*/pom.xml")):
+              src = open(pom).read()
+              for m in re.finditer(r"((?:<!--.*?-->\s*)?)<dependency>(.*?)</dependency>", src, re.S):
+                  body = m.group(2)
+                  if "<optional>true</optional>" not in body:
+                      continue
+                  artifact = re.search(r"<artifactId>(.*?)</artifactId>", body).group(1)
+                  if artifact in EXEMPT:
+                      continue
+                  checked += 1
+                  if "guarded-by:" not in m.group(1):
+                      line = src[: m.start(2)].count("\n") + 1
+                      missing.append((pom, line, artifact))
+
+          for pom, line, artifact in missing:
+              print(f"::error file={pom},line={line}::{artifact} is <optional> with no "
+                    f"'guarded-by:' comment — say what happens when it is absent")
+
+          if missing:
+              print()
+              print("An optional dependency is in no published jar. Add a comment immediately above")
+              print("the <dependency> beginning 'guarded-by:' that says what a consumer without it")
+              print("gets: a @ConditionalOnClass probe, a condition that is false without it, or")
+              print("another non-optional dependency that supplies it anyway. If nothing guards it,")
+              print("write that down — that is the finding, not a formality.")
+              sys.exit(1)
+
+          print(f"optional dependencies ok ({checked} checked, {len(EXEMPT)} artifact name exempt)")
+          PY
+
+      # Commercial vocabulary, in prose as well as in code.
+      #
+      # Every other guard here checks STRUCTURE — dependencies, class names, bean graphs, file
+      # paths. None of them reads words. That is how plan names in an `ApiKey.tier` javadoc and a
+      # hosted trial state in an exception's javadoc both reached this repository and survived the
+      # module split: no dependency was wrong, no class was misplaced, only the text. A javadoc
+      # compiles into the published jar exactly as the code does, and Maven Central cannot withdraw
+      # a release. This step reads the text.
+      #
+      # Two lists. HARD terms have no legitimate use anywhere. SOURCE terms name the other build's
+      # modules, which prose about an open core may legitimately mention, so they are refused only
+      # in code that compiles into an artifact.
+      - name: No commercial vocabulary
+        run: |
+          python3 - <<'PY'
+          import re, subprocess, sys
+
+          # Each needle is assembled from fragments so this workflow cannot match itself.
+          HARD = ["stri" "pe", "sa" "as", "upgrade" "_url", "trial" "_expired",
+                  "chronic" "_over_cap", "blocksAt" "HardCap", "monthly" "Tokens",
+                  "monthly" "LlmCalls", "monthly" "McpCalls", "monthly" "A2aCalls",
+                  "Tier" "Registry", "Tier" "Catalog", "Workspace" "CapEnforcer",
+                  "Governed" "CallCounter", "Governed" "CallSource", "dvara" "-ee"]
+
+          SOURCE = ["flight" "deck", "com.dvarahq." "enterprise", "enterprise" "-core",
+                    "enterprise" "-finops", "enterprise" "-security", "enterprise" "-audit",
+                    "enterprise" "-persistence", "enterprise" "-caching",
+                    "enterprise" "-guardrail", "enterprise" "-routing"]
+
+          # Deliberate exceptions, each with the reason it is not a leak. A term is added here
+          # only when it is provably benign; the default for a hit is to fix the text.
+          ALLOW = {
+              # "checkout" inside the HARD scan would hit actions/checkout@v4 — not a term here,
+              # but this is where such a decision would be recorded.
+          }
+
+          files = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
+                                 check=True).stdout.split()
+          skip = {".github/workflows/gate.yml"}
+
+          hits = []
+          for f in files:
+              if f in skip:
+                  continue
+              try:
+                  text = open(f, encoding="utf-8", errors="replace").read()
+              except (IsADirectoryError, FileNotFoundError):
+                  continue
+              shipped = "/src/" in f
+              for needle in HARD + (SOURCE if shipped else []):
+                  # Bounded on both sides, or a needle matches inside an unrelated identifier:
+                  # the payment processor's name is a prefix of `stripExtension`, which is a
+                  # perfectly ordinary method here. A guard that cries wolf gets switched off.
+                  pattern = r"(?<![A-Za-z0-9])" + re.escape(needle) + r"(?![A-Za-z0-9])"
+                  for m in re.finditer(pattern, text, re.I):
+                      line = text[: m.start()].count("\n") + 1
+                      if (f, line, needle.lower()) in ALLOW:
+                          continue
+                      hits.append((f, line, needle, text.splitlines()[line - 1].strip()[:120]))
+
+          for f, line, needle, src in hits:
+              print(f"::error file={f},line={line}::commercial vocabulary '{needle}': {src}")
+
+          if hits:
+              print()
+              print("A word naming the paid product reached this repository. Javadoc and comments")
+              print("compile into the published jar, and a release on Maven Central can be")
+              print("superseded but never withdrawn — so this is the same exposure as code.")
+              print("Fix the text. Add to ALLOW only with the reason it is provably benign;")
+              print("an exclusion added to make a build pass is how a guard starts rotting.")
+              sys.exit(1)
+
+          print(f"vocabulary ok ({len(files)} files, {len(HARD)} terms everywhere, "
+                f"{len(SOURCE)} more under src/)")
+          PY

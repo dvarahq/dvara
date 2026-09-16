@@ -1,0 +1,123 @@
+spring:
+  application:
+    name: dvara-gateway
+  config:
+    import: optional:classpath:dvara-gateway-overlay.yml
+  profiles:
+    group:
+      production: log-json
+  servlet:
+    multipart:
+      max-file-size: ${DVARA_BATCH_MAX_FILE_SIZE:100MB}
+      max-request-size: ${DVARA_BATCH_MAX_FILE_SIZE:100MB}
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+server:
+  port: 8080
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,gateway-status,info
+        exclude: env,beans,mappings,configprops,loggers,heapdump,threaddump,scheduledtasks,caches,sessions,quartz
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,gatewayReadiness
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: true
+  group-configs:
+    - group: public
+      paths-to-match: /v1/**
+
+dvara:
+
+  audit:
+    hmac-secret: ${DVARA_AUDIT_HMAC_SECRET:default-dev-secret-change-in-production}
+    # Blank disables audit writing entirely. Declared here rather than left to relaxed binding
+    # so the variable the documentation names is visible in the file an operator reads, and so
+    # something in this build references it: DVARA_AUDIT_FILE_PATH previously appeared only in
+    # the README, which is how a documented setting quietly stops working and nobody notices.
+    file:
+      path: ${DVARA_AUDIT_FILE_PATH:}
+  encryption:
+    master-password: ${DVARA_ENCRYPTION_MASTER_PASSWORD:}
+  actuator:
+    api-key: ${DVARA_ACTUATOR_API_KEY:}
+    metrics-api-key: ${DVARA_ACTUATOR_METRICS_API_KEY:}
+  region:
+    id: ${DVARA_REGION_ID:}
+    name: ${DVARA_REGION_NAME:}
+
+  llm-gateway:
+    data-plane:
+      require-api-key: ${DVARA_LLM_GATEWAY_REQUIRE_API_KEY:false}
+
+    providers:
+      openai:
+        api-key: ${OPENAI_API_KEY:}
+      anthropic:
+        api-key: ${ANTHROPIC_API_KEY:}
+      gemini:
+        api-key: ${GEMINI_API_KEY:}
+      azure-openai:
+        api-key: ${AZURE_OPENAI_API_KEY:}
+        base-url: ${AZURE_OPENAI_BASE_URL:}
+      mistral:
+        api-key: ${MISTRAL_API_KEY:}
+      cohere:
+        api-key: ${COHERE_API_KEY:}
+      groq:
+        api-key: ${GROQ_API_KEY:}
+      qwen:
+        api-key: ${QWEN_API_KEY:}
+      deepseek:
+        api-key: ${DEEPSEEK_API_KEY:}
+      moonshot:
+        api-key: ${MOONSHOT_API_KEY:}
+      chatglm:
+        api-key: ${ZHIPU_API_KEY:}
+      grok:
+        api-key: ${XAI_API_KEY:}
+      ollama:
+        enabled: ${OLLAMA_ENABLED:false}
+        base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      bedrock:
+        enabled: ${BEDROCK_ENABLED:false}
+        access-key: ${AWS_ACCESS_KEY_ID:}
+        secret-key: ${AWS_SECRET_ACCESS_KEY:}
+        region: ${AWS_REGION:us-east-1}
+      mock:
+        enabled: ${MOCK_PROVIDER_ENABLED:false}
+
+    pii:
+      enabled: ${DVARA_LLM_GATEWAY_PII_ENABLED:true}
+      default-action: ${DVARA_LLM_GATEWAY_PII_DEFAULT_ACTION:LOG}
+      scan-responses: ${DVARA_LLM_GATEWAY_PII_SCAN_RESPONSES:true}
+      strip-before-cache: ${DVARA_LLM_GATEWAY_PII_STRIP_BEFORE_CACHE:true}

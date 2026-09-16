@@ -1,0 +1,303 @@
+/*
+ * Copyright 2026 DVARA Labs, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.dvarahq.server.web;
+
+import com.dvarahq.core.plane.GatewayPlane;
+import com.dvarahq.core.apikey.ApiKey;
+import com.dvarahq.core.apikey.ApiKeyGenerator;
+import com.dvarahq.core.apikey.ApiKeyScope;
+import com.dvarahq.core.apikey.ApiKeyRepository;
+import com.dvarahq.core.apikey.ApiKeyStatus;
+import com.dvarahq.core.util.JsonMapper;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.UriUtils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * Servlet filter that resolves the {@code Authorization: Bearer} token to a
+ * workspace via the {@link ApiKeyRepository}. Sets {@code workspaceId} and
+ * {@code apiKeyId} as request attributes for all downstream filters and
+ * controllers.
+ *
+ * <p>A key that is presented must be valid, in both postures: a revoked key, an expired key and
+ * a key absent from the store are each rejected with {@code 401} whatever
+ * {@code dvara.llm-gateway.data-plane.require-api-key} is set to. That flag governs only whether
+ * a request may omit a key altogether: with {@code true} a keyless request is rejected
+ * {@code 401}; with {@code false} (the default, for development) it passes through as
+ * {@code workspaceId=null}, {@code apiKey="anonymous"}. Serving a request whose key failed
+ * validation would tell the caller it had authenticated when it had not, and would leave the
+ * request with no workspace, so no workspace-scoped control would apply.
+ *
+ * <p>Runs after the trace, access-log, metrics and audit filters and before rate limiting, so
+ * workspace context is available to every subsequent filter.
+ */
+@Component
+// After the access-log, metrics and audit filters (+1..+3): a refusal here returns without calling
+// the chain, and those filters record it only because they wrap this one.
+@Order(Ordered.HIGHEST_PRECEDENCE + 5)
+public class ApiKeyAuthFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(ApiKeyAuthFilter.class);
+
+    /**
+     * The rate limiter's bucket identity for this request, never the bearer token: the limiter
+     * passes whatever it is given straight to its store, where a token would sit in plaintext.
+     *
+     * <p>It holds the key's opaque id where one resolved (the same value usage, cost and budget
+     * rows carry), or the SHA-256 the store would have been looked up by where no repository is
+     * configured, or {@code anonymous}. The hash is safe to expose as a bucket name: it is what
+     * the server stores, and authenticating needs the preimage.
+     *
+     * <p>Stamped once, here, so the reservation and the settlement cannot key differently.
+     */
+    public static final String API_KEY_ATTR = "apiKey";
+    public static final String WORKSPACE_ID_ATTR = "workspaceId";
+    public static final String API_KEY_ID_ATTR = "apiKeyId";
+
+    private final ApiKeyRepository apiKeyRepository;
+    private final boolean requireApiKey;
+
+    public ApiKeyAuthFilter(
+            @Autowired(required = false) ApiKeyRepository apiKeyRepository,
+            @Value("${dvara.llm-gateway.data-plane.require-api-key:false}") boolean requireApiKey) {
+        this.apiKeyRepository = apiKeyRepository;
+        this.requireApiKey = requireApiKey;
+        log.info("ApiKeyAuthFilter initialized: requireApiKey={}, repository={}",
+                requireApiKey, apiKeyRepository != null ? apiKeyRepository.getClass().getSimpleName() : "null");
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        // Make this decision with the same decoded first segment Spring matches. Looking only for
+        // the raw "/v1/" prefix lets /v%31/chat/completions skip this filter before the canonical
+        // path check below, even though Spring routes it to /v1/chat/completions.
+        return !targetsV1(request.getRequestURI());
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain chain) throws ServletException, IOException {
+        // scope matching reads the request path, and a percent-encoded or matrix-parameter
+        // spelling of a governed path (/v1/%63hat/completions, /v1/chat;x=1/completions) routes to the
+        // same handler while matching no family. Rather than re-implement the container's decoding,
+        // a /v1 path that is not in canonical form is refused outright: no endpoint here has a
+        // segment that needs encoding, so there is no legitimate request to lose.
+        String uri = request.getRequestURI();
+        if (uri != null && !isCanonical(uri)) {
+            reject(response, request, HttpStatus.BAD_REQUEST,
+                    "Request path is not in canonical form (percent-encoding, matrix parameters, empty or dot segments are not accepted under /v1).",
+                    "invalid_path", "invalid_request_error");
+            return;
+        }
+        // The webhook approval endpoint carries its own credential and takes no API key: its links
+        // are delivered to a person, in a chat or mail integration, who holds no gateway key, and
+        // the token signed per approval is the whole authorisation. Exempt outright rather than
+        // "validate a key if one is sent", since a key means nothing there.
+        //
+        // The match is exact, and sits below the canonical check on purpose: this takes an
+        // unauthenticated, state-changing action from the public internet, so a prefix match must
+        // not free a neighbouring path, and a percent-encoded spelling cannot creep past.
+        if (isWebhookApprovalAction(uri)) {
+            chain.doFilter(request, response);
+            return;
+        }
+
+        String bearerToken = extractBearerToken(request);
+
+        if (bearerToken == null) {
+            if (requireApiKey) {
+                reject(response, request, HttpStatus.UNAUTHORIZED,
+                        "API key is required. Set Authorization: Bearer <your-api-key> header.",
+                        "api_key_required");
+                return;
+            }
+            // Anonymous pass-through
+            request.setAttribute(API_KEY_ATTR, "anonymous");
+            chain.doFilter(request, response);
+            return;
+        }
+
+        // No repository available — pass the raw token through
+        if (apiKeyRepository == null) {
+            // No repository, so nothing can resolve an id. The hash is what a repository would have
+            // been searched by, and it identifies the caller as precisely as the token without being
+            // the token.
+            request.setAttribute(API_KEY_ATTR, "sha256:" + ApiKeyGenerator.hash(bearerToken));
+            chain.doFilter(request, response);
+            return;
+        }
+
+        // Look up the API key by hash
+        String keyHash = ApiKeyGenerator.hash(bearerToken);
+        Optional<ApiKey> found = apiKeyRepository.findByKeyHash(keyHash);
+
+        if (found.isEmpty()) {
+            // Rejected in both postures. Sending no key states that the caller is anonymous;
+            // sending a key that does not resolve is an assertion that failed to validate, and
+            // require-api-key does not govern that: it answers "may a request omit a key?", never
+            // "accept a wrong one". See the class javadoc.
+            reject(response, request, HttpStatus.UNAUTHORIZED,
+                    "Invalid API key.",
+                    "invalid_api_key");
+            return;
+        }
+
+        ApiKey apiKey = found.get();
+
+        if (apiKey.getStatus() != ApiKeyStatus.ACTIVE) {
+            reject(response, request, HttpStatus.UNAUTHORIZED,
+                    "API key has been revoked.",
+                    "api_key_revoked");
+            return;
+        }
+
+        if (apiKey.getExpiresAt() != null && apiKey.getExpiresAt().isBefore(Instant.now())) {
+            reject(response, request, HttpStatus.UNAUTHORIZED,
+                    "API key has expired.",
+                    "api_key_expired");
+            return;
+        }
+
+        // A key with no scopes is unrestricted; one with scopes may call only the families it
+        // names (ApiKeyScope). 403, not 401: the caller authenticated fine and is refused for what
+        // the key may do.
+        if (!ApiKeyScope.permits(apiKey.getScopes(), request.getRequestURI())) {
+            reject(response, request, HttpStatus.FORBIDDEN,
+                    "API key is not scoped for this endpoint. It carries " + apiKey.getScopes()
+                            + "; this endpoint needs " + ApiKeyScope.forPath(request.getRequestURI()).map(ApiKeyScope::value).orElse("?") + ".",
+                    "api_key_scope", "permission_error");
+            return;
+        }
+
+        // Set workspace context for all downstream filters. The limiter's bucket is the key's id,
+        // not the credential — see API_KEY_ATTR.
+        request.setAttribute(API_KEY_ATTR, apiKey.getId());
+        request.setAttribute(WORKSPACE_ID_ATTR, apiKey.getWorkspaceId());
+        request.setAttribute(API_KEY_ID_ATTR, apiKey.getId());
+
+        chain.doFilter(request, response);
+    }
+
+    private String extractBearerToken(HttpServletRequest request) {
+        String auth = request.getHeader("Authorization");
+        if (auth != null && auth.startsWith("Bearer ")) {
+            String key = auth.substring(7).trim();
+            if (!key.isEmpty()) {
+                return key;
+            }
+        }
+        return null;
+    }
+
+    /** Only a path with no percent-escapes, matrix parameters, empty or dot segments is judged for scope. */
+    static boolean isCanonical(String uri) {
+        if (uri.contains("%") || uri.contains(";") || uri.contains("\\") || uri.contains("//")) {
+            return false;
+        }
+        for (String segment : uri.split("/", -1)) {
+            if (segment.equals(".") || segment.equals("..")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Exactly {@code /v1/webhooks/actions/&#123;action&#125;} -- three fixed segments and one more,
+     * nothing deeper and nothing longer. The action itself is not checked here; whether it is a real
+     * one is the controller's question, and this only decides that no API key is asked for.
+     */
+    static boolean isWebhookApprovalAction(String uri) {
+        if (uri == null) {
+            return false;
+        }
+        String prefix = "/v1/webhooks/actions/";
+        if (!uri.startsWith(prefix)) {
+            return false;
+        }
+        String action = uri.substring(prefix.length());
+        return !action.isEmpty() && action.indexOf('/') < 0;
+    }
+
+    /** Whether Spring can treat the request's first path segment as {@code v1}. */
+    static boolean targetsV1(String uri) {
+        if (uri == null || uri.isEmpty()) {
+            return false;
+        }
+        final String decoded;
+        try {
+            // UriUtils has path semantics: unlike form decoding, '+' remains '+'. Decoding here is
+            // only for filter selection; the raw URI is still what isCanonical rejects.
+            decoded = UriUtils.decode(uri, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException malformedEscape) {
+            // A malformed escape cannot turn another first segment into v1. A literal v1 prefix
+            // still belongs in this filter so it receives the normal invalid_path response.
+            return GatewayPlane.LLM.owns(uri) || uri.startsWith("/v1;");
+        }
+
+        int segmentEnd = decoded.indexOf('/', 1);
+        String firstSegment = segmentEnd >= 0 ? decoded.substring(1, segmentEnd) : decoded.substring(1);
+        int matrixParameter = firstSegment.indexOf(';');
+        if (matrixParameter >= 0) {
+            firstSegment = firstSegment.substring(0, matrixParameter);
+        }
+        return firstSegment.equals("v1");
+    }
+
+    private void reject(HttpServletResponse response, HttpServletRequest request,
+                        HttpStatus status, String message, String code) throws IOException {
+        reject(response, request, status, message, code, "authentication_error");
+    }
+
+    private void reject(HttpServletResponse response, HttpServletRequest request,
+                        HttpStatus status, String message, String code, String type) throws IOException {
+        response.setStatus(status.value());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        // what the access log, metrics and audit event record for this refusal
+        request.setAttribute(AccessLogFilter.ATTR_ERROR_CODE, code);
+
+        String traceId = response.getHeader(TraceIdFilter.HEADER);
+        Map<String, Object> errorObj = new LinkedHashMap<>();
+        errorObj.put("message", message);
+        errorObj.put("type", type);
+        errorObj.put("code", code);
+        errorObj.put("trace_id", traceId != null ? traceId : "");
+
+        Map<String, Object> body = Map.of("error", errorObj);
+        response.getWriter().write(JsonMapper.instance().writeValueAsString(body));
+    }
+}

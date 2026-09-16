@@ -1,0 +1,272 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.dvarahq</groupId>
+    <artifactId>dvara-platform</artifactId>
+    <version>1.8.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>dvara-platform</name>
+    <description>DVARA AI Governance Platform - the open-source LLM Gateway</description>
+    <url>https://github.com/dvarahq/dvara</url>
+
+    <organization>
+        <name>DVARA Labs, Inc.</name>
+        <url>https://dvarahq.com</url>
+    </organization>
+
+    <licenses>
+        <license>
+            <name>The Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>dvarahq</id>
+            <name>DVARA Labs</name>
+            <organization>DVARA Labs, Inc.</organization>
+            <organizationUrl>https://dvarahq.com</organizationUrl>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/dvarahq/dvara.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/dvarahq/dvara.git</developerConnection>
+        <url>https://github.com/dvarahq/dvara</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <modules>
+        <module>dvara-gateway-autoconfigure</module>
+        <module>dvara-gateway-core</module>
+        <module>dvara-gateway-policy</module>
+        <module>dvara-gateway-runtime</module>
+        <module>dvara-gateway-server</module>
+        <module>dvara-pii-detection</module>
+        <module>dvara-rate-limiting</module>
+        <module>dvara-spring-boot-starter</module>
+        <module>dvara-spring-boot-starter-gateway</module>
+    </modules>
+
+    <properties>
+        <java.version>25</java.version>
+        <jacoco.argLine/>
+        <jacoco.version>0.8.13</jacoco.version>
+        <resilience4j.version>2.2.0</resilience4j.version>
+        <bucket4j.version>8.10.1</bucket4j.version>
+        <httpcore5.version>5.4.3</httpcore5.version>
+        <groovy.version>4.0.32</groovy.version>
+        <json-schema-validator.version>3.0.0</json-schema-validator.version>
+        <hypersistence-tsid.version>2.1.4</hypersistence-tsid.version>
+
+        <surefire.heap>1g</surefire.heap>
+
+    </properties>
+
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages — dvarahq/dvara</name>
+            <url>https://maven.pkg.github.com/dvarahq/dvara</url>
+        </repository>
+    </distributionManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy-agent</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.hypersistence</groupId>
+                <artifactId>hypersistence-tsid</artifactId>
+                <version>${hypersistence-tsid.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.bucket4j</groupId>
+                <artifactId>bucket4j-core</artifactId>
+                <version>${bucket4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-bom</artifactId>
+                <version>${resilience4j.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-license-and-notice</id>
+                        <phase>process-resources</phase>
+                        <goals><goal>copy-resources</goal></goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/META-INF</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${maven.multiModuleProjectDirectory}</directory>
+                                    <includes>
+                                        <include>LICENSE</include>
+                                        <include>NOTICE</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>open-modules-only</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>com.dvarahq:*</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>com.dvarahq:dvara-platform</include>
+                                        <include>com.dvarahq:dvara-gateway-core</include>
+                                        <include>com.dvarahq:dvara-pii-detection</include>
+                                        <include>com.dvarahq:dvara-gateway-policy</include>
+                                        <include>com.dvarahq:dvara-rate-limiting</include>
+                                        <include>com.dvarahq:dvara-gateway-autoconfigure</include>
+                                        <include>com.dvarahq:dvara-gateway-runtime</include>
+                                        <include>com.dvarahq:dvara-gateway-server</include>
+                                        <include>com.dvarahq:dvara-spring-boot-starter</include>
+                                        <include>com.dvarahq:dvara-spring-boot-starter-gateway</include>
+                                    </includes>
+                                    <message>Modules in this repository may depend only on the com.dvarahq artifacts listed in the root pom.</message>
+                                </bannedDependencies>
+                            </rules>
+                            <fail>true</fail>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-configuration-processor</artifactId>
+                        </path>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>resolve-agent-paths</id>
+                        <phase>initialize</phase>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>@{jacoco.argLine} -Xmx${surefire.heap} --enable-native-access=ALL-UNNAMED
+                        -javaagent:${net.bytebuddy:byte-buddy-agent:jar}</argLine>
+                    <rerunFailingTestsCount>2</rerunFailingTestsCount>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals><goal>jar-no-fork</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals><goal>jar</goal></goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <doclint>none</doclint>
+                            <quiet>true</quiet>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals><goal>sign</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.7.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>false</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+</project>

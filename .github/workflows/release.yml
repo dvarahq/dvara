@@ -1,0 +1,151 @@
+name: release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+*'
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/dvarahq/dvara-gateway-oss
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+          # The `central` server id is what central-publishing-maven-plugin authenticates as
+          # (publishingServerId in the release profile). The GPG key is imported here rather
+          # than by a hand-rolled step so the passphrase never reaches a shell.
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.CENTRAL_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Version from tag
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          case "$VERSION" in
+            *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "Releasing $VERSION from tag $GITHUB_REF_NAME"
+          ./mvnw -B -ntp -q versions:set -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+
+      - name: Build and test
+        run: ./mvnw -B -ntp clean install
+
+      # The credentials are checked BEFORE anything is published, and a missing one fails the
+      # release rather than skipping the upload. A skip would produce the worst outcome available:
+      # a GitHub Release and a pushed image for a version that has no Maven artifact, announced as
+      # shipped. Nothing here is recoverable by re-running once the tag has been advertised, so the
+      # cheap failure is the one that happens first.
+      - name: The Central credentials are present
+        env:
+          MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          GPG_KEY: ${{ secrets.CENTRAL_GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          set -uo pipefail
+          MISSING=""
+          [ -n "${MAVEN_USERNAME:-}" ]  || MISSING="$MISSING CENTRAL_TOKEN_USERNAME"
+          [ -n "${MAVEN_PASSWORD:-}" ]  || MISSING="$MISSING CENTRAL_TOKEN_PASSWORD"
+          [ -n "${GPG_KEY:-}" ]         || MISSING="$MISSING CENTRAL_GPG_PRIVATE_KEY"
+          [ -n "${GPG_PASSPHRASE:-}" ]  || MISSING="$MISSING MAVEN_GPG_PASSPHRASE"
+          if [ -n "$MISSING" ]; then
+            echo "::error::cannot publish to Maven Central — missing repository secret(s):$MISSING"
+            echo "Central rejects an unsigned bundle, so all four are required. Set them in the"
+            echo "repository's secrets, and verify the com.dvarahq namespace first: an upload for"
+            echo "an unverified namespace is refused after the artifacts have been sent."
+            exit 1
+          fi
+          echo "central credentials present"
+
+      # Publishes to Maven Central. The `release` profile attaches the sources and javadoc jars
+      # Central requires, signs everything with GPG, and turns on central-publishing-maven-plugin,
+      # whose extensions=true takes over the deploy phase — so this does NOT go to the
+      # distributionManagement repository (GitHub Packages) that a plain `deploy` would use.
+      #
+      # autoPublish is false, so this uploads a bundle and stops. It becomes downloadable only
+      # when someone presses publish in the Central portal. That is deliberate: a released version
+      # on Central can never be deleted, renamed or replaced, so the last step stays manual.
+      #
+      # Tests are skipped because the step above already ran them on this exact tree.
+      - name: Publish to Maven Central
+        env:
+          MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: ./mvnw -B -ntp -Prelease -DskipTests deploy
+
+      - name: Stage the runnable jar
+        id: jar
+        run: |
+          set -euo pipefail
+          VERSION=${{ steps.version.outputs.version }}
+          JAR=dvara-gateway-server/target/dvara-gateway-server-$VERSION-app.jar
+          test -f "$JAR" || { echo "::error::$JAR was not produced"; exit 1; }
+          mkdir -p dvara-gateway-server/target/image
+          cp "$JAR" dvara-gateway-server/target/image/app.jar
+          (cd dvara-gateway-server/target && sha256sum "$(basename "$JAR")" > "$(basename "$JAR").sha256")
+          echo "path=$JAR" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: grabdoc
+          password: ${{ secrets.GRABDOC_PUBLISH_PAT }}
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ steps.version.outputs.prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=DVARA Gateway (open source)
+            org.opencontainers.image.description=The open-source LLM Gateway of the DVARA AI governance platform: an OpenAI-compatible API in front of OpenAI, Anthropic, Gemini, Bedrock, Ollama and more, with policy, PII detection and redaction, guardrails, rate limiting and an HMAC-chained audit log. One process, one gateway.yaml.
+            org.opencontainers.image.documentation=https://dvarahq.com/docs
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: dvara-gateway-server/target/image
+          file: dvara-gateway-server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.version.outputs.version }}
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.jar.outputs.path }}
+            ${{ steps.jar.outputs.path }}.sha256

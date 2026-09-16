@@ -1,0 +1,85 @@
+# dvara-oss
+
+HELP.md
+target/
+# The extraction's isolated Maven repository used to be written INSIDE this tree — 317 MB that
+# `git add -A` would have swept into the initial commit. It now lives outside, and the
+# emit verification fails if one appears here. This line is the third guard: even if both were
+# undone, nothing can stage it.
+.m2/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### macOS ###
+.DS_Store
+
+### Environment files (may contain API keys) ###
+.env
+.env.local
+.env.*.local
+
+### ML model binaries — fetched at build time into target/, never committed ###
+*.onnx
+
+### Security-sensitive files ###
+#
+# Nothing below may be un-ignored. An exception for one file is really a grant of
+# PERMISSION: with it in place, a key later dropped into a resources directory is
+# staged by `git add -A` without a word. These rules are absolute so that cannot
+# happen, and a key that genuinely needs to be in a build belongs outside the tree.
+*.pem
+*.key
+*.p12
+*.jks
+credentials.json
+
+### Local review scratchpad — seed data, review creds, docker harness (never commit) ###
+/scratchpad/
+
+### Node.js (local testing only) ###
+node_modules/
+package.json
+package-lock.json
+
+/scratch/
+.claude/
+
+# Local security-scan artifacts
+.security-bin/
+sbom.cdx.json
+
+
+# JaCoCo coverage output (-Pcoverage)
+**/target/site/jacoco/
+**/target/site/jacoco-aggregate/
+**/target/jacoco.exec
+

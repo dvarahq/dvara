@@ -1,0 +1,10 @@
+# OTLP trace export is opt-in by endpoint. Boot gates the exporter on the presence of
+# management.opentelemetry.tracing.export.otlp.endpoint, and that key cannot be conditionally
+# omitted from YAML, so the mapping from OTEL_EXPORTER_OTLP_ENDPOINT happens here instead.
+org.springframework.boot.EnvironmentPostProcessor=\
+  com.dvarahq.gateway.autoconfigure.TracingExporterEnvironmentPostProcessor
+
+# explains the boot failure when spring-jdbc stands the gateway.yaml store down and a
+# consumer of one of its repositories then cannot be built.
+org.springframework.boot.diagnostics.FailureAnalyzer=\
+  com.dvarahq.autoconfigure.config.yaml.repo.YamlStoreStoodDownFailureAnalyzer

@@ -1,0 +1,149 @@
+DVARA LLM Gateway
+Copyright 2026 DVARA Labs, Inc.
+
+This product includes software developed at DVARA Labs, Inc.
+(https://dvarahq.com).
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file for the
+full terms.
+
+================================================================================
+THIRD-PARTY SOFTWARE
+================================================================================
+
+This file used to say that third-party licences were "declared in the Maven POM
+of the module that depends on it". That is a pointer, not a notice, and it does
+not travel with the artifact. It matters here because `dvara-gateway-server`
+publishes a repackaged jar with the `app` classifier that physically contains
+every runtime dependency named below.
+
+A licence audit of the 121 distinct compile- and runtime-scope dependencies found
+no artifact that cannot be redistributed in an Apache-2.0 product, and no
+artifact without a declared licence. The obligations that do apply are set out
+here.
+
+--------------------------------------------------------------------------------
+Apache License, Version 2.0 — 108 artifacts
+--------------------------------------------------------------------------------
+
+Including Spring Boot and the Spring Framework, the Jackson libraries, Apache
+Tomcat, Apache Commons, Apache Groovy, Micrometer, Resilience4j, Caffeine,
+SnakeYAML, Bucket4j, springdoc-openapi, jtokkit's dependencies and OpenTelemetry.
+
+Several of these ship a NOTICE file of their own, whose contents this
+distribution is required to propagate under section 4(d) of the Apache License.
+Those notices are reproduced in the `META-INF` directory of each bundled jar and
+travel with it.
+
+--------------------------------------------------------------------------------
+MIT License — 5 artifacts
+--------------------------------------------------------------------------------
+
+  org.slf4j:slf4j-api              Copyright (c) 2004-2023 QOS.ch Sarl
+  org.slf4j:jul-to-slf4j           Copyright (c) 2004-2023 QOS.ch Sarl
+  org.projectlombok:lombok         Copyright (c) The Project Lombok Authors
+  com.knuddels:jtokkit             Copyright (c) Knuddels GmbH & Co. KG
+  io.hypersistence:hypersistence-tsid
+                                   Copyright (c) Vlad Mihalcea
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+net.logstash.logback:logstash-logback-encoder is Apache-2.0, and additionally
+carries the MIT notice above: part of its LogstashBasicMarker.java is copied
+from SLF4J, Copyright (c) 2004-2023 QOS.ch Sarl.
+
+--------------------------------------------------------------------------------
+Eclipse Public License 2.0 — 4 artifacts, each dual-licensed
+--------------------------------------------------------------------------------
+
+Each of these is offered under two licences. **This distribution elects the
+Eclipse Public License 2.0 for all four.** The election is stated rather than
+left implicit: logback's other option is the LGPL, and a consumer should not
+have to guess which one reaches them.
+
+  ch.qos.logback:logback-classic        EPL-2.0 or LGPL-2.1-only  -> EPL-2.0
+  ch.qos.logback:logback-core           EPL-2.0 or LGPL-2.1-only  -> EPL-2.0
+  jakarta.annotation:jakarta.annotation-api
+                                        EPL-2.0 or GPL-2.0 with
+                                        Classpath Exception       -> EPL-2.0
+  jakarta.servlet:jakarta.servlet-api   EPL-2.0 or GPL-2.0 with
+                                        Classpath Exception       -> EPL-2.0
+
+The EPL-2.0 is at https://www.eclipse.org/legal/epl-2.0/. These artifacts are
+redistributed unmodified, in binary form. Source is available from the upstream
+projects: https://github.com/qos-ch/logback and https://github.com/jakartaee.
+
+--------------------------------------------------------------------------------
+Eclipse Distribution License 1.0 (BSD 3-Clause) — 2 artifacts
+--------------------------------------------------------------------------------
+
+  jakarta.activation:jakarta.activation-api   Copyright (c) 2018 Oracle and/or
+  jakarta.xml.bind:jakarta.xml.bind-api       its affiliates
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+ - Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+ - Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+ - Neither the name of the Eclipse Foundation, Inc. nor the names of its
+   contributors may be used to endorse or promote products derived from this
+   software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+--------------------------------------------------------------------------------
+BSD 2-Clause — 1 artifact
+--------------------------------------------------------------------------------
+
+  org.hdrhistogram:HdrHistogram    Copyright (c) 2012, 2013, 2014, 2015, 2016
+                                   Gil Tene and contributors
+
+Offered as BSD-2-Clause or public domain (CC0); this distribution elects
+BSD-2-Clause. Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the above copyright notice and this
+list of conditions are retained. THIS SOFTWARE IS PROVIDED "AS IS" AND ANY
+EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED.
+
+--------------------------------------------------------------------------------
+Public domain — 1 artifact
+--------------------------------------------------------------------------------
+
+  aopalliance:aopalliance
+
+Declared public domain by its publisher. Recorded here because the declaration
+carries no licence text, URL or copyright holder — it is an assertion with
+nothing behind it. It reaches this build only as a transitive dependency of
+Spring AOP, and it is an interface-only jar.
+
+================================================================================
+
+The authoritative, generated list of every dependency and its declared licence is
+produced by the build. Nothing above supersedes the licence an artifact itself
+declares; where the two differ, the artifact's own licence governs.

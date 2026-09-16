@@ -1,0 +1,23 @@
+# Code owners.
+#
+# Everyone listed here is requested for review automatically on a pull request
+# touching the matching paths. This file assigns review, not permission — it
+# cannot stop a merge on its own. Enforcement is a branch protection rule
+# requiring review from a code owner, which has to be configured on the
+# repository separately; without that rule this file is a convenience.
+#
+# The last matching pattern wins, so the catch-all goes first and the narrower
+# rules below override it.
+
+* @grabdoc
+
+# The release pipeline, the gate, and the licence and third-party notices.
+# These decide what is published and under what terms, and a mistake in any of
+# them reaches Maven Central, where a release can be superseded but never
+# withdrawn. They are called out so a change here is never reviewed as an
+# ordinary file change.
+
+/.github/workflows/  @grabdoc
+/LICENSE             @grabdoc
+/NOTICE              @grabdoc
+/pom.xml             @grabdoc
