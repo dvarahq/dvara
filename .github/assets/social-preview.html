@@ -1,0 +1,87 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 640px; }
+  /* flat paper and ink — no glows, no gradients except the logo's own */
+  body {
+    background: #F6F4EE;
+    color: #14161C;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  .wrap { height: 100%; padding: 72px 80px 64px; display: flex; gap: 48px; }
+  .left { flex: 1; display: flex; flex-direction: column; }
+
+  .brand { display: flex; align-items: center; gap: 18px; }
+  .brand svg { width: 68px; height: 68px; display: block; }
+  .brand span { font-size: 40px; font-weight: 700; letter-spacing: 4px; }
+
+  h1 {
+    margin-top: 64px; white-space: nowrap;
+    font-size: 64px; line-height: 1.1; letter-spacing: -2.2px; font-weight: 700;
+  }
+  h1 em { font-style: normal; color: #4F46E5; }
+
+  .foot {
+    margin-top: auto; font-size: 23px; line-height: 1.45; color: #5B5F6B;
+  }
+  .foot b { color: #14161C; font-weight: 600; }
+
+  /* right: the real quick-start config from the README, set plainly */
+  .file {
+    width: 410px; align-self: center;
+    background: #FFFFFF; border: 1.5px solid #14161C; border-radius: 6px;
+  }
+  .file-h {
+    font-family: Menlo, monospace; font-size: 16px; color: #5B5F6B;
+    padding: 13px 22px; border-bottom: 1.5px solid #14161C;
+  }
+  pre {
+    font-family: Menlo, monospace; font-size: 17.5px; line-height: 1.62;
+    padding: 20px 22px 24px; color: #14161C;
+  }
+  pre .v { color: #4F46E5; }
+</style>
+
+<div class="wrap">
+  <div class="left">
+    <div class="brand">
+      <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="dvaraGrad" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#3b82f6"/>
+            <stop offset="50%" stop-color="#6366f1"/>
+            <stop offset="100%" stop-color="#8b5cf6"/>
+          </linearGradient>
+        </defs>
+        <rect width="40" height="40" rx="10" fill="url(#dvaraGrad)"/>
+        <path d="M12 12h6c5.523 0 10 4.477 10 8s-4.477 8-10 8h-6V12z" stroke="white" stroke-width="2.5" fill="none" stroke-linejoin="round"/>
+        <circle cx="21" cy="20" r="2" fill="white"/>
+      </svg>
+      <span>DVARA</span>
+    </div>
+
+    <h1>Ship AI faster.<br>Stay in control.<br><em>Prove every decision.</em></h1>
+
+    <div class="foot">
+      <b>The open-source LLM Gateway.</b><br>
+      OpenAI-compatible · 14 providers · Apache 2.0
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="file-h">gateway.yaml</div>
+<pre>providers:
+  - type: <span class="v">openai</span>
+    api_key: <span class="v">${OPENAI_API_KEY}</span>
+
+workspaces:
+  - id: <span class="v">default</span>
+    metadata:
+      pii.action: <span class="v">REDACT</span>
+      guardrail.action: <span class="v">BLOCK</span></pre>
+  </div>
+</div>
