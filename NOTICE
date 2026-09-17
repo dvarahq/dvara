@@ -145,5 +145,17 @@ Spring AOP, and it is an interface-only jar.
 ================================================================================
 
 The authoritative, generated list of every dependency and its declared licence is
-produced by the build. Nothing above supersedes the licence an artifact itself
-declares; where the two differ, the artifact's own licence governs.
+THIRD-PARTY.md, produced by the build and committed so that it can
+be read without one:
+
+  ./mvnw org.codehaus.mojo:license-maven-plugin:2.4.0:add-third-party \
+    -Dlicense.excludedScopes=test,provided
+
+That run reads each artifact's own licence metadata rather than inferring from its
+name, which is the check this file's earlier audit could not make: an MPL, CDDL,
+EPL or copyleft artifact with an innocuous name would have passed a name-based
+sweep. It also reports artifacts whose licence cannot be resolved at all, and none
+were found — every one of the 121 declares a licence.
+
+Nothing above supersedes the licence an artifact itself declares; where the two
+differ, the artifact's own licence governs.
