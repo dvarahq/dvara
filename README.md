@@ -82,13 +82,13 @@ routes:
 ```bash
 docker run --rm -p 8080:8080 -e OPENAI_API_KEY=sk-... \
   -v "$PWD/gateway.yaml:/app/gateway.yaml:ro" \
-  ghcr.io/dvarahq/dvara-gateway-oss:latest
+  ghcr.io/dvarahq/dvara-gateway-oss:1.8.0-rc1
 ```
 
 Or, on a JDK 25, run the jar from the [latest release](https://github.com/dvarahq/dvara/releases/latest):
 
 ```bash
-java -jar dvara-gateway-server-<version>-app.jar
+java -jar dvara-gateway-server-1.8.0-rc1-app.jar
 ```
 
 **3. Send a request.** Any OpenAI client works; point its base URL at the gateway:
