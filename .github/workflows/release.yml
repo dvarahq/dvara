@@ -112,7 +112,7 @@ jobs:
         with:
           registry: ghcr.io
           username: grabdoc
-          password: ${{ secrets.GRABDOC_PUBLISH_PAT }}
+          password: ${{ secrets.GH_PUBLISH_PAT }}
 
       - name: Image tags
         id: meta

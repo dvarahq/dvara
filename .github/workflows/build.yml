@@ -64,7 +64,7 @@ jobs:
       # two between the two steps.
       - name: Remove the previous build of the snapshot
         env:
-          GH_TOKEN: ${{ secrets.GRABDOC_PUBLISH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PUBLISH_PAT }}
         run: |
           set -euo pipefail
           VERSION=$(./mvnw -B -q -DforceStdout help:evaluate -Dexpression=project.version)
@@ -99,4 +99,4 @@ jobs:
           # actor must be that token's owner, so it is the literal account name rather than
           # github.actor, which on a push is whoever merged.
           MAVEN_USERNAME: grabdoc
-          MAVEN_TOKEN: ${{ secrets.GRABDOC_PUBLISH_PAT }}
+          MAVEN_TOKEN: ${{ secrets.GH_PUBLISH_PAT }}
