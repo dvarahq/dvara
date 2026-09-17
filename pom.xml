@@ -257,7 +257,12 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.7.0</version>
+                        <!-- 0.7.0 uploaded and validated correctly, then failed parsing the reply:
+                             Sonatype's API grew a "warnings" field that the 0.7.0 client refuses as
+                             an unknown property. The artifacts were never in question — the bundle
+                             reached VALIDATED — but the build failed after the upload and every
+                             later step was skipped, so no image and no release were produced. -->
+                        <version>0.11.0</version>
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
