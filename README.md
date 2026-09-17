@@ -156,21 +156,25 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{"model":"mock/test-model","messages":[{"role":"user","content":"My card is 4111 1111 1111 1111 and my email is jane@example.com"}]}'
 ```
 
-**5. Read the record.** Every decision is in the audit log; the PII record names what was found and
-never the value:
+**5. Read the record.** Every decision is in the audit log, one line per event; the PII record names
+what was found and never the value:
 
 ```bash
-docker exec dvara cat /tmp/audit.log | jq -c 'select(.eventType != "GATEWAY_RESPONSE") | {eventType, payload}'
+docker exec dvara cat /tmp/audit.log \
+  | jq -c '[.eventType, .payload.reason // .payload.categories // .payload.entity_types // .payload.status]'
 ```
 
 ```json
-{"eventType":"GUARDRAIL_BLOCKED","payload":{"action":"BLOCK","categories":"JAILBREAK","detection_count":2,"detections":[{"category":"JAILBREAK","label":"ignore-previous-instructions","risk_score":0.95,"rule_id":"jb-001"},{"category":"JAILBREAK","label":"system-prompt-extraction","risk_score":0.9,"rule_id":"spl-001"}],"source":"request"}}
-{"eventType":"POLICY_DENIED","payload":{"api_key":"key-82927b19ff9aebd6","policy_id":"approved-models-only","reason":"mock/unapproved is not an approved model","rule_id":"deny-unapproved","user_id":null,"workspace_id":"default"}}
-{"eventType":"PII_REDACTED","payload":{"entity_count":2,"entity_type_counts":{"CREDIT_CARD":1,"EMAIL":1},"entity_types":"CREDIT_CARD, EMAIL","source":"request"}}
+["GUARDRAIL_BLOCKED","JAILBREAK"]
+["GATEWAY_RESPONSE",403]
+["POLICY_DENIED","mock/unapproved is not an approved model"]
+["GATEWAY_RESPONSE",403]
+["PII_REDACTED","CREDIT_CARD, EMAIL"]
+["GATEWAY_RESPONSE",200]
 ```
 
-Each line also carries an HMAC and the hash of the line before it; see [Audit log](#audit-log) for
-the verifier.
+Each line holds the full payload — the rule that fired, the key's fingerprint, the risk scores —
+plus an HMAC and the hash of the line before it; see [Audit log](#audit-log) for the verifier.
 
 > [!WARNING]
 > **The key is what made that happen.** Send the first request again without the `Authorization`
