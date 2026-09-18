@@ -37,8 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>A real container on a real port, deliberately: percent-decoding happens below the application,
  * so MockMvc would answer a different question.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"dvara.llm-gateway.data-plane.require-api-key=false"})
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class PlanePathEnvelopeTest {
 
     @LocalServerPort

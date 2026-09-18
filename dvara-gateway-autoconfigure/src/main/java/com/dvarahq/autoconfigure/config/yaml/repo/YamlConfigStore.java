@@ -153,9 +153,8 @@ public final class YamlConfigStore {
             if (entry.isGenerate()) {
                 throw new IllegalStateException("api_keys entry '" + label + "' uses 'generate: true',"
                         + " which is no longer accepted: it minted a key that no restart survived and"
-                        + " that two replicas disagreed about. To try the gateway, send no key at all"
-                        + " — dvara.llm-gateway.data-plane.require-api-key defaults to false. For a key"
-                        + " that lasts, run --generate-key.");
+                        + " that two replicas disagreed about. Mint one with --generate-key and put"
+                        + " its hash in 'key_hash'.");
             }
 
             String keyHash = normalizeKeyHash(entry.getKeyHash(), label);

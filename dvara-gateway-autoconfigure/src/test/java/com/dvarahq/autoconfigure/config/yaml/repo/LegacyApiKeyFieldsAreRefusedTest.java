@@ -32,8 +32,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * A file that uses the legacy {@code key:} or {@code generate:} fields is refused, not ignored.
  *
  * <p>{@code ApiKeyEntry} ignores unknown fields, so an unrecognised {@code key:} entry would bind to
- * nothing: the gateway would start with no keys and, because {@code require-api-key} defaults to
- * false, serve every caller as anonymous with no workspace, so no per-workspace control would apply.
+ * nothing: the gateway would start with no keys, and every caller would be refused with {@code 401}
+ * for a reason the operator could not see in the file. The same holds for a top-level
+ * {@code require_api_key:} line, which once mirrored a setting that no longer exists.
  */
 class LegacyApiKeyFieldsAreRefusedTest {
 
@@ -63,9 +64,25 @@ class LegacyApiKeyFieldsAreRefusedTest {
                 """))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("dev")
-                .as("trying the gateway needs no key at all")
-                .hasMessageContaining("send no key at all")
-                .hasMessageContaining("--generate-key");
+                .as("the way to a key is the generator, never the gateway")
+                .hasMessageContaining("--generate-key")
+                .message().doesNotContain("send no key");
+    }
+
+    /**
+     * The setting that once allowed keyless requests is gone. A file that still names it is refused
+     * whatever the value: {@code false} would have been relied on, and {@code true} would be believed.
+     */
+    @Test
+    void requireApiKeyInTheFileIsRefusedWhateverItSays() throws IOException {
+        for (String value : new String[] {"false", "true"}) {
+            assertThat(GatewayYamlLoader.validate(parse("require_api_key: " + value + "\n")))
+                    .as("require_api_key: " + value)
+                    .singleElement().asString()
+                    .contains("require_api_key")
+                    .contains("removed in 1.8.0")
+                    .contains("--generate-key");
+        }
     }
 
     @Test
@@ -100,6 +117,15 @@ class LegacyApiKeyFieldsAreRefusedTest {
 
         assertThat(GatewayYamlLoader.validate(config))
                 .as("one boot should tell an operator about every entry, not the first")
+                .hasSize(2);
+
+        assertThat(GatewayYamlLoader.validate(parse("""
+                require_api_key: false
+                api_keys:
+                  - generate: true
+                    name: two
+                """)))
+                .as("the dead setting is reported alongside the entries, not instead of them")
                 .hasSize(2);
     }
 

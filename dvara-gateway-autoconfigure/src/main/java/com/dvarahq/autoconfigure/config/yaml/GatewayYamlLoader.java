@@ -86,6 +86,14 @@ public final class GatewayYamlLoader {
         List<String> errors = new ArrayList<>();
         Set<String> servedWorkspaces = workspacesThisFileServes(config);
 
+        // Refused by name rather than ignored: a key is always required, and a line that claims to
+        // switch that off must not sit in a file that otherwise starts cleanly.
+        if (config.getRequireApiKey() != null) {
+            errors.add("require_api_key: not a setting. Every request under /v1 carries an API key;"
+                    + " the setting that once allowed keyless requests was removed in 1.8.0. Remove"
+                    + " the line, and mint keys for your callers with --generate-key.");
+        }
+
         if (config.getProviders() != null) {
             for (int i = 0; i < config.getProviders().size(); i++) {
                 GatewayYamlConfig.ProviderEntry p = config.getProviders().get(i);
@@ -249,8 +257,8 @@ public final class GatewayYamlLoader {
                             + " callers keep the same key.");
                 } else if (a.isGenerate()) {
                     errors.add(prefix + ": 'generate: true' is no longer accepted — it minted a key that"
-                            + " no restart survived and that two replicas disagreed about. To try the"
-                            + " gateway send no key at all; for one that lasts, run --generate-key.");
+                            + " no restart survived and that two replicas disagreed about. Mint one"
+                            + " with --generate-key and put its hash in 'key_hash'.");
                 } else if (a.getKeyHash() == null || a.getKeyHash().isBlank()) {
                     errors.add(prefix + ": must specify 'key_hash'");
                 }

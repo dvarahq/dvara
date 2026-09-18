@@ -163,10 +163,7 @@ class OpenBuildServesFromFileTest {
     }
 
     @DynamicPropertySource
-    static void requireApiKey(DynamicPropertyRegistry registry) {
-        // A presented key must be valid and an absent one refused; otherwise the file could be
-        // ignored and every call would still serve.
-        registry.add("dvara.llm-gateway.data-plane.require-api-key", () -> "true");
+    static void properties(DynamicPropertyRegistry registry) {
         // The audit writer is configured inside the context, so a dynamic property source is early
         // enough for it.
         registry.add("dvara.audit.file.path", () -> configDir.resolve("audit.log").toString());

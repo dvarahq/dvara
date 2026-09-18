@@ -52,6 +52,18 @@ public class GatewayYamlConfig {
     @JsonProperty("rate_limits")
     private RateLimitsEntry rateLimits;
 
+    /**
+     * Retained only so that a file carrying {@code require_api_key:} is refused by name instead of
+     * being ignored. A key is always required and no setting changes that; the setting this once
+     * mirrored was removed in 1.8.0. This class is {@code ignoreUnknown = true}, so without the
+     * field an operator who wrote {@code require_api_key: false} would get no error and no change,
+     * and one who wrote {@code true} would believe it did something. Nothing reads it as a setting;
+     * {@code GatewayYamlLoader.validate} reads it to refuse the boot.
+     */
+    @Deprecated
+    @JsonProperty("require_api_key")
+    private Boolean requireApiKey;
+
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ProviderEntry {
@@ -185,8 +197,7 @@ public class GatewayYamlConfig {
         /**
          * Retained for refusal only, for the same reason as {@link #key}. A key minted at startup
          * and stored nowhere would not survive a restart, and two replicas would mint two different
-         * ones; {@code require-api-key} defaults to false, so nothing needs minting to try the
-         * gateway.
+         * ones. A key is minted once, by the operator, with {@code --generate-key}.
          */
         @Deprecated
         private boolean generate;
