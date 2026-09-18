@@ -88,6 +88,51 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     public static final String WORKSPACE_ID_ATTR = "workspaceId";
     public static final String API_KEY_ID_ATTR = "apiKeyId";
 
+    /**
+     * What the access log, the audit record and the rate limiter name a request that carries no
+     * credential. Only two kinds of request are in that state past this filter: one being refused
+     * here, and one on the webhook approval path. No served request under {@code /v1} is.
+     *
+     * <p>Reserved: {@code GatewayYamlLoader} refuses an {@code api_keys} entry with this name, so
+     * the marker can never be mistaken for a key's id in a log line or a rate-limit bucket.
+     */
+    public static final String UNAUTHENTICATED = "unauthenticated";
+
+    /**
+     * The id of the key a served request carries. Every request under {@code /v1} has one once
+     * this filter has run; a request without one reached a controller or a filter this filter did
+     * not guard, which is a wiring fault, and is refused rather than served under a made-up
+     * identity.
+     */
+    public static String requiredApiKeyId(HttpServletRequest request) {
+        return required(request, API_KEY_ID_ATTR, "API key");
+    }
+
+    /** The workspace a served request belongs to; see {@link #requiredApiKeyId}. */
+    public static String requiredWorkspaceId(HttpServletRequest request) {
+        return required(request, WORKSPACE_ID_ATTR, "workspace");
+    }
+
+    /**
+     * The rate limiter's bucket for a served request ({@link #API_KEY_ATTR}), read by whatever
+     * settles a reservation, so the settlement keys exactly as the reservation did; see
+     * {@link #requiredApiKeyId}.
+     */
+    public static String requiredLimiterKey(HttpServletRequest request) {
+        return required(request, API_KEY_ATTR, "API key");
+    }
+
+    private static String required(HttpServletRequest request, String attribute, String what) {
+        Object value = request.getAttribute(attribute);
+        if (value instanceof String s && !s.isBlank()) {
+            return s;
+        }
+        throw new IllegalStateException("A request to " + request.getRequestURI() + " has no " + what
+                + " on it, so it was not authenticated: ApiKeyAuthFilter did not run before it. The"
+                + " filter is registered by GatewayRuntimeAutoConfiguration; an application that"
+                + " serves /v1 must not exclude it.");
+    }
+
     private final ApiKeyRepository apiKeyRepository;
 
     /**

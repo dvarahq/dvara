@@ -82,7 +82,16 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
         String apiKey = (String) request.getAttribute(API_KEY_ATTR);
-        if (apiKey == null) apiKey = "anonymous";
+        if (apiKey == null) {
+            if (!ApiKeyAuthFilter.isWebhookApprovalAction(request.getRequestURI())) {
+                // Every other /v1 request was authenticated before it got here, or refused there.
+                throw new IllegalStateException("A request to " + request.getRequestURI() + " reached"
+                        + " rate limiting with no API key on it: ApiKeyAuthFilter did not run before it.");
+            }
+            // The one path that takes no key. Its callers share one bucket, which is the point: it
+            // takes an unauthenticated, state-changing action from the public internet.
+            apiKey = ApiKeyAuthFilter.UNAUTHENTICATED;
+        }
 
         // Estimate tokens for pre-request token budget check
         int estimatedTokens = 0;

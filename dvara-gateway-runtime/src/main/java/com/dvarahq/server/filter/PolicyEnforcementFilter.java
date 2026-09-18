@@ -36,6 +36,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 @Component
@@ -118,7 +119,8 @@ public class PolicyEnforcementFilter implements ChatFilter {
         payload.put("rule_id", decision.ruleId());
         payload.put("reason", decision.reason());
         payload.put("workspace_id", policyCtx.workspaceId());
-        payload.put("api_key", policyCtx.apiKey() != null ? policyCtx.apiKey() : "anonymous");   // the key id, not a secret
+        payload.put("api_key", Objects.requireNonNull(policyCtx.apiKey(),
+                "a policy denial with no API key id behind it: the request was not authenticated"));   // the key id, not a secret
         payload.put("user_id", policyCtx.userId());
 
         auditWriter.write(new AuditEvent(

@@ -32,6 +32,7 @@ import com.dvarahq.core.pii.PiiEnforcer;
 import com.dvarahq.core.ratelimit.RateLimiter;
 import com.dvarahq.core.routing.PriorityAdmissionController;
 import com.dvarahq.server.metrics.GatewayMetrics;
+import com.dvarahq.server.web.ApiKeyAuthFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -72,8 +73,17 @@ class StreamingCallOutcomeTest {
                 tokenEstimator, TestProviders.of(listener));
     }
 
+    /** A request as ApiKeyAuthFilter leaves it: key id, limiter bucket and workspace stamped. */
+    private static HttpServletRequest authenticatedRequest() {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("key-1");
+        when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR)).thenReturn("key-1");
+        when(request.getAttribute(ApiKeyAuthFilter.WORKSPACE_ID_ATTR)).thenReturn("acme");
+        return request;
+    }
+
     private void stream(FilterContext ctx, String output, long latencyMs, boolean error) {
-        service.persistStreamingUsage(mock(HttpServletRequest.class),
+        service.persistStreamingUsage(authenticatedRequest(),
                 ChatRequest.builder().model("gpt-4o").build(), output, ctx, latencyMs, error);
     }
 

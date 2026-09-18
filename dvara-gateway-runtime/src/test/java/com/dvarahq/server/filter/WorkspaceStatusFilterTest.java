@@ -70,18 +70,25 @@ class WorkspaceStatusFilterTest {
         assertThat(filter.order()).isLessThan(FilterOrder.TOKEN_CAP_ENFORCEMENT);
     }
 
+    /**
+     * A request with no workspace was not authenticated. A suspension it cannot be checked against
+     * is not a reason to serve it; it is refused as the wiring fault it is.
+     */
     @Test
-    void noWorkspaceId_skipsCheck() {
+    void noWorkspaceId_isRefused_notSkipped() {
         var ctx = FilterContext.builder().build();
-        assertThatNoException().isThrownBy(() -> filter.preDispatch(req(), ctx));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> filter.preDispatch(req(), ctx))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ApiKeyAuthFilter");
         assertThat(workspaces.findByIdCalls).isZero();
         assertThat(audit.lastEvent.get()).isNull();
     }
 
     @Test
-    void blankWorkspaceId_skipsCheck() {
+    void blankWorkspaceId_isRefused_notSkipped() {
         var ctx = FilterContext.builder().workspaceId("   ").build();
-        assertThatNoException().isThrownBy(() -> filter.preDispatch(req(), ctx));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> filter.preDispatch(req(), ctx))
+                .isInstanceOf(IllegalStateException.class);
         assertThat(workspaces.findByIdCalls).isZero();
     }
 

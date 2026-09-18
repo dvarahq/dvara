@@ -86,8 +86,10 @@ public class WorkspaceStatusFilter implements ChatFilter {
     public ChatRequest preDispatch(ChatRequest request, FilterContext ctx) {
         var workspaceId = ctx.getWorkspaceId();
         if (workspaceId == null || workspaceId.isBlank()) {
-            // Anonymous / keyless data-plane path. No workspace to check.
-            return request;
+            // A request with no workspace was not authenticated, and a suspension it could not be
+            // checked against must not be the reason it is served.
+            throw new IllegalStateException("A request reached the workspace status check with no"
+                    + " workspace: it was not authenticated. ApiKeyAuthFilter did not run before it.");
         }
 
         var snapshot = snapshotFor(workspaceId);

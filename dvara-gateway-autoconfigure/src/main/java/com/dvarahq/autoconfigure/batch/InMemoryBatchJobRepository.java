@@ -141,7 +141,12 @@ public class InMemoryBatchJobRepository implements BatchJobRepository {
         return byId.size();
     }
 
+    /**
+     * A job belongs to exactly one workspace and is only ever looked up by it. There is no tenant
+     * for "no workspace": a lookup with none matches nothing, so two callers that both lack one can
+     * never see each other's jobs.
+     */
     private static boolean sameWorkspace(BatchJob job, String workspaceId) {
-        return workspaceId == null ? job.getWorkspaceId() == null : workspaceId.equals(job.getWorkspaceId());
+        return workspaceId != null && !workspaceId.isBlank() && workspaceId.equals(job.getWorkspaceId());
     }
 }

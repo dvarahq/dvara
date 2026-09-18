@@ -169,11 +169,12 @@ public class AccessLogFilter extends OncePerRequestFilter {
     }
 
     /**
-     * What the access log records as {@code api_key}: the key's opaque id, or {@code anonymous}.
-     * The id is the same identifier budgets and usage rows carry, and it is not a secret, so it is
-     * logged whole.
+     * What the access log records as {@code api_key}: the key's opaque id, or
+     * {@link ApiKeyAuthFilter#UNAUTHENTICATED} for a request that carried none — a refusal, or the
+     * webhook approval path. The id is the same identifier budgets and usage rows carry, and it is
+     * not a secret, so it is logged whole.
      */
     static String attribution(String apiKeyId) {
-        return apiKeyId == null || apiKeyId.isBlank() ? "anonymous" : apiKeyId;
+        return apiKeyId == null || apiKeyId.isBlank() ? ApiKeyAuthFilter.UNAUTHENTICATED : apiKeyId;
     }
 }

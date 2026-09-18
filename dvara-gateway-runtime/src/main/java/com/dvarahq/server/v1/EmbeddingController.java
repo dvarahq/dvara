@@ -25,7 +25,7 @@ import com.dvarahq.core.ratelimit.RateLimiter;
 import com.dvarahq.server.service.ChatExecutionService;
 import com.dvarahq.server.service.ProviderDispatcher;
 import com.dvarahq.server.v1.dto.EmbeddingRequest;
-import com.dvarahq.server.web.RateLimitServletFilter;
+import com.dvarahq.server.web.ApiKeyAuthFilter;
 import com.dvarahq.server.web.TraceIdFilter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -120,8 +120,7 @@ public class EmbeddingController {
 
             int totalTokens = resp.getUsage() != null ? resp.getUsage().getTotalTokens() : 0;
             if (totalTokens > 0) {
-                String apiKey = (String) httpRequest.getAttribute(RateLimitServletFilter.API_KEY_ATTR);
-                if (apiKey == null) apiKey = "anonymous";
+                String apiKey = ApiKeyAuthFilter.requiredLimiterKey(httpRequest);
                 // Reserved 0: token estimation runs for chat only, so this path admits without
                 // charging and settles the whole actual.
                 rateLimiter.reconcileTokens(apiKey, 0, totalTokens);

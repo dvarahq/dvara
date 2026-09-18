@@ -87,12 +87,13 @@ class AccessLogFilterTest {
     }
 
     @Test
-    void attribution_isTheKeyId_orAnonymous() {
+    void attribution_isTheKeyId_orTheUnauthenticatedMarker() {
         // The log carries the key's opaque id whole: it is not a secret, and it is never a
-        // slice of the bearer token.
+        // slice of the bearer token. A request that carried none — a refusal, or the webhook
+        // approval path — is named as such, with a word no key may be named.
         assertThat(AccessLogFilter.attribution("key-id-1")).isEqualTo("key-id-1");
-        assertThat(AccessLogFilter.attribution(null)).isEqualTo("anonymous");
-        assertThat(AccessLogFilter.attribution("  ")).isEqualTo("anonymous");
+        assertThat(AccessLogFilter.attribution(null)).isEqualTo(ApiKeyAuthFilter.UNAUTHENTICATED);
+        assertThat(AccessLogFilter.attribution("  ")).isEqualTo(ApiKeyAuthFilter.UNAUTHENTICATED);
     }
 
     @Test

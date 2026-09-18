@@ -275,6 +275,11 @@ public final class GatewayYamlLoader {
                     errors.add(prefix + ".name: must not have the reserved legacy API-key prefix shape "
                             + "'gw_<8 lowercase hex characters>'");
                 }
+                // The name is the key's id, and this one is what the log and the limiter call a request
+                // that carried no key at all; a key with it would be indistinguishable from none.
+                if ("unauthenticated".equals(a.getName())) {
+                    errors.add(prefix + ".name: 'unauthenticated' is reserved for a request that carries no key");
+                }
                 // A named key's name is its id: the rate limiter's bucket, the api_key value on the
                 // access log and on usage and cost rows, and what a lookup by id returns. Two keys with
                 // one name would share one budget and one record while the file looked correct.

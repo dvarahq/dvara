@@ -33,6 +33,7 @@ import com.dvarahq.core.routing.PriorityAdmissionController;
 import com.dvarahq.core.metering.WorkspaceUsageListener;
 import com.dvarahq.server.metrics.GatewayMetrics;
 import com.dvarahq.core.metering.CallOutcomeListener;
+import com.dvarahq.server.web.ApiKeyAuthFilter;
 import com.dvarahq.server.web.RateLimitServletFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,8 +41,11 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -80,7 +84,11 @@ class StreamingTokenSettlementTest {
 
     private static HttpServletRequest request(String apiKey, Integer reserved) {
         HttpServletRequest request = mock(HttpServletRequest.class);
+        // What ApiKeyAuthFilter stamps on a served request: the limiter's bucket, the key id and
+        // the workspace. A null apiKey models a request the filter never saw.
         when(request.getAttribute(RateLimitServletFilter.API_KEY_ATTR)).thenReturn(apiKey);
+        when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR)).thenReturn(apiKey);
+        when(request.getAttribute(ApiKeyAuthFilter.WORKSPACE_ID_ATTR)).thenReturn(apiKey == null ? null : "acme");
         when(request.getAttribute(RateLimitServletFilter.RESERVED_TOKENS_ATTR)).thenReturn(reserved);
         when(request.getAttribute(RateLimitServletFilter.RESERVATION_ID_ATTR))
                 .thenReturn(reserved == null ? null : 7_001L);
@@ -120,10 +128,13 @@ class StreamingTokenSettlementTest {
         verify(rateLimiter).reconcileTokens("key-1", 500, 100, 7_001L);
     }
 
+    /** A stream with no key behind it was never authenticated; it cannot be settled under any bucket. */
     @Test
-    void anAnonymousCallerSettlesUnderTheAnonymousKey() {
-        stream(request(null, 500), "hello", usage(80, 40));
-        verify(rateLimiter).reconcileTokens("anonymous", 500, 120, 7_001L);
+    void aStreamWithNoKeyCannotBeSettled() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> stream(request(null, 500), "hello", usage(80, 40)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ApiKeyAuthFilter");
+        verify(rateLimiter, never()).reconcileTokens(any(), anyInt(), anyInt(), anyLong());
     }
 
     /**
@@ -173,10 +184,17 @@ class StreamingTokenSettlementTest {
     }
 
     @Test
-    void aSnapshotOfARequestWithNoKeyAndNoReservationIsAnonymousAndZero() {
+    void aSnapshotOfARequestWithNoKeyIsRefused() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> ChatExecutionService.TokenSettlement.capture(request(null, null)))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void aSnapshotOfARequestWithAKeyAndNoReservationIsZero() {
         ChatExecutionService.TokenSettlement captured =
-                ChatExecutionService.TokenSettlement.capture(request(null, null));
+                ChatExecutionService.TokenSettlement.capture(request("key-1", null));
         org.assertj.core.api.Assertions.assertThat(captured)
-                .isEqualTo(new ChatExecutionService.TokenSettlement("anonymous", 0, 0L));
+                .isEqualTo(new ChatExecutionService.TokenSettlement("key-1", 0, 0L));
     }
 }

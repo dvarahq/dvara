@@ -56,13 +56,10 @@ public class BatchController {
     public ResponseEntity<String> create(@RequestBody String requestJson,
                                          @RequestParam(value = "provider", required = false) String provider,
                                          HttpServletRequest httpRequest) {
-        String workspaceId = (String) httpRequest.getAttribute("workspaceId");
+        String workspaceId = ApiKeyAuthFilter.requiredWorkspaceId(httpRequest);
         // The key's opaque id, never the bearer token: the job row persists it and the cost booker
         // copies it into the usage and cost rows at completion.
-        String apiKeyId = (String) httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR);
-        if (apiKeyId == null || apiKeyId.isBlank()) {
-            apiKeyId = "anonymous";   // the sentinel every other row uses, so a job's usage and cost rows agree
-        }
+        String apiKeyId = ApiKeyAuthFilter.requiredApiKeyId(httpRequest);
         String raw = batchService.createBatch(requestJson, workspaceId, apiKeyId, provider);
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(raw);
     }
