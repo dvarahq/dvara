@@ -44,6 +44,19 @@ class RemovedSettingsEnvironmentPostProcessorTest {
                 .hasMessageContaining("--generate-key");
     }
 
+    /**
+     * The name every deployment descriptor used is not the relaxed-binding spelling of the property,
+     * so it is read by name. Refused on false, tolerated on true, like the property.
+     */
+    @Test
+    void theDocumentedEnvironmentVariableNameIsReadToo() {
+        assertThatThrownBy(() -> run(Map.of(RemovedSettingsEnvironmentPostProcessor.REQUIRE_API_KEY_ENV, "false")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("DVARA_LLM_GATEWAY_REQUIRE_API_KEY is set to 'false'");
+        assertThatCode(() -> run(Map.of(RemovedSettingsEnvironmentPostProcessor.REQUIRE_API_KEY_ENV, "true")))
+                .doesNotThrowAnyException();
+    }
+
     /** "no", "0", "off" all meant keyless; none of them is a reason to start serving nothing. */
     @Test
     void anythingButTrueIsRefused() {

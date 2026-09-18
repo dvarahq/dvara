@@ -33,14 +33,17 @@ import org.springframework.core.env.ConfigurableEnvironment;
  * set it to {@code true} should learn the line is dead weight, but has lost nothing, so the gateway
  * starts.
  *
- * <p>Read through the {@link ConfigurableEnvironment}, so the environment-variable spelling
- * {@code DVARA_LLM_GATEWAY_REQUIRE_API_KEY} is covered by relaxed binding along with every other
- * property source. Runs last among the environment post-processors, after the configuration files
- * have been loaded, so a value from {@code application.yml} is seen too.
+ * <p>Read through the {@link ConfigurableEnvironment}, so every property source is seen, and also
+ * by the environment-variable name the setting was documented under,
+ * {@code DVARA_LLM_GATEWAY_REQUIRE_API_KEY}. That name is not the relaxed-binding spelling of the
+ * property — the shipped {@code application.yml} mapped it by hand — so relaxed binding alone would
+ * miss exactly the spelling every deployment descriptor uses. Runs last among the environment
+ * post-processors, after the configuration files have been loaded.
  */
 public class RemovedSettingsEnvironmentPostProcessor implements EnvironmentPostProcessor, Ordered {
 
     static final String REQUIRE_API_KEY = "dvara.llm-gateway.data-plane.require-api-key";
+    static final String REQUIRE_API_KEY_ENV = "DVARA_LLM_GATEWAY_REQUIRE_API_KEY";
 
     private final Log log;
 
@@ -50,19 +53,24 @@ public class RemovedSettingsEnvironmentPostProcessor implements EnvironmentPostP
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        String name = REQUIRE_API_KEY;
         String value = environment.getProperty(REQUIRE_API_KEY);
+        if (value == null || value.isBlank()) {
+            name = REQUIRE_API_KEY_ENV;
+            value = environment.getProperty(REQUIRE_API_KEY_ENV);
+        }
         if (value == null || value.isBlank()) {
             return;
         }
         if ("true".equalsIgnoreCase(value.trim())) {
-            log.info(REQUIRE_API_KEY + " is set to true. The setting was removed in 1.8.0: an API key is"
+            log.info(name + " is set to true. The setting was removed in 1.8.0: an API key is"
                     + " always required, so the line does nothing and can be dropped.");
             return;
         }
         // Anything but a plain true is refused, not only the literal false: an operator who wrote
         // "no", "0" or "off" meant the same thing, and a gateway that started anyway would serve
         // nothing they expected it to.
-        throw new IllegalStateException(REQUIRE_API_KEY + " is set to '" + value + "'. The setting was"
+        throw new IllegalStateException(name + " is set to '" + value + "'. The setting was"
                 + " removed in 1.8.0 and keyless requests are no longer served: every request under /v1"
                 + " must carry an API key. Remove the setting (it is also read as the environment"
                 + " variable DVARA_LLM_GATEWAY_REQUIRE_API_KEY), mint a key for each caller with"
