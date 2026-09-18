@@ -26,8 +26,6 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
@@ -44,6 +42,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -52,14 +51,18 @@ import java.util.Optional;
  * {@code apiKeyId} as request attributes for all downstream filters and
  * controllers.
  *
- * <p>A key that is presented must be valid, in both postures: a revoked key, an expired key and
- * a key absent from the store are each rejected with {@code 401} whatever
- * {@code dvara.llm-gateway.data-plane.require-api-key} is set to. That flag governs only whether
- * a request may omit a key altogether: with {@code true} a keyless request is rejected
- * {@code 401}; with {@code false} (the default, for development) it passes through as
- * {@code workspaceId=null}, {@code apiKey="anonymous"}. Serving a request whose key failed
- * validation would tell the caller it had authenticated when it had not, and would leave the
- * request with no workspace, so no workspace-scoped control would apply.
+ * <p>Every request under {@code /v1} carries a key, and the key must be valid: a request with no
+ * key, a revoked key, an expired key or a key absent from the store is refused with {@code 401}.
+ * There is no posture in which a keyless request is served. A request that reached a controller
+ * without a key would have no workspace, and every control in the gateway — policy, PII action,
+ * guardrail action, rate limits, suspension, credentials, batch and cache tenancy — resolves through
+ * the workspace, so it would run against none of them while spending the operator's provider
+ * credentials. Keys are minted by the operator with {@code --generate-key}; the gateway never
+ * mints one at runtime.
+ *
+ * <p>Two paths are outside this rule, each because it carries a different credential: the webhook
+ * approval action, whose per-approval signed token is the whole authorisation, and the actuator,
+ * which is not under {@code /v1} and has its own keys.
  *
  * <p>Runs after the trace, access-log, metrics and audit filters and before rate limiting, so
  * workspace context is available to every subsequent filter.
@@ -76,10 +79,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
      * The rate limiter's bucket identity for this request, never the bearer token: the limiter
      * passes whatever it is given straight to its store, where a token would sit in plaintext.
      *
-     * <p>It holds the key's opaque id where one resolved (the same value usage, cost and budget
-     * rows carry), or the SHA-256 the store would have been looked up by where no repository is
-     * configured, or {@code anonymous}. The hash is safe to expose as a bucket name: it is what
-     * the server stores, and authenticating needs the preimage.
+     * <p>It holds the key's opaque id, the same value usage, cost and budget rows carry. It is set
+     * only after the key resolved, so a request that reaches a controller always has one.
      *
      * <p>Stamped once, here, so the reservation and the settlement cannot key differently.
      */
@@ -88,15 +89,21 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     public static final String API_KEY_ID_ATTR = "apiKeyId";
 
     private final ApiKeyRepository apiKeyRepository;
-    private final boolean requireApiKey;
 
-    public ApiKeyAuthFilter(
-            @Autowired(required = false) ApiKeyRepository apiKeyRepository,
-            @Value("${dvara.llm-gateway.data-plane.require-api-key:false}") boolean requireApiKey) {
-        this.apiKeyRepository = apiKeyRepository;
-        this.requireApiKey = requireApiKey;
-        log.info("ApiKeyAuthFilter initialized: requireApiKey={}, repository={}",
-                requireApiKey, apiKeyRepository != null ? apiKeyRepository.getClass().getSimpleName() : "null");
+    /**
+     * @param apiKeyRepository the store every presented key is resolved against. Required: a
+     *                         gateway with no key store could authenticate nobody, and a filter that
+     *                         waved requests through in that case would be indistinguishable from
+     *                         one that had checked them. The store is wired by the configuration
+     *                         source in use (the {@code gateway.yaml} store in this build, which
+     *                         exists even when the file does not).
+     */
+    public ApiKeyAuthFilter(ApiKeyRepository apiKeyRepository) {
+        this.apiKeyRepository = Objects.requireNonNull(apiKeyRepository,
+                "ApiKeyAuthFilter needs an ApiKeyRepository: no API key store is configured, so no "
+                        + "request under /v1 could be authenticated. Configure a key store; there is "
+                        + "no setting that serves requests without one.");
+        log.info("ApiKeyAuthFilter initialized: repository={}", apiKeyRepository.getClass().getSimpleName());
     }
 
     @Override
@@ -139,25 +146,11 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         String bearerToken = extractBearerToken(request);
 
         if (bearerToken == null) {
-            if (requireApiKey) {
-                reject(response, request, HttpStatus.UNAUTHORIZED,
-                        "API key is required. Set Authorization: Bearer <your-api-key> header.",
-                        "api_key_required");
-                return;
-            }
-            // Anonymous pass-through
-            request.setAttribute(API_KEY_ATTR, "anonymous");
-            chain.doFilter(request, response);
-            return;
-        }
-
-        // No repository available — pass the raw token through
-        if (apiKeyRepository == null) {
-            // No repository, so nothing can resolve an id. The hash is what a repository would have
-            // been searched by, and it identifies the caller as precisely as the token without being
-            // the token.
-            request.setAttribute(API_KEY_ATTR, "sha256:" + ApiKeyGenerator.hash(bearerToken));
-            chain.doFilter(request, response);
+            // The message says how to get a key and nothing about which keys or workspaces exist.
+            reject(response, request, HttpStatus.UNAUTHORIZED,
+                    "API key is required. Send it as Authorization: Bearer <your-api-key>. "
+                            + "The operator mints one with --generate-key.",
+                    "api_key_required");
             return;
         }
 
@@ -166,10 +159,6 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         Optional<ApiKey> found = apiKeyRepository.findByKeyHash(keyHash);
 
         if (found.isEmpty()) {
-            // Rejected in both postures. Sending no key states that the caller is anonymous;
-            // sending a key that does not resolve is an assertion that failed to validate, and
-            // require-api-key does not govern that: it answers "may a request omit a key?", never
-            // "accept a wrong one". See the class javadoc.
             reject(response, request, HttpStatus.UNAUTHORIZED,
                     "Invalid API key.",
                     "invalid_api_key");

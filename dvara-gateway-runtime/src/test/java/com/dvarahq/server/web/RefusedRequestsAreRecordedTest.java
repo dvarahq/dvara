@@ -60,7 +60,7 @@ class RefusedRequestsAreRecordedTest {
         RegionContext region = Optional::empty;
         List<Filter> filters = new ArrayList<>(List.of(
                 new RateLimitServletFilter(limiter, null, null),
-                new ApiKeyAuthFilter(keys, true),
+                new ApiKeyAuthFilter(keys),
                 new AuditResponseFilter(audited::add),
                 new MetricsFilter(new GatewayMetrics(registry, region)),
                 new AccessLogFilter(),
