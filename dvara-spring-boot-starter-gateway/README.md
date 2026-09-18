@@ -44,9 +44,12 @@ variables, or a `gateway.yaml` in the working directory or at the path in `DVARA
 
 ## What it adds to your application
 
-It maps `/v1/**`, so if your application already routes `/v1` the two collide. It brings Spring
-MVC, Bean Validation, springdoc, the actuator, the Prometheus registry and OpenTelemetry tracing,
-because the endpoints need them. The health probes are open; `/actuator/prometheus` answers only
+It maps `/v1/**`, so if your application already routes `/v1` the two collide. Every request under
+`/v1` carries a gateway API key, in your application as in the standalone gateway: a request
+without one is refused with `401`, and there is no setting that serves it. Mint keys with the
+gateway's `--generate-key` and put their hashes in a `gateway.yaml` your application points at
+with `DVARA_CONFIG_FILE`. It brings Spring MVC, Bean Validation, springdoc, the actuator, the
+Prometheus registry and OpenTelemetry tracing, because the endpoints need them. The health probes are open; `/actuator/prometheus` answers only
 to the key in `DVARA_ACTUATOR_METRICS_API_KEY`, and the other actuator endpoints only to
 `DVARA_ACTUATOR_API_KEY`.
 
