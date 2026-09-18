@@ -176,11 +176,12 @@ docker exec dvara cat /tmp/audit.log \
 Each line holds the full payload — the rule that fired, the key's fingerprint, the risk scores —
 plus an HMAC and the hash of the line before it; see [Audit log](#audit-log) for the verifier.
 
-> [!WARNING]
-> **The key is what made that happen.** Send the first request again without the `Authorization`
-> header and it is served: a request with no key has no workspace, so the workspace's `REDACT` and
-> `BLOCK` do not apply and a detection is only logged. Requiring a key is off by default — turn it
-> on in production; see [API keys](#api-keys).
+> [!NOTE]
+> **Every request carries a key you minted.** The key is what ties a request to its workspace, and
+> the workspace is where `REDACT`, `BLOCK`, the policies, the rate limits and the credentials live.
+> A request without one is refused with `401` — there is no setting that serves it — so no call is
+> ever governed by nothing. The gateway never mints a key at runtime: the generator prints one
+> once, and nothing stores it. See [API keys](#api-keys).
 
 **6. Point it at a real provider.** Swap the provider and the route, pass the provider's key with
 `-e OPENAI_API_KEY=sk-...`, and ask for a real model such as `gpt-4o-mini`:
@@ -354,19 +355,19 @@ Anything Spring Boot accepts works the same way here: `--server.port=9090` on th
 
 ### API keys
 
-Requiring a key is off by default, so a request with no `Authorization` header is served. Such a
-request has no workspace, so no per-workspace PII action, guardrail threshold or rate-limit override
-applies to it.
+Every request under `/v1` carries an API key, and a request without one is refused with `401`.
+The key resolves to a workspace, and the workspace is what every control is scoped to: the PII
+action, the guardrail action, the policies, the rate-limit override, the provider credentials,
+and whose batch jobs and cached answers are whose. There is no setting that serves a keyless
+request; a gateway with no keys configured starts, and refuses every call until one is minted.
 
-**Turn it on in production.** It is a Spring property, not a `gateway.yaml` key:
+The gateway never generates a key at runtime. The operator mints one with `--generate-key`, which
+prints it once and stores nothing; the file holds only its SHA-256. The one path that takes no key
+is the webhook approval action, which carries its own signed token.
 
-```bash
-DVARA_LLM_GATEWAY_REQUIRE_API_KEY=true
-```
-
-or `dvara.llm-gateway.data-plane.require-api-key: true` in `application.yml`. Putting it in
-`gateway.yaml` does nothing: unknown keys there are ignored without an error, so the gateway would
-go on serving keyless requests and nothing would tell you.
+`dvara.llm-gateway.data-plane.require-api-key`, which once allowed keyless requests, was removed
+in 1.8.0. The gateway refuses to start if it is set to `false`, so a deployment that relied on it
+learns at startup rather than from its callers; set to `true` it starts and says the line can go.
 
 <details>
 <summary>Mint a key, fingerprint a key you already hold, and call the gateway with it</summary>

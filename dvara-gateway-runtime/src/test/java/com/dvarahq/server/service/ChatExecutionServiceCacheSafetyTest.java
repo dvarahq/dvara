@@ -35,6 +35,7 @@ import com.dvarahq.core.ratelimit.RateLimiter;
 import com.dvarahq.core.routing.PriorityAdmissionController;
 import com.dvarahq.core.metering.WorkspaceUsageListener;
 import com.dvarahq.server.metrics.GatewayMetrics;
+import com.dvarahq.server.web.ApiKeyAuthFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -165,6 +166,8 @@ class ChatExecutionServiceCacheSafetyTest {
 
         HttpServletRequest httpRequest = mock(HttpServletRequest.class);
         when(httpRequest.getAttribute("workspaceId")).thenReturn("t1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("key-1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR)).thenReturn("key-1");
 
         var result = serviceWith(new FakeDetokenizingEnforcer(), cache,
                 mock(ProviderDispatcher.class), passThroughPipeline())
@@ -189,6 +192,8 @@ class ChatExecutionServiceCacheSafetyTest {
 
         HttpServletRequest httpRequest = mock(HttpServletRequest.class);
         when(httpRequest.getAttribute("workspaceId")).thenReturn("t1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("key-1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR)).thenReturn("key-1");
 
         var result = serviceWith(new FakeUnresolvableEnforcer(), cache,
                 mock(ProviderDispatcher.class), passThroughPipeline())
@@ -214,6 +219,8 @@ class ChatExecutionServiceCacheSafetyTest {
 
         HttpServletRequest httpRequest = mock(HttpServletRequest.class);
         when(httpRequest.getAttribute("workspaceId")).thenReturn("t1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("key-1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR)).thenReturn("key-1");
 
         serviceWith(new FakeDetokenizingEnforcer(), cache,
                 mock(ProviderDispatcher.class), passThroughPipeline())
@@ -239,6 +246,8 @@ class ChatExecutionServiceCacheSafetyTest {
 
         HttpServletRequest httpRequest = mock(HttpServletRequest.class);
         when(httpRequest.getAttribute("workspaceId")).thenReturn("t1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("key-1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR)).thenReturn("key-1");
 
         ChatExecutionService svc = new ChatExecutionService(
                 dispatcher, requestPipeline, TestProviders.of(responseCache),
@@ -282,6 +291,8 @@ class ChatExecutionServiceCacheSafetyTest {
 
         HttpServletRequest httpRequest = mock(HttpServletRequest.class);
         when(httpRequest.getAttribute("workspaceId")).thenReturn("t1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("key-1");
+        when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR)).thenReturn("key-1");
 
         ChatExecutionService svc = new ChatExecutionService(
                 dispatcher, requestPipeline, TestProviders.of(responseCache),

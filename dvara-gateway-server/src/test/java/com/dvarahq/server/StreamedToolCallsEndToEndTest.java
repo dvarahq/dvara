@@ -115,7 +115,6 @@ class StreamedToolCallsEndToEndTest {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
-        registry.add("dvara.llm-gateway.data-plane.require-api-key", () -> "true");
         registry.add("dvara.audit.file.path", () -> configDir.resolve("audit.log").toString());
         registry.add("dvara.audit.hmac-secret", () -> "e2e-tool-calls-audit-secret");
     }

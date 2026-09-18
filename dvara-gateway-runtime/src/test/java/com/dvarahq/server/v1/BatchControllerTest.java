@@ -15,6 +15,7 @@
  */
 package com.dvarahq.server.v1;
 
+import com.dvarahq.server.TestApiKey;
 import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.ratelimit.RateLimiter;
 import com.dvarahq.server.config.TestMetricsConfig;
@@ -31,6 +32,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -56,8 +58,6 @@ class BatchControllerTest {
                 .thenReturn("{\"id\":\"batch_1\",\"status\":\"validating\"}");
 
         mockMvc.perform(post("/v1/batches")
-                        .requestAttr("workspaceId", "t1")
-                        .requestAttr(ApiKeyAuthFilter.API_KEY_ID_ATTR, "key-id-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"input_file_id\":\"file_1\",\"endpoint\":\"/v1/chat/completions\"}"))
                 .andExpect(status().isOk())
@@ -67,59 +67,59 @@ class BatchControllerTest {
         // attribute ApiKeyAuthFilter sets, never the bearer token, because the job row persists it.
         verify(batchService).createBatch(
                 eq("{\"input_file_id\":\"file_1\",\"endpoint\":\"/v1/chat/completions\"}"),
-                eq("t1"), eq("key-id-1"), any());
+                eq(TestApiKey.WORKSPACE), eq(TestApiKey.ID), any());
     }
 
     @Test
-    void create_withoutAKey_attributesToAnonymous() throws Exception {
-        when(batchService.createBatch(any(), any(), any(), any())).thenReturn("{\"id\":\"batch_2\"}");
-
+    void create_withoutAKey_isRefused() throws Exception {
         mockMvc.perform(post("/v1/batches")
-                        .requestAttr("workspaceId", "t1")
+                        // overrides the key the slice sends by default; an empty header is no key
+                        .header("Authorization", "")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"input_file_id\":\"file_1\",\"endpoint\":\"/v1/chat/completions\"}"))
-                .andExpect(status().isOk());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("api_key_required"));
 
-        // The same sentinel the chat path writes, so the job's usage and cost rows agree.
-        verify(batchService).createBatch(any(), eq("t1"), eq("anonymous"), any());
+        // No job is created for a caller with no key, and so no row that would need attributing.
+        verify(batchService, never()).createBatch(any(), any(), any(), any());
     }
 
     @Test
     void get_returnsRawStatus() throws Exception {
-        when(batchService.getBatch("batch_1", "t1"))
+        when(batchService.getBatch("batch_1", TestApiKey.WORKSPACE))
                 .thenReturn("{\"id\":\"batch_1\",\"status\":\"completed\"}");
 
-        mockMvc.perform(get("/v1/batches/batch_1").requestAttr("workspaceId", "t1"))
+        mockMvc.perform(get("/v1/batches/batch_1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("completed"));
     }
 
     @Test
     void get_notFound_returns404() throws Exception {
-        when(batchService.getBatch("nope", "t1"))
+        when(batchService.getBatch("nope", TestApiKey.WORKSPACE))
                 .thenThrow(new GatewayException("BATCH_NOT_FOUND", "Batch not found: nope"));
 
-        mockMvc.perform(get("/v1/batches/nope").requestAttr("workspaceId", "t1"))
+        mockMvc.perform(get("/v1/batches/nope"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("batch_not_found"));
     }
 
     @Test
     void cancel_relaysTheProvidersBatchObject() throws Exception {
-        when(batchService.cancelBatch("batch_1", "t1"))
+        when(batchService.cancelBatch("batch_1", TestApiKey.WORKSPACE))
                 .thenReturn("{\"id\":\"batch_1\",\"status\":\"cancelled\"}");
 
-        mockMvc.perform(post("/v1/batches/batch_1/cancel").requestAttr("workspaceId", "t1"))
+        mockMvc.perform(post("/v1/batches/batch_1/cancel"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("cancelled"));
     }
 
     @Test
     void cancel_anotherWorkspacesBatch_is404() throws Exception {
-        when(batchService.cancelBatch("batch_1", "intruder"))
+        when(batchService.cancelBatch("batch_1", TestApiKey.WORKSPACE))
                 .thenThrow(new GatewayException("BATCH_NOT_FOUND", "Batch not found: batch_1"));
 
-        mockMvc.perform(post("/v1/batches/batch_1/cancel").requestAttr("workspaceId", "intruder"))
+        mockMvc.perform(post("/v1/batches/batch_1/cancel"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("batch_not_found"));
     }
@@ -128,7 +128,7 @@ class BatchControllerTest {
     void theResultsPathIsGone_becauseTheProviderApiHasNoSuchEndpoint() throws Exception {
         // Results are served by GET /v1/files/{fileId}/content, which is where a client
         // following the documented flow looks after reading output_file_id off the batch.
-        mockMvc.perform(get("/v1/batches/batch_1/results").requestAttr("workspaceId", "t1"))
+        mockMvc.perform(get("/v1/batches/batch_1/results"))
                 .andExpect(status().isNotFound());
     }
 }

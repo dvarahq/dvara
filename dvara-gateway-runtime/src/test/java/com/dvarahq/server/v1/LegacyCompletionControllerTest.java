@@ -15,6 +15,7 @@
  */
 package com.dvarahq.server.v1;
 
+import com.dvarahq.server.TestApiKey;
 import com.dvarahq.core.audit.AuditWriter;
 import com.dvarahq.core.cache.ResponseCache;
 import com.dvarahq.core.cost.CostCalculationService;
@@ -143,8 +144,6 @@ class LegacyCompletionControllerTest {
         when(dispatcher.chat(any())).thenReturn(chatResponse("id", "m", "ok"));
 
         mockMvc.perform(post("/v1/completions")
-                        .requestAttr("workspaceId", "ws-1")
-                        .requestAttr(ApiKeyAuthFilter.API_KEY_ID_ATTR, "key-id-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"model": "m", "prompt": "Hello"}
@@ -153,8 +152,8 @@ class LegacyCompletionControllerTest {
 
         ArgumentCaptor<FilterContext> ctx = ArgumentCaptor.forClass(FilterContext.class);
         verify(requestPipeline).preDispatch(any(ChatRequest.class), ctx.capture());
-        assertThat(ctx.getValue().getWorkspaceId()).isEqualTo("ws-1");
-        assertThat(ctx.getValue().getApiKey()).isEqualTo("key-id-1");
+        assertThat(ctx.getValue().getWorkspaceId()).isEqualTo(TestApiKey.WORKSPACE);
+        assertThat(ctx.getValue().getApiKey()).isEqualTo(TestApiKey.ID);
         verify(requestPipeline).postDispatch(any(ChatRequest.class), any(ChatResponse.class), any(FilterContext.class));
     }
 
@@ -163,8 +162,6 @@ class LegacyCompletionControllerTest {
         when(dispatcher.chat(any())).thenReturn(chatResponse("id", "m", "ok"));
 
         mockMvc.perform(post("/v1/completions")
-                        .requestAttr("workspaceId", "ws-1")
-                        .requestAttr(ApiKeyAuthFilter.API_KEY_ID_ATTR, "key-id-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"model": "m", "prompt": "Hello"}
@@ -174,10 +171,10 @@ class LegacyCompletionControllerTest {
         ArgumentCaptor<com.dvarahq.core.metering.TokenUsageRecord> saved =
                 ArgumentCaptor.forClass(com.dvarahq.core.metering.TokenUsageRecord.class);
         verify(tokenUsageRepository).save(saved.capture());
-        assertThat(saved.getValue().getWorkspaceId()).isEqualTo("ws-1");
-        assertThat(saved.getValue().getApiKey()).isEqualTo("key-id-1");
+        assertThat(saved.getValue().getWorkspaceId()).isEqualTo(TestApiKey.WORKSPACE);
+        assertThat(saved.getValue().getApiKey()).isEqualTo(TestApiKey.ID);
         assertThat(saved.getValue().getTotalTokens()).isEqualTo(13);
-        verify(costCalculationService).calculateAndPersist(any(), any(), eq("ws-1"), eq("key-id-1"), any());
+        verify(costCalculationService).calculateAndPersist(any(), any(), eq(TestApiKey.WORKSPACE), eq(TestApiKey.ID), any());
     }
 
     @Test

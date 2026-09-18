@@ -83,8 +83,9 @@ public class YamlConfigStoreAutoConfiguration {
         if (alreadyServed != null) log.info(alreadyServed);
         GatewayYamlConfig config = GatewayYamlLoader.load(environment::getProperty).orElseGet(() -> {
             log.warn("No gateway.yaml found (looked at DVARA_CONFIG_FILE, then ./gateway.yaml). "
-                    + "Starting with no workspaces, keys, routes or policies: every request will be "
-                    + "anonymous and ungoverned.");
+                    + "Starting with no workspaces, keys, routes or policies: every request under /v1 "
+                    + "will be refused with 401 until a key is minted with --generate-key and its "
+                    + "hash is in the file.");
             return new GatewayYamlConfig();
         });
 

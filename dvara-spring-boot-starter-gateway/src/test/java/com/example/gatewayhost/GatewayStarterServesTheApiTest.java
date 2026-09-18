@@ -15,16 +15,24 @@
  */
 package com.example.gatewayhost;
 
+import com.dvarahq.core.apikey.ApiKeyGenerator;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.policy.PolicyContext;
 import com.dvarahq.core.policy.PolicyEngine;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestConstructor;
 import org.springframework.test.web.servlet.MockMvc;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -40,13 +48,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * arrive through auto-configuration, which is what a real host relies on. A host in
  * {@code com.dvarahq} would pass even with the auto-configuration broken.
  *
- * <p>Three checks. A chat request comes back with a completion from the mock provider. The models
- * endpoint answers. And the policy engine denies a model on a denylist, which shows the engines
- * behind the API are real and wired in.
+ * <p>Every request under {@code /v1} carries an API key, in a host application as in the standalone
+ * gateway, so the host does what an operator does: a {@code gateway.yaml} names the key's hash, and
+ * the caller sends the key. A request without one is refused, which the last check shows.
+ *
+ * <p>Four checks. A chat request comes back with a completion from the mock provider. The models
+ * endpoint answers. The policy engine denies a model on a denylist, which shows the engines behind
+ * the API are real and wired in. And a request with no key is refused.
  */
 @SpringBootTest(classes = GatewayStarterServesTheApiTest.PlainHostApplication.class,
         properties = {
-                "dvara.llm-gateway.providers.mock.enabled=true",
                 "dvara.llm-gateway.providers.mock.latency-ms=0",
                 "dvara.llm-gateway.providers.mock.response=Hello from the mock provider"
         })
@@ -56,6 +67,43 @@ class GatewayStarterServesTheApiTest {
 
     @SpringBootApplication
     static class PlainHostApplication {
+    }
+
+    static final String KEY = "dvara-gateway-starter-host-key";
+
+    @TempDir
+    static Path configDir;
+
+    /**
+     * The file is pointed at with a system property rather than a {@code @DynamicPropertySource}:
+     * the environment post-processor that reads it runs before the context exists, and a dynamic
+     * property source is registered too late for it to see.
+     */
+    @BeforeAll
+    static void writeGatewayYaml() throws IOException {
+        Path file = configDir.resolve("gateway.yaml");
+        Files.writeString(file, """
+                providers:
+                  - type: mock
+
+                routes:
+                  - id: mock-route
+                    model: "mock*"
+                    provider: mock
+
+                api_keys:
+                  - key_hash: sha256:%s
+                    name: host-key
+                    workspace: default
+                """.formatted(ApiKeyGenerator.hash(KEY)));
+        System.setProperty("DVARA_CONFIG_FILE", file.toString());
+    }
+
+    @AfterAll
+    static void forgetTheFile() {
+        // Surefire reuses the JVM across classes; a stray DVARA_CONFIG_FILE would point every later
+        // test at a temp file that no longer exists.
+        System.clearProperty("DVARA_CONFIG_FILE");
     }
 
     private final MockMvc mockMvc;
@@ -69,6 +117,7 @@ class GatewayStarterServesTheApiTest {
     @Test
     void theChatEndpointIsServedFromTheHostApplication() throws Exception {
         mockMvc.perform(post("/v1/chat/completions")
+                        .header("Authorization", "Bearer " + KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"model":"mock/gpt","messages":[{"role":"user","content":"Hello"}]}
@@ -79,7 +128,19 @@ class GatewayStarterServesTheApiTest {
 
     @Test
     void theModelsEndpointAnswers() throws Exception {
-        mockMvc.perform(get("/v1/models")).andExpect(status().isOk());
+        mockMvc.perform(get("/v1/models").header("Authorization", "Bearer " + KEY))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void aRequestWithNoKeyIsRefused_inAHostApplicationToo() throws Exception {
+        mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model":"mock/gpt","messages":[{"role":"user","content":"Hello"}]}
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("api_key_required"));
     }
 
     @Test

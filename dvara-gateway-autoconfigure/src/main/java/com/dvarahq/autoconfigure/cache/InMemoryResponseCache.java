@@ -77,12 +77,21 @@ public final class InMemoryResponseCache implements ResponseCache {
 
     @Override
     public Optional<ChatResponse> get(ChatRequest request) {
+        if (workspaceOf(request).isEmpty()) {
+            return Optional.empty();
+        }
         return Optional.ofNullable(entries.getIfPresent(key(request)));
     }
 
+    /**
+     * A request with no workspace is not cached. The workspace is the namespace, and a request that
+     * has none would land every such caller in one shared namespace, where one caller's answer is
+     * served to another. Every request the gateway serves has a workspace by the time it gets here;
+     * an application driving the cache directly without one gets no cache rather than a shared one.
+     */
     @Override
     public void put(ChatRequest request, ChatResponse response) {
-        if (response != null) {
+        if (response != null && !workspaceOf(request).isEmpty()) {
             entries.put(key(request), response);
         }
     }

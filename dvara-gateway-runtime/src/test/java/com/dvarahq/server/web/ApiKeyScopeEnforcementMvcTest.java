@@ -58,7 +58,7 @@ class ApiKeyScopeEnforcementMvcTest {
     void setUp() {
         repository = mock(ApiKeyRepository.class);
         mvc = MockMvcBuilders.standaloneSetup(new ChatStub())
-                .addFilters(new ApiKeyAuthFilter(repository, true))
+                .addFilters(new ApiKeyAuthFilter(repository))
                 .build();
     }
 

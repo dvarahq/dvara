@@ -76,9 +76,6 @@ dvara:
     name: ${DVARA_REGION_NAME:}
 
   llm-gateway:
-    data-plane:
-      require-api-key: ${DVARA_LLM_GATEWAY_REQUIRE_API_KEY:false}
-
     providers:
       openai:
         api-key: ${OPENAI_API_KEY:}

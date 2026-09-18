@@ -34,19 +34,6 @@ public class GatewayProperties {
     // Encryption (dvara.encryption.*) and region (dvara.region.*) live in their own
     // @ConfigurationProperties classes, GatewayEncryptionProperties and GatewayRegionProperties,
     // so their prefixes stay outside the LLM-gateway-only dvara.llm-gateway namespace.
-    private DataPlaneConfig dataPlane = new DataPlaneConfig();
-
-    @Data
-    public static class DataPlaneConfig {
-        /**
-         * Whether a {@code /v1/*} request may omit its API key. When {@code true}, a request with no
-         * {@code Authorization: Bearer <api-key>} header is refused with {@code 401 authentication_error};
-         * when {@code false} it is served as anonymous. A key that is presented must be valid in either
-         * setting: an unknown, revoked or expired key is refused with {@code 401} whatever this says.
-         * Default: {@code false}, which is for development only.
-         */
-        private boolean requireApiKey = false;
-    }
 
     @Data
     public static class Providers {

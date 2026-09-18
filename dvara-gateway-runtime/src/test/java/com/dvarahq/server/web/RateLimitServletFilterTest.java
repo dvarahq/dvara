@@ -169,16 +169,33 @@ class RateLimitServletFilterTest {
         verify(rateLimiter).checkLimit(eq("my-api-key-123"), any(EffectiveRateLimit.class));
     }
 
+    /**
+     * Every served request was authenticated before it got here, so a missing key attribute is a
+     * wiring fault, not a caller to bucket. Serving it under a made-up bucket would let a request
+     * that no filter checked spend the operator's provider credentials.
+     */
     @Test
-    void missingAttribute_usesAnonymous() throws Exception {
+    void missingAttribute_isRefused_notBucketed() {
         when(request.getRequestURI()).thenReturn("/v1/embeddings");
         when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn(null);
-        when(rateLimiter.checkLimit(eq("anonymous"), any(EffectiveRateLimit.class)))
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> filter.doFilterInternal(request, response, chain))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ApiKeyAuthFilter");
+        verify(rateLimiter, never()).checkLimit(any(), any());
+    }
+
+    /** The one path that takes no key shares one bucket, named for what it is. */
+    @Test
+    void theWebhookApprovalPath_isBucketedAsUnauthenticated() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/webhooks/actions/approve");
+        when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn(null);
+        when(rateLimiter.checkLimit(eq(ApiKeyAuthFilter.UNAUTHENTICATED), any(EffectiveRateLimit.class)))
                 .thenReturn(RateLimitResult.allow());
 
         filter.doFilterInternal(request, response, chain);
 
-        verify(rateLimiter).checkLimit(eq("anonymous"), any(EffectiveRateLimit.class));
+        verify(rateLimiter).checkLimit(eq(ApiKeyAuthFilter.UNAUTHENTICATED), any(EffectiveRateLimit.class));
     }
 
     @Test
@@ -378,22 +395,23 @@ class RateLimitServletFilterTest {
     }
 
     @Test
-    void resolverPresent_nullWorkspaceId_passesNone() throws Exception {
-        // keyless / anonymous traffic has no WORKSPACE_ID_ATTR — the resolver must return NONE for null
+    void resolverPresent_webhookPathHasNoWorkspace_passesNone() throws Exception {
+        // The webhook approval path carries no key and so no WORKSPACE_ID_ATTR; the resolver must
+        // return NONE for null so the install-wide limits apply to it.
         WorkspaceRateLimitResolver resolver = mock(WorkspaceRateLimitResolver.class);
         when(resolver.resolve(null)).thenReturn(EffectiveRateLimit.NONE);
         filter = new RateLimitServletFilter(rateLimiter, null, resolver);
 
-        when(request.getRequestURI()).thenReturn("/v1/embeddings");
+        when(request.getRequestURI()).thenReturn("/v1/webhooks/actions/approve");
         when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn(null);
         when(request.getAttribute(ApiKeyAuthFilter.WORKSPACE_ID_ATTR)).thenReturn(null);
-        when(rateLimiter.checkLimit(eq("anonymous"), any(EffectiveRateLimit.class)))
+        when(rateLimiter.checkLimit(eq(ApiKeyAuthFilter.UNAUTHENTICATED), any(EffectiveRateLimit.class)))
                 .thenReturn(RateLimitResult.allow());
 
         filter.doFilterInternal(request, response, chain);
 
         verify(resolver).resolve(null);
-        verify(rateLimiter).checkLimit("anonymous", EffectiveRateLimit.NONE);
+        verify(rateLimiter).checkLimit(ApiKeyAuthFilter.UNAUTHENTICATED, EffectiveRateLimit.NONE);
     }
 
     @Test

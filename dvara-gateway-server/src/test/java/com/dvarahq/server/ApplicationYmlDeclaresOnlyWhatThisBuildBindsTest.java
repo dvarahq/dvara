@@ -47,7 +47,7 @@ class ApplicationYmlDeclaresOnlyWhatThisBuildBindsTest {
             // this test exists to prevent.
             "dvara.audit.hmac-secret", "dvara.audit.file.path",
             "dvara.encryption.", "dvara.actuator.", "dvara.region.",
-            "dvara.llm-gateway.data-plane.", "dvara.llm-gateway.providers.",
+            "dvara.llm-gateway.providers.",
             "dvara.llm-gateway.pii.", "dvara.llm-gateway.guardrail.", "dvara.llm-gateway.rate-limit.",
             "dvara.llm-gateway.cache.", "dvara.llm-gateway.routes", "dvara.llm-gateway.resilience.");
 

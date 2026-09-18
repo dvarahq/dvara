@@ -360,15 +360,23 @@ public class ChatExecutionService {
     }
 
     /**
-     * Captures the attribution at call time, which is only safe before the emitter has completed;
-     * the controllers use the form below.
+     * Captures the attribution at call time; the controllers use the form below. If the container
+     * has already recycled the request (a client that left, the emitter timeout), its attributes
+     * are gone, and the row is attributed from the settlement instead: that snapshot was taken while
+     * the request was live, and its limiter key is the key's id. A row is never written under an
+     * identity nobody carried.
      */
     public void persistStreamingUsage(HttpServletRequest httpRequest, ChatRequest streamRequest,
                                       String outputText, FilterContext ctx, long latencyMs,
                                       boolean error, ChatResponse.Usage reportedUsage,
                                       TokenSettlement settlement) {
+        Attribution who = Attribution.capture(httpRequest);
+        if (who.apiKeyId() == null || who.apiKeyId().isBlank()) {
+            who = new Attribution(settlement.limiterKey(), ctx.getWorkspaceId(), who.provider(),
+                    who.credentialFingerprint());
+        }
         persistStreamingUsage(httpRequest, streamRequest, outputText, ctx, latencyMs, error,
-                reportedUsage, settlement, Attribution.capture(httpRequest));
+                reportedUsage, settlement, who);
     }
 
     /**
@@ -563,7 +571,7 @@ public class ChatExecutionService {
             String apiKey = (String) httpRequest.getAttribute(RateLimitServletFilter.API_KEY_ATTR);
             Object reserved = httpRequest.getAttribute(RateLimitServletFilter.RESERVED_TOKENS_ATTR);
             Object reservationId = httpRequest.getAttribute(RateLimitServletFilter.RESERVATION_ID_ATTR);
-            return new TokenSettlement(apiKey == null ? "anonymous" : apiKey,
+            return new TokenSettlement(ApiKeyAuthFilter.requiredLimiterKey(httpRequest),
                     reserved instanceof Integer r ? r : 0,
                     reservationId instanceof Long id ? id : 0L);
         }
@@ -680,16 +688,15 @@ public class ChatExecutionService {
 
 
     /**
-     * The value telemetry rows carry in their {@code api_key} column: the key's opaque id, or
-     * {@code "anonymous"} when the request carried no key. The id is stable, unique and not a
-     * secret, and it is what per-key budget caps are keyed on, so a cap can match a row.
-     *
-     * <p>Not applied to the rate limiter, which takes the full key as an identity rather than
-     * storing it; narrowing it would change which callers share a limit.
+     * The value telemetry rows carry in their {@code api_key} column: the key's opaque id. The id
+     * is stable, unique and not a secret, and it is what per-key budget caps are keyed on, so a cap
+     * can match a row. Every served request has one; a row with none would be a call nobody can be
+     * shown to have made, so it is refused rather than written under a made-up identity.
      */
     private static String attributionId(String apiKeyId) {
         if (apiKeyId == null || apiKeyId.isBlank()) {
-            return "anonymous";
+            throw new IllegalStateException("A completed call has no API key id to attribute it to;"
+                    + " every served request carries one once ApiKeyAuthFilter has run.");
         }
         return apiKeyId;
     }

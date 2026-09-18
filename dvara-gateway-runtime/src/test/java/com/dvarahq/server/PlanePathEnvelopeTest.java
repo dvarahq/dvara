@@ -37,8 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>A real container on a real port, deliberately: percent-decoding happens below the application,
  * so MockMvc would answer a different question.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"dvara.llm-gateway.data-plane.require-api-key=false"})
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class PlanePathEnvelopeTest {
 
     @LocalServerPort
@@ -46,7 +45,9 @@ class PlanePathEnvelopeTest {
 
     private HttpResponse<String> get(String rawPath) throws Exception {
         return HttpClient.newHttpClient().send(
-                HttpRequest.newBuilder(URI.create("http://localhost:" + port + rawPath)).GET().build(),
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + rawPath))
+                        // authenticated, so the answer is about the path and not about the missing key
+                        .header("Authorization", TestApiKey.BEARER).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
 

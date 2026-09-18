@@ -66,8 +66,10 @@ test DVARA-operated hosted environments without prior written agreement — cont
 **Out of scope** — reports we generally consider non-issues:
 
 - findings that require a **non-default, explicitly insecure** configuration the documentation warns
-  against (for example running with authentication disabled, or the Mock provider on a production
-  profile, which executes Groovy in the gateway JVM by design);
+  against (for example the Mock provider on a production profile, which executes Groovy in the
+  gateway JVM by design). Authentication is not such a configuration: every request under `/v1`
+  carries an API key and there is no setting that turns that off, so a way to be served without
+  one is in scope;
 - denial of service, volumetric, or resource-exhaustion issues;
 - missing security headers or best-practice hardening with no demonstrated exploit;
 - social engineering, phishing, physical access, or attacks on our hosted and marketing
