@@ -36,6 +36,7 @@ import com.dvarahq.core.pii.PiiEnforcer;
 import com.dvarahq.core.policy.PolicyDecision;
 import com.dvarahq.core.ratelimit.RateLimiter;
 import com.dvarahq.core.routing.PriorityAdmissionController;
+import com.dvarahq.server.TestApiKey;
 import com.dvarahq.server.config.TestMetricsConfig;
 import com.dvarahq.server.service.ProviderDispatcher;
 import org.junit.jupiter.api.BeforeEach;
@@ -134,10 +135,9 @@ class ChatCompletionControllerTest {
     void budgetAndAttribution_useTheKeyId_neverTheBearerToken() throws Exception {
         when(dispatcher.chat(any())).thenReturn(chatResponse("chatcmpl-abc", "gpt-4o", "Paris"));
 
+        // The slice sends TestApiKey.KEY on every request; ApiKeyAuthFilter resolves it and stamps
+        // the identity, so nothing here is set by hand.
         mockMvc.perform(post("/v1/chat/completions")
-                        .requestAttr("workspaceId", "ws-1")
-                        .requestAttr(com.dvarahq.server.web.ApiKeyAuthFilter.API_KEY_ATTR, "gw_rawsecretvalue0123456789")
-                        .requestAttr(com.dvarahq.server.web.ApiKeyAuthFilter.API_KEY_ID_ATTR, "key-id-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"model": "gpt-4o", "messages": [{"role": "user", "content": "Hi"}]}
@@ -147,31 +147,33 @@ class ChatCompletionControllerTest {
         // Budget caps are keyed on ApiKey.id, so that is what every filter sees on the context.
         ArgumentCaptor<FilterContext> ctx = ArgumentCaptor.forClass(FilterContext.class);
         verify(requestPipeline).preDispatch(any(ChatRequest.class), ctx.capture());
-        assertThat(ctx.getValue().getApiKey()).isEqualTo("key-id-1");
+        assertThat(ctx.getValue().getApiKey()).isEqualTo(TestApiKey.ID).isNotEqualTo(TestApiKey.KEY);
 
         // And the persisted row attributes to the same id — not the token, not its prefix.
         ArgumentCaptor<com.dvarahq.core.metering.TokenUsageRecord> saved =
                 ArgumentCaptor.forClass(com.dvarahq.core.metering.TokenUsageRecord.class);
         verify(tokenUsageRepository).save(saved.capture());
-        assertThat(saved.getValue().getApiKey()).isEqualTo("key-id-1");
-        verify(costCalculationService).calculateAndPersist(any(), any(), eq("ws-1"), eq("key-id-1"), any());
+        assertThat(saved.getValue().getApiKey()).isEqualTo(TestApiKey.ID).doesNotContain(TestApiKey.KEY);
+        verify(costCalculationService).calculateAndPersist(any(), any(), eq(TestApiKey.WORKSPACE), eq(TestApiKey.ID), any());
     }
 
+    /** A request with no key is refused before it is served: no provider call, no usage row. */
     @Test
-    void anonymousRequest_attributesToAnonymous() throws Exception {
+    void keylessRequest_isRefused_andLeavesNoRow() throws Exception {
         when(dispatcher.chat(any())).thenReturn(chatResponse("chatcmpl-abc", "gpt-4o", "Paris"));
 
         mockMvc.perform(post("/v1/chat/completions")
+                        // overrides the key the slice sends by default; an empty header is no key
+                        .header("Authorization", "")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"model": "gpt-4o", "messages": [{"role": "user", "content": "Hi"}]}
                                 """))
-                .andExpect(status().isOk());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("api_key_required"));
 
-        ArgumentCaptor<com.dvarahq.core.metering.TokenUsageRecord> saved =
-                ArgumentCaptor.forClass(com.dvarahq.core.metering.TokenUsageRecord.class);
-        verify(tokenUsageRepository).save(saved.capture());
-        assertThat(saved.getValue().getApiKey()).isEqualTo("anonymous");
+        verify(dispatcher, never()).chat(any());
+        verify(tokenUsageRepository, never()).save(any());
     }
 
     // -------------------------------------------------------------------------
@@ -493,8 +495,6 @@ class ChatCompletionControllerTest {
 
         MvcResult mvcResult = mockMvc.perform(post("/v1/chat/completions")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .requestAttr(com.dvarahq.server.web.ApiKeyAuthFilter.API_KEY_ID_ATTR, "key-77")
-                        .requestAttr("workspaceId", "ws-77")
                         .content("""
                                 {"model": "gpt-4o", "stream": true, "messages": [{"role": "user", "content": "Hi"}]}
                                 """))
@@ -513,8 +513,8 @@ class ChatCompletionControllerTest {
         org.mockito.ArgumentCaptor<com.dvarahq.core.metering.TokenUsageRecord> row =
                 org.mockito.ArgumentCaptor.forClass(com.dvarahq.core.metering.TokenUsageRecord.class);
         verify(tokenUsageRepository, org.mockito.Mockito.timeout(5000)).save(row.capture());
-        assertThat(row.getValue().getWorkspaceId()).isEqualTo("ws-77");
-        assertThat(row.getValue().getApiKey()).isEqualTo("key-77");
+        assertThat(row.getValue().getWorkspaceId()).isEqualTo(TestApiKey.WORKSPACE);
+        assertThat(row.getValue().getApiKey()).isEqualTo(TestApiKey.ID);
         assertThat(row.getValue().getProvider()).isEqualTo("openai");
     }
 
@@ -1439,7 +1439,6 @@ class ChatCompletionControllerTest {
         when(dispatcher.chat(any())).thenReturn(chatResponse("id", "gpt-4o", "ok"));
 
         mockMvc.perform(post("/v1/chat/completions")
-                        .requestAttr("workspaceId", "workspace-from-api-key")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -1453,7 +1452,7 @@ class ChatCompletionControllerTest {
         org.mockito.ArgumentCaptor<ChatRequest> captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(dispatcher).chat(captor.capture());
         assertThat(captor.getValue().getMetadata())
-                .containsEntry("workspace_id", "workspace-from-api-key")
+                .containsEntry("workspace_id", TestApiKey.WORKSPACE)
                 .containsEntry("session_id", "s-42");
     }
 
@@ -1465,7 +1464,6 @@ class ChatCompletionControllerTest {
         when(dispatcher.streamChat(any())).thenReturn(chunks.iterator());
 
         MvcResult mvcResult = mockMvc.perform(post("/v1/chat/completions")
-                        .requestAttr("workspaceId", "workspace-from-api-key")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -1482,7 +1480,7 @@ class ChatCompletionControllerTest {
         org.mockito.ArgumentCaptor<ChatRequest> captor = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(dispatcher).streamChat(captor.capture());
         assertThat(captor.getValue().getMetadata())
-                .containsEntry("workspace_id", "workspace-from-api-key");
+                .containsEntry("workspace_id", TestApiKey.WORKSPACE);
     }
 
     // ================== function-calling round-trip ==================

@@ -45,7 +45,9 @@ class PlanePathEnvelopeTest {
 
     private HttpResponse<String> get(String rawPath) throws Exception {
         return HttpClient.newHttpClient().send(
-                HttpRequest.newBuilder(URI.create("http://localhost:" + port + rawPath)).GET().build(),
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + rawPath))
+                        // authenticated, so the answer is about the path and not about the missing key
+                        .header("Authorization", TestApiKey.BEARER).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
 

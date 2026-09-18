@@ -15,6 +15,7 @@
  */
 package com.dvarahq.server.v1;
 
+import com.dvarahq.server.TestApiKey;
 import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.ratelimit.RateLimiter;
 import com.dvarahq.server.config.TestMetricsConfig;
@@ -51,7 +52,7 @@ class FileControllerTest {
 
     @Test
     void upload_relaysFileAndReturnsProviderJson() throws Exception {
-        when(batchService.uploadFile(any(), eq("in.jsonl"), eq("batch"), eq("t1"), any()))
+        when(batchService.uploadFile(any(), eq("in.jsonl"), eq("batch"), eq(TestApiKey.WORKSPACE), any()))
                 .thenReturn("{\"id\":\"file_1\",\"object\":\"file\"}");
 
         MockMultipartFile file = new MockMultipartFile(
@@ -61,11 +62,11 @@ class FileControllerTest {
         mockMvc.perform(multipart("/v1/files")
                         .file(file)
                         .param("purpose", "batch")
-                        .requestAttr("workspaceId", "t1"))
+                        )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("file_1"));
 
-        verify(batchService).uploadFile(any(), eq("in.jsonl"), eq("batch"), eq("t1"), any());
+        verify(batchService).uploadFile(any(), eq("in.jsonl"), eq("batch"), eq(TestApiKey.WORKSPACE), any());
     }
 
     @Test
@@ -77,7 +78,7 @@ class FileControllerTest {
                 "file", "in.jsonl", "application/jsonl",
                 "email user@example.com".getBytes(StandardCharsets.UTF_8));
 
-        mockMvc.perform(multipart("/v1/files").file(file).requestAttr("workspaceId", "t1"))
+        mockMvc.perform(multipart("/v1/files").file(file))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("pii_detected"));
     }
