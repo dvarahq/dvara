@@ -17,6 +17,7 @@ package com.dvarahq.server.service;
 
 import com.dvarahq.core.id.Ids;
 import com.dvarahq.providers.support.CredentialInterceptor;
+import com.dvarahq.providers.support.WorkspaceScope;
 import com.dvarahq.core.audit.AuditEvent;
 import com.dvarahq.core.audit.AuditWriter;
 import com.dvarahq.core.cache.ResponseCache;
@@ -298,7 +299,19 @@ public class ChatExecutionService {
      * {@link #persistStreamingUsage} + {@link #releasePriority}.
      */
     public Iterator<SseChunk> openStream(ChatRequest streamRequest, String workspaceId) {
-        Iterator<SseChunk> rawChunks = dispatcher.streamChat(streamRequest);
+        // The workspace travels with the call from here down.
+        //
+        // By the time this runs the controller has handed the emitter back and the request is
+        // finished, so anything further down that tries to ask the request who this is gets an
+        // exception rather than an answer — which is what broke streaming on every provider that
+        // carries a credential. We already have the workspace as an argument; it just had no way of
+        // reaching the code that needs it. Scoped around opening the stream, because that is when
+        // the connection is made and the credential chosen; reading the iterator afterwards needs
+        // nothing from us.
+        Iterator<SseChunk> rawChunks;
+        try (WorkspaceScope.Scope ignored = WorkspaceScope.open(workspaceId)) {
+            rawChunks = dispatcher.streamChat(streamRequest);
+        }
         try {
             return streamingResponseEnforcer.wrap(rawChunks, workspaceId, streamRequest);
         } catch (RuntimeException e) {

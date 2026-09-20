@@ -46,6 +46,13 @@ import java.util.function.Function;
  */
 public class CredentialInterceptor implements ClientHttpRequestInterceptor {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(CredentialInterceptor.class);
+
+    /** So a fleet-wide propagation gap is one line, not one per call. */
+    private static final java.util.concurrent.atomic.AtomicBoolean LOST_WORKSPACE_LOGGED =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
     private final SecretProvider secretProvider;
     private final String secretKey;
     private final String headerName;
@@ -93,8 +100,16 @@ public class CredentialInterceptor implements ClientHttpRequestInterceptor {
             return;
         }
         String fingerprint = CredentialFingerprint.of(credential);
-        if (fingerprint != null) {
+        if (fingerprint == null) {
+            return;
+        }
+        try {
             attrs.setAttribute(FINGERPRINT_ATTRIBUTE, fingerprint, RequestAttributes.SCOPE_REQUEST);
+        } catch (IllegalStateException requestIsGone) {
+            // A streamed call reaches here after its request has finished. Attribution is
+            // best-effort by design and this is the one case where it genuinely cannot be
+            // recorded; failing the customer's call to note who we billed would be the wrong way
+            // round.
         }
     }
 
@@ -102,20 +117,61 @@ public class CredentialInterceptor implements ClientHttpRequestInterceptor {
      *  credential-bearing upstream call — a cache hit, or a provider needing no secret. */
     public static String resolveFingerprint() {
         RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
-        return attrs == null
-                ? null
-                : (String) attrs.getAttribute(FINGERPRINT_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+        if (attrs == null) {
+            return null;
+        }
+        try {
+            return (String) attrs.getAttribute(FINGERPRINT_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+        } catch (IllegalStateException requestIsGone) {
+            // Same reasoning as recording it: this is read on the metering path, which on a stream
+            // runs after the request has finished. Hardening the write alone would only have moved
+            // the failure a few frames later. Not knowing which credential was used costs a column
+            // on a usage row; throwing here would cost the caller their answer.
+            return null;
+        }
     }
 
     /**
-     * Extracts workspaceId from the current servlet request context.
-     * Returns null when called outside a request scope (e.g., background jobs).
+     * Which workspace this call is being made for, so its own credential is used.
+     *
+     * <p>Asks {@link WorkspaceScope} first, and only then the servlet request. That order is the
+     * fix for a defect worth remembering: on a streamed response the upstream call happens after
+     * the controller has handed back the emitter, and by then the request has been closed. Asking
+     * it anything throws, so every streaming call through a provider that carries a credential
+     * failed before it reached the upstream at all.
+     *
+     * <p>The value is known long before that — the API-key filter works it out while the request is
+     * still ordinary — so it is carried to the call rather than looked up at the last moment.
+     *
+     * <p><b>It would have been easy, and wrong, to catch that exception and return null.</b> The
+     * crash stops, and the call quietly goes out on the installation's own key instead: one
+     * customer's traffic served and billed against another's credential, with nothing in the logs.
+     * A loud failure is much the better of the two. Where the workspace genuinely cannot be
+     * recovered this says so once, and returns null only because a scheduler or a probe has no
+     * workspace to speak of and must still be able to call.
      */
     public static String resolveWorkspaceId() {
-        RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
-        if (attrs != null) {
-            return (String) attrs.getAttribute("workspaceId", RequestAttributes.SCOPE_REQUEST);
+        String carried = WorkspaceScope.current();
+        if (carried != null) {
+            return carried;
         }
-        return null;
+        RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
+        if (attrs == null) {
+            return null;   // no request at all: a scheduler, a probe, a test
+        }
+        try {
+            return (String) attrs.getAttribute("workspaceId", RequestAttributes.SCOPE_REQUEST);
+        } catch (IllegalStateException requestIsGone) {
+            // There was a request, it has been closed, and nobody carried the workspace across.
+            // That is a propagation gap rather than a workspace-less caller, and it is worth
+            // saying so: the call is about to be made without a workspace, which strict BYOK will
+            // refuse and a permissive install will serve on the shared credential.
+            if (LOST_WORKSPACE_LOGGED.compareAndSet(false, true)) {
+                log.warn("The workspace for a provider call could not be recovered: the request had "
+                        + "already finished and no workspace was carried with the call. The call "
+                        + "proceeds without one. This will not be logged again.");
+            }
+            return null;
+        }
     }
 }

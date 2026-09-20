@@ -23,6 +23,7 @@ import com.dvarahq.core.model.EmbeddingResponse;
 import com.dvarahq.core.model.SseChunk;
 import com.dvarahq.core.provider.LlmProvider;
 import com.dvarahq.core.provider.ProviderCapabilities;
+import com.dvarahq.providers.support.WorkspaceScope;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.retry.Retry;
@@ -181,6 +182,13 @@ public class ResilientLlmProvider implements LlmProvider {
             // the task, with a reset in finally so they do not leak into the thread's next task.
             final RequestAttributes capturedAttrs = RequestContextHolder.getRequestAttributes();
 
+            // The workspace has to be carried separately, and this is why. The attributes above are
+            // a reference: on a streamed call the request they point at has already finished by the
+            // time this task runs, so credential selection could no longer ask it who the caller
+            // was. The workspace itself is a plain value and survives the trip, so it is read here —
+            // on the thread that still knows — and put back on the thread doing the work.
+            final String capturedWorkspace = WorkspaceScope.current();
+
             // TimeLimiter wraps a Future-based call; see CALL_EXECUTOR for why it is submitted
             var future = CALL_EXECUTOR.submit(() -> {
                 final boolean attrsInjected = capturedAttrs != null;
@@ -188,7 +196,7 @@ public class ResilientLlmProvider implements LlmProvider {
                     RequestContextHolder.setRequestAttributes(capturedAttrs);
                 }
                 try {
-                    return withRetry.call();
+                    return WorkspaceScope.callWith(capturedWorkspace, withRetry);
                 } finally {
                     if (attrsInjected) {
                         RequestContextHolder.resetRequestAttributes();
