@@ -1,6 +1,6 @@
 # The gate.
 #
-# Eight checks on every push and pull request:
+# Nine checks on every push and pull request:
 #
 #   1. The GitHub user is grabdoc (pushes only).
 #   2. No commit message carries an assistant trailer.
@@ -10,6 +10,7 @@
 #   6. Only allow-listed documents ship inside a jar.
 #   7. Every optional dependency says what guards its absence.
 #   8. No commercial vocabulary, in code or in prose.
+#   9. The README does not quote a version that is no longer current.
 #
 # Keep this list in step with the steps below. It said "four" while eight ran,
 # which is the same defect the checks themselves exist to catch.
@@ -244,3 +245,6 @@ jobs:
           print(f"vocabulary ok ({len(files)} files, {len(HARD)} terms everywhere, "
                 f"{len(SOURCE)} more under src/)")
           PY
+
+      - name: The README names the current release
+        run: python3 scripts/check-readme-versions.py
