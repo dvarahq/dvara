@@ -81,9 +81,12 @@ jobs:
       # whose extensions=true takes over the deploy phase — so this does NOT go to the
       # distributionManagement repository (GitHub Packages) that a plain `deploy` would use.
       #
-      # autoPublish is false, so this uploads a bundle and stops. It becomes downloadable only
-      # when someone presses publish in the Central portal. That is deliberate: a released version
-      # on Central can never be deleted, renamed or replaced, so the last step stays manual.
+      # autoPublish is TRUE, so this uploads the bundle and RELEASES it. There is no staging pause
+      # and nobody presses Publish in the Central portal — the moment this step succeeds the version
+      # is public and permanent. A released version on Central can never be deleted, renamed or
+      # replaced, so the tag is the point of no return rather than the portal: everything the
+      # release depends on must be verified BEFORE the tag is pushed. Set autoPublish back to false
+      # in the release profile to restore the manual gate.
       #
       # Tests are skipped because the step above already ran them on this exact tree.
       - name: Publish to Maven Central

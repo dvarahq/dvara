@@ -266,7 +266,18 @@
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
-                            <autoPublish>false</autoPublish>
+                            <!-- A tagged build uploads the bundle AND releases it. There is no
+                                 staging pause and nobody presses Publish.
+
+                                 THE TAG IS THEREFORE THE POINT OF NO RETURN. A version on Central
+                                 can never be deleted, renamed or replaced, and the pause that used
+                                 to sit between upload and release — the one chance to notice a bad
+                                 bundle — is gone. Whatever a tagged build produces is what the
+                                 world gets, permanently. Verify before pushing the tag, not after.
+
+                                 Chosen deliberately, reversing the earlier recommendation to keep
+                                 this false. Set it back to false to restore the manual gate. -->
+                            <autoPublish>true</autoPublish>
                         </configuration>
                     </plugin>
                 </plugins>
