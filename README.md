@@ -58,7 +58,7 @@ gateway govern before you hand it a key to anything.
 PII and guardrail settings live:
 
 ```bash
-docker run --rm ghcr.io/dvarahq/dvara-gateway-oss:1.8.0-rc1 \
+docker run --rm ghcr.io/dvarahq/dvara-gateway-oss:latest \
   --generate-key --name quickstart --workspace default
 ```
 
@@ -107,14 +107,14 @@ docker run --rm --name dvara -p 8080:8080 \
   -v "$PWD/gateway.yaml:/app/gateway.yaml:ro" \
   -e DVARA_AUDIT_FILE_PATH=/tmp/audit.log \
   -e DVARA_AUDIT_HMAC_SECRET="$(openssl rand -base64 32)" \
-  ghcr.io/dvarahq/dvara-gateway-oss:1.8.0-rc1
+  ghcr.io/dvarahq/dvara-gateway-oss:latest
 ```
 
 Or, on a JDK 25, run the jar from a [release](https://github.com/dvarahq/dvara/releases) with the
 same two variables in the environment; the log is then the local file `/tmp/audit.log`:
 
 ```bash
-java -jar dvara-gateway-server-1.8.0-rc1-app.jar
+java -jar dvara-gateway-server-*-app.jar
 ```
 
 **4. See it govern.** In another terminal, with the key from step 1:
@@ -496,7 +496,7 @@ The gateway is nine Maven modules, and three of them are the ways in:
 <dependency>
   <groupId>com.dvarahq</groupId>
   <artifactId>dvara-spring-boot-starter</artifactId>
-  <version>1.8.0-rc1</version>
+  <version>1.8.0</version>
 </dependency>
 ```
 
