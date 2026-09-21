@@ -1,0 +1,107 @@
+name: verify-release-signing
+
+# Proves the release signing path WITHOUT publishing anything.
+#
+# Why this exists: a tagged build now uploads AND releases to Maven Central, and a released
+# version there can never be deleted, renamed or replaced. So the tag is the point of no return,
+# and the first real exercise of GPG signing would otherwise also be a permanent one.
+#
+# Signing has never run end to end. A local `-Prelease verify` reached the signing plugin and
+# failed with `No pinentry`, which is an environment limitation rather than a configuration
+# defect — but it means the CI path (the passphrase supplied through the action, loopback
+# pinentry) is unproven. This job proves it, for free, as often as you like.
+#
+# It is deliberately manual-only and deliberately stops at `verify`: no `deploy`, no
+# distributionManagement, nothing leaves the runner.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-signing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Identical to release.yml's setup, including the GPG import, because a rehearsal that
+      # configures signing differently from the real thing proves nothing about the real thing.
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.CENTRAL_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: The signing secrets are present
+        env:
+          GPG_KEY: ${{ secrets.CENTRAL_GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          set -uo pipefail
+          MISSING=""
+          [ -n "${GPG_KEY:-}" ]        || MISSING="$MISSING CENTRAL_GPG_PRIVATE_KEY"
+          [ -n "${GPG_PASSPHRASE:-}" ] || MISSING="$MISSING MAVEN_GPG_PASSPHRASE"
+          if [ -n "$MISSING" ]; then
+            echo "::error::cannot verify signing — missing repository secret(s):$MISSING"
+            exit 1
+          fi
+          echo "signing secrets present"
+
+      # `verify`, never `deploy`. The release profile attaches the sources and javadoc jars and
+      # signs everything; stopping here exercises all of that and uploads none of it.
+      - name: Build and sign, without publishing
+        env:
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: ./mvnw -B -ntp -Prelease -DskipTests verify
+
+      # A green build is not evidence that anything was signed: the signing plugin can be skipped,
+      # or bound to a phase this run never reached, and the build still succeeds. So assert the
+      # files exist, per module, and name the module that is missing one.
+      - name: Every published artifact carries a signature
+        run: |
+          set -uo pipefail
+          MODULES="dvara-gateway-core dvara-gateway-autoconfigure dvara-gateway-policy
+                   dvara-gateway-runtime dvara-gateway-server dvara-pii-detection
+                   dvara-rate-limiting dvara-spring-boot-starter dvara-spring-boot-starter-gateway"
+          FAIL=0
+          for m in $MODULES; do
+            for suffix in ".jar" "-sources.jar" "-javadoc.jar"; do
+              # The version is whatever the pom carries; match on the suffix rather than assume it.
+              # The plain `.jar` glob also matches the sources and javadoc jars, so those are
+              # excluded explicitly — otherwise a module missing its main jar would pass by
+              # accidentally testing one of the other two.
+              if [ "$suffix" = ".jar" ]; then
+                FILE=$(ls "$m"/target/"$m"-*.jar 2>/dev/null \
+                        | grep -v -e '-sources\.jar$' -e '-javadoc\.jar$' | head -1)
+              else
+                FILE=$(ls "$m"/target/"$m"-*"$suffix" 2>/dev/null | head -1)
+              fi
+              if [ -z "$FILE" ]; then
+                echo "::error::$m is missing its $suffix"
+                FAIL=1
+                continue
+              fi
+              if [ ! -f "$FILE.asc" ]; then
+                echo "::error::$m has $(basename "$FILE") but no detached signature beside it"
+                FAIL=1
+                continue
+              fi
+              echo "ok  $(basename "$FILE") + .asc"
+            done
+          done
+          # The count is asserted too: a loop over an empty module list prints nothing and passes,
+          # which is the shape of check this repository has been bitten by before.
+          COUNT=$(echo $MODULES | wc -w | tr -d ' ')
+          if [ "$COUNT" != "9" ]; then
+            echo "::error::expected 9 modules to check, found $COUNT — the list has drifted from the root pom"
+            FAIL=1
+          fi
+          [ "$FAIL" = "0" ] || exit 1
+          echo "all 9 modules signed: jar, sources and javadoc, each with a .asc"
