@@ -110,9 +110,14 @@ public class PiiPatternRegistry {
     private static List<PatternEntry> buildBuiltInPatterns() {
         var patterns = new ArrayList<PatternEntry>();
 
-        // Email
+        // Email. A match may start only where a run of local-part characters starts, or where the previous
+        // match ended. Without that, find() tried every position inside a long run with no @ in it and walked
+        // to the end of the run from each one, so the scan grew with the square of the run: 16 KB of "a" took
+        // two seconds. It finds the same matches, because every character of a run can start the local part,
+        // so the leftmost match already begins at the start of its run. \G keeps the one case the lookbehind
+        // alone would drop: two addresses joined by a local-part character, as in a@b.comx_y@c.com.
         patterns.add(new PatternEntry(
-                Pattern.compile("[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}"),
+                Pattern.compile("(?:(?<![a-zA-Z0-9._%+\\-])|\\G)[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}"),
                 PiiEntityType.EMAIL, "email", 0.95));
 
         // US phone number (optional +1, area code, various separators). Never inside a longer run of digits, so

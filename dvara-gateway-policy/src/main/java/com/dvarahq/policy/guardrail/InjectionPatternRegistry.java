@@ -191,7 +191,11 @@ public class InjectionPatternRegistry {
                 GuardrailCategory.JAILBREAK, "repeat-text-above", 0.85, "spl-004"));
         patterns.add(pattern("what\\s+were\\s+you\\s+told",
                 GuardrailCategory.JAILBREAK, "what-were-you-told", 0.8, "spl-005"));
-        patterns.add(pattern("(ignore|disregard).*output\\s+(your\\s+)?(initial|original|system)\\s+prompt",
+        // The gap is bounded. With ".*", every "ignore" in a long line scanned to the end of the line looking for
+        // "output", so 64 KB of "ignore ignore ..." took two seconds and the cost grew with the square of the
+        // line. A thousand characters is far wider than the phrase needs, and "." already stops at a line break,
+        // so a gap this rule cannot see was always one newline away.
+        patterns.add(pattern("(ignore|disregard).{0,1000}output\\s+(your\\s+)?(initial|original|system)\\s+prompt",
                 GuardrailCategory.JAILBREAK, "ignore-output-prompt", 0.95, "spl-006"));
         patterns.add(pattern("(translate|convert|encode)\\s+your\\s+(system\\s+)?prompt",
                 GuardrailCategory.JAILBREAK, "encode-system-prompt", 0.85, "spl-007"));
