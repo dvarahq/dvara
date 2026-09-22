@@ -191,7 +191,9 @@ public class InjectionPatternRegistry {
                 GuardrailCategory.JAILBREAK, "repeat-text-above", 0.85, "spl-004"));
         patterns.add(pattern("what\\s+were\\s+you\\s+told",
                 GuardrailCategory.JAILBREAK, "what-were-you-told", 0.8, "spl-005"));
-        patterns.add(pattern("(ignore|disregard).*output\\s+(your\\s+)?(initial|original|system)\\s+prompt",
+        // The gap is bounded, so a long line that repeats "ignore" is scanned in linear time. "." stops at a
+        // line break, so the rule never matched across lines either.
+        patterns.add(pattern("(ignore|disregard).{0,1000}output\\s+(your\\s+)?(initial|original|system)\\s+prompt",
                 GuardrailCategory.JAILBREAK, "ignore-output-prompt", 0.95, "spl-006"));
         patterns.add(pattern("(translate|convert|encode)\\s+your\\s+(system\\s+)?prompt",
                 GuardrailCategory.JAILBREAK, "encode-system-prompt", 0.85, "spl-007"));
