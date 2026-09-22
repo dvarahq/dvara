@@ -158,48 +158,42 @@ class WorkspaceStatusFilterTest {
         assertThat(audit.lastEvent.get().payload()).containsEntry("reason", "manual_review");
     }
 
+    /**
+     * A suspension applies on the next request. The filter used to keep its own copy of the status for
+     * 60 seconds, which nothing could clear, so a workspace an operator had just suspended was served
+     * for another minute.
+     */
     @Test
-    void warmCache_skipsSecondLookup() {
-        // First call cold-misses, fetches from repo. Second call within
-        // the 60s TTL is a pure map hit.
-        addWorkspace("t-warm", WorkspaceStatus.ACTIVE, null);
-        filter.preDispatch(req(), ctxFor("t-warm"));
-        filter.preDispatch(req(), ctxFor("t-warm"));
-        filter.preDispatch(req(), ctxFor("t-warm"));
-        assertThat(workspaces.findByIdCalls).isEqualTo(1);
+    void aSuspensionAppliesOnTheNextRequest() {
+        addWorkspace("t-suspend", WorkspaceStatus.ACTIVE, null);
+        assertThatNoException().isThrownBy(() -> filter.preDispatch(req(), ctxFor("t-suspend")));
+
+        workspaces.findById("t-suspend").orElseThrow().setStatus(WorkspaceStatus.SUSPENDED);
+
+        assertThatThrownBy(() -> filter.preDispatch(req(), ctxFor("t-suspend")))
+                .isInstanceOf(WorkspaceSuspendedException.class);
     }
 
+    /** Lifting a suspension applies on the next request too. */
     @Test
-    void cacheTtlExpiry_refetchesFromRepo() {
-        addWorkspace("t-ttl", WorkspaceStatus.ACTIVE, null);
-        filter.preDispatch(req(), ctxFor("t-ttl"));
-        clock.advance(Duration.ofSeconds(61));
-        filter.preDispatch(req(), ctxFor("t-ttl"));
-        assertThat(workspaces.findByIdCalls).isEqualTo(2);
-    }
-
-    @Test
-    void cacheKeyIsPerWorkspace() {
-        addWorkspace("t-a", WorkspaceStatus.ACTIVE, null);
-        addWorkspace("t-b", WorkspaceStatus.ACTIVE, null);
-        filter.preDispatch(req(), ctxFor("t-a"));
-        filter.preDispatch(req(), ctxFor("t-b"));
-        assertThat(workspaces.findByIdCalls).isEqualTo(2);
-    }
-
-    @Test
-    void unsuspendThenReadAfterCacheExpiry_unblocks() {
-        // Operator manually un-suspends; after cache expiry the next
-        // request passes.
+    void liftingASuspensionAppliesOnTheNextRequest() {
         addWorkspace("t-unsuspend", WorkspaceStatus.SUSPENDED, null);
         assertThatThrownBy(() -> filter.preDispatch(req(), ctxFor("t-unsuspend")))
                 .isInstanceOf(WorkspaceSuspendedException.class);
 
-        var updated = workspaces.findById("t-unsuspend").orElseThrow();
-        updated.setStatus(WorkspaceStatus.ACTIVE);
-        clock.advance(Duration.ofSeconds(61));
+        workspaces.findById("t-unsuspend").orElseThrow().setStatus(WorkspaceStatus.ACTIVE);
 
         assertThatNoException().isThrownBy(() -> filter.preDispatch(req(), ctxFor("t-unsuspend")));
+    }
+
+    /** Every request asks the repository; caching the workspace is the repository's job. */
+    @Test
+    void everyRequestReadsThroughTheRepository() {
+        addWorkspace("t-read", WorkspaceStatus.ACTIVE, null);
+        filter.preDispatch(req(), ctxFor("t-read"));
+        filter.preDispatch(req(), ctxFor("t-read"));
+        filter.preDispatch(req(), ctxFor("t-read"));
+        assertThat(workspaces.findByIdCalls).isEqualTo(3);
     }
 
     @Test
@@ -261,7 +255,7 @@ class WorkspaceStatusFilterTest {
                 .build());
     }
 
-    /** In-memory workspace repo that counts findById hits for cache tests. */
+    /** In-memory workspace repo that counts findById hits. */
     static class CountingWorkspaceRepository implements WorkspaceRepository {
         private final List<Workspace> store = new ArrayList<>();
         int findByIdCalls = 0;
