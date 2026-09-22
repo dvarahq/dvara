@@ -36,7 +36,6 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Rejects requests for any workspace whose status is {@link WorkspaceStatus#SUSPENDED} with HTTP
@@ -47,23 +46,24 @@ import java.util.concurrent.ConcurrentHashMap;
  * slots and the policy / PII / guardrail chain, so a suspended workspace is rejected before any of
  * that work is done.
  *
- * <p>A per-workspace snapshot with a 60-second TTL keeps the {@link WorkspaceRepository#findById}
- * round-trip off the hot path. When the request carries no workspace, or the lookup misses, the
- * filter lets the request through. Each block emits a {@code WORKSPACE_SUSPENDED_BLOCK} audit
- * event; the audit write is best-effort and never changes the 403.
+ * <p>The status is read from the {@link WorkspaceRepository} on every request, so a suspension, and
+ * lifting one, applies on the next request. This filter keeps no copy of its own: caching the
+ * workspace is the repository's job. A repository that caches invalidates on a change; one that does
+ * not is read from memory. A private copy here with a time-to-live delayed every suspension by that
+ * long, and nothing could clear it early. When the lookup misses, the filter lets the request
+ * through. Each block emits a {@code WORKSPACE_SUSPENDED_BLOCK} audit event; the audit write is
+ * best-effort and never changes the 403.
  */
 @Component
 public class WorkspaceStatusFilter implements ChatFilter {
 
     private static final Logger log = LoggerFactory.getLogger(WorkspaceStatusFilter.class);
-    private static final long CACHE_TTL_MILLIS = 60_000L;
     static final String SUSPEND_REASON_KEY = "suspendedReason";
     static final String DEFAULT_REASON = "manual";
 
     private final WorkspaceRepository workspaces;
     private final ObjectProvider<AuditWriter> auditWriter;
     private final Clock clock;
-    private final ConcurrentHashMap<String, CachedSnapshot> cache = new ConcurrentHashMap<>();
 
     @Autowired
     public WorkspaceStatusFilter(WorkspaceRepository workspaces,
@@ -71,7 +71,7 @@ public class WorkspaceStatusFilter implements ChatFilter {
         this(workspaces, auditWriter, Clock.systemUTC());
     }
 
-    /** Test-only — pass an injectable clock to drive the TTL window. */
+    /** Test-only — pass an injectable clock for the audit event's timestamp. */
     WorkspaceStatusFilter(WorkspaceRepository workspaces,
                         ObjectProvider<AuditWriter> auditWriter,
                         Clock clock) {
@@ -106,34 +106,16 @@ public class WorkspaceStatusFilter implements ChatFilter {
                 reason);
     }
 
-    /**
-     * Look up the workspace's status (and optional suspension reason),
-     * with a 60-second TTL cache. Cold-miss pays the
-     * {@link WorkspaceRepository#findById} round-trip; warm hits are a
-     * single map lookup.
-     */
-    CachedSnapshot snapshotFor(String workspaceId) {
-        long nowMillis = clock.millis();
-        var hit = cache.get(workspaceId);
-        if (hit != null && nowMillis - hit.fetchedAtMillis() < CACHE_TTL_MILLIS) {
-            return hit;
-        }
-
+    /** The workspace's status and optional suspension reason, read from the repository. */
+    Snapshot snapshotFor(String workspaceId) {
         var workspace = workspaces.findById(workspaceId).orElse(null);
-        CachedSnapshot snapshot;
         if (workspace == null) {
             // Treat missing workspace as not-suspended — request proceeds,
             // downstream filters / repositories handle the not-found
             // case appropriately.
-            snapshot = new CachedSnapshot(null, null, nowMillis);
-        } else {
-            snapshot = new CachedSnapshot(
-                    workspace.getStatus(),
-                    reasonFor(workspace),
-                    nowMillis);
+            return new Snapshot(null, null);
         }
-        cache.put(workspaceId, snapshot);
-        return snapshot;
+        return new Snapshot(workspace.getStatus(), reasonFor(workspace));
     }
 
     private static String reasonFor(Workspace workspace) {
@@ -165,10 +147,5 @@ public class WorkspaceStatusFilter implements ChatFilter {
         }
     }
 
-    /** Test-only: clear the cache so a follow-up call hits the repository. */
-    void clearCache() {
-        cache.clear();
-    }
-
-    record CachedSnapshot(WorkspaceStatus status, String reason, long fetchedAtMillis) {}
+    record Snapshot(WorkspaceStatus status, String reason) {}
 }
