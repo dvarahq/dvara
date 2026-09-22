@@ -7,7 +7,7 @@ auto-configuration does the rest.
 <dependency>
     <groupId>com.dvarahq</groupId>
     <artifactId>dvara-spring-boot-starter</artifactId>
-    <version>1.8.0-SNAPSHOT</version>
+    <version>1.8.1</version>
 </dependency>
 ```
 

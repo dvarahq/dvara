@@ -496,7 +496,7 @@ The gateway is nine Maven modules, and three of them are the ways in:
 <dependency>
   <groupId>com.dvarahq</groupId>
   <artifactId>dvara-spring-boot-starter</artifactId>
-  <version>1.8.0</version>
+  <version>1.8.1</version>
 </dependency>
 ```
 
