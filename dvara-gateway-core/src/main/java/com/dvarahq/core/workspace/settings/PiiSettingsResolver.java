@@ -68,6 +68,6 @@ public class PiiSettingsResolver {
         Workspace workspace = workspaces.findById(workspaceId).orElse(null);
         return workspace == null
                 ? PiiSettings.unset(workspaceId)
-                : PiiSettings.fromMetadata(workspaceId, workspace.getMetadata());
+                : PiiSettings.fromMetadata(workspaceId, workspace.governanceSettings());
     }
 }

@@ -21,6 +21,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.Instant;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -39,11 +42,53 @@ public class Workspace {
     private String region;
     private Map<String, Object> metadata;
     /**
-     * The workspace's own governance settings, grouped by area ({@code pii}, {@code guardrail}, and
-     * so on), for a store that keeps them apart from {@link #metadata}. Nullable: the file store does
-     * not set it, and readers that find nothing here fall back to {@link #metadata}.
+     * The workspace's own governance settings, grouped by area (see {@link #SETTINGS_AREAS}), for a
+     * store that keeps them apart from {@link #metadata}. Each area maps the same keys {@link #metadata}
+     * uses, for example {@code "pii": {"pii.action": "BLOCK"}}. Nullable: the file store does not set it.
+     * Read governance settings through {@link #governanceSettings()}, not from either map directly.
      */
     private Map<String, Object> settings;
+
+    /**
+     * The settings areas, and the key prefixes each one owns in {@link #metadata}.
+     */
+    public static final Map<String, List<String>> SETTINGS_AREAS = Map.of(
+            "pii", List.of("pii."),
+            "guardrail", List.of("guardrail.", "grounding.", "embedded."),
+            "agentic", List.of("agentic."),
+            "approval", List.of("approval."),
+            "governance", List.of("audit.", "credentials.", "ip-access."));
+
+    /**
+     * The governance settings in force: {@link #metadata} with each area of {@link #settings} laid over it.
+     *
+     * <p>An area present in {@link #settings} replaces that area whole: every {@link #metadata} key the
+     * area owns is dropped, whether or not the area repeats it. So a rule cleared in the settings stops
+     * applying, instead of an older copy in the metadata taking over. An area that is absent leaves the
+     * metadata keys as they are, so a workspace with no settings reads exactly its metadata.
+     *
+     * @return an unmodifiable map; never null
+     */
+    public Map<String, Object> governanceSettings() {
+        Map<String, Object> out = new LinkedHashMap<>(metadata == null ? Map.of() : metadata);
+        if (settings == null || settings.isEmpty()) {
+            return Collections.unmodifiableMap(out);
+        }
+        for (Map.Entry<String, Object> area : settings.entrySet()) {
+            List<String> prefixes = SETTINGS_AREAS.get(area.getKey());
+            if (prefixes != null) {
+                out.keySet().removeIf(key -> prefixes.stream().anyMatch(key::startsWith));
+            }
+            if (area.getValue() instanceof Map<?, ?> values) {
+                values.forEach((key, value) -> {
+                    if (key != null && value != null) {
+                        out.put(key.toString(), value);
+                    }
+                });
+            }
+        }
+        return Collections.unmodifiableMap(out);
+    }
     private Instant createdAt;
     private Instant updatedAt;
 }

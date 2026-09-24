@@ -176,8 +176,8 @@ public class GroundingDetectionFilter implements ChatFilter {
             }
         }
         Workspace workspace = workspaceRepository.findById(workspaceId).orElse(null);
-        if (workspace == null || workspace.getMetadata() == null) return config;
-        Map<String, Object> meta = workspace.getMetadata();
+        if (workspace == null) return config;
+        Map<String, Object> meta = workspace.governanceSettings();
 
         // SettingsBooleans rather than parseBoolean: an unreadable value falls back to the
         // configured default instead of silently disabling grounding detection.

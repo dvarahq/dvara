@@ -68,4 +68,90 @@ class WorkspaceSettingsTest {
 
         assertThat(a).isNotEqualTo(b);
     }
+    // ---- governanceSettings(): the settings in force -------------------------------------------
+
+    @Test
+    void withNoSettingsTheMetadataIsReadAsItIs() {
+        Map<String, Object> metadata = Map.of("tier", "pro", "pii.action", "BLOCK");
+        Workspace workspace = Workspace.builder().id("w1").metadata(metadata).build();
+
+        assertThat(workspace.governanceSettings()).isEqualTo(metadata);
+        assertThat(Workspace.builder().id("w1").metadata(metadata).settings(Map.of()).build().governanceSettings())
+                .isEqualTo(metadata);
+    }
+
+    @Test
+    void withNeitherMapTheResultIsEmptyNotNull() {
+        assertThat(Workspace.builder().id("w1").build().governanceSettings()).isEmpty();
+    }
+
+    @Test
+    void anAreaInTheSettingsIsLaidOverTheMetadata() {
+        Workspace workspace = Workspace.builder().id("w1")
+                .metadata(Map.of("tier", "pro", "guardrail.action", "LOG"))
+                .settings(Map.of("pii", Map.of("pii.action", "BLOCK")))
+                .build();
+
+        assertThat(workspace.governanceSettings()).isEqualTo(Map.of(
+                "tier", "pro", "guardrail.action", "LOG", "pii.action", "BLOCK"));
+    }
+
+    /**
+     * A rule cleared in the settings must stop applying. If the area only overwrote the keys it repeats,
+     * an older copy in the metadata would take over the one it left out.
+     */
+    @Test
+    void anAreaInTheSettingsHidesEveryMetadataKeyItOwns() {
+        Workspace workspace = Workspace.builder().id("w1")
+                .metadata(Map.of(
+                        "tier", "pro",
+                        "guardrail.content.custom-denylist", Map.of("old", "secret"),
+                        "grounding.enabled", true,
+                        "embedded.enabled-filters", "ZIP_CODE",
+                        "pii.action", "LOG"))
+                .settings(Map.of("guardrail", Map.of("guardrail.action", "BLOCK")))
+                .build();
+
+        assertThat(workspace.governanceSettings()).isEqualTo(Map.of(
+                "tier", "pro", "pii.action", "LOG", "guardrail.action", "BLOCK"));
+    }
+
+    @Test
+    void anEmptyAreaClearsThatArea() {
+        Workspace workspace = Workspace.builder().id("w1")
+                .metadata(Map.of("approval.required-tools", "delete_*", "tier", "pro"))
+                .settings(Map.of("approval", Map.of()))
+                .build();
+
+        assertThat(workspace.governanceSettings()).isEqualTo(Map.of("tier", "pro"));
+    }
+
+    @Test
+    void everyAreaOwnsItsPrefixes() {
+        assertThat(Workspace.SETTINGS_AREAS).containsOnlyKeys("pii", "guardrail", "agentic", "approval", "governance");
+        for (String key : new String[] {"agentic.loop-detection.enabled", "approval.timeout-seconds",
+                "audit.store-prompts", "credentials.require-workspace-credential", "ip-access.allowlist"}) {
+            String area = Workspace.SETTINGS_AREAS.entrySet().stream()
+                    .filter(e -> e.getValue().stream().anyMatch(key::startsWith))
+                    .map(Map.Entry::getKey).findFirst().orElse(null);
+            Workspace workspace = Workspace.builder().id("w1").metadata(Map.of(key, "x"))
+                    .settings(Map.of(area, Map.of())).build();
+            assertThat(workspace.governanceSettings()).as(key).isEmpty();
+        }
+    }
+
+    @Test
+    void theResultCannotBeChanged() {
+        Workspace workspace = Workspace.builder().id("w1").metadata(Map.of("tier", "pro")).build();
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> workspace.governanceSettings().put("x", 1))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void theViewIsNotWrittenAsAProperty() throws Exception {
+        Workspace workspace = Workspace.builder().id("w1").metadata(Map.of("tier", "pro")).build();
+
+        assertThat(JSON.writeValueAsString(workspace)).doesNotContain("governanceSettings");
+    }
 }

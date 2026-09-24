@@ -126,6 +126,24 @@ class DefaultContextWindowGovernorTest {
         assertThat(result.warningThresholdBreached()).isTrue();
     }
 
+    /** A threshold kept in the workspace's settings applies, and hides an older one in its metadata. */
+    @Test
+    void customThresholds_fromWorkspaceSettings() {
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(50000);
+
+        Workspace workspace = Workspace.builder().id("workspace-1")
+                .metadata(Map.of("guardrail.context.warning-threshold-pct", "90"))
+                .settings(Map.of("guardrail", Map.of(
+                        "guardrail.context.warning-threshold-pct", "30",
+                        "guardrail.context.hard-threshold-pct", "50")))
+                .build();
+        when(workspaceRepository.findById("workspace-1")).thenReturn(Optional.of(workspace));
+
+        ContextWindowResult result = governor.evaluate(buildRequest(1), 128000, "workspace-1");
+
+        assertThat(result.warningThresholdBreached()).isTrue();
+    }
+
     @Test
     void zeroMaxTokens_returnsWithinLimits() {
         ContextWindowResult result = governor.evaluate(buildRequest(1), 0, "workspace-1");
