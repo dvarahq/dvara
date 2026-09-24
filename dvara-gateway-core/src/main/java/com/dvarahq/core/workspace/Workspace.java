@@ -38,6 +38,12 @@ public class Workspace {
     private WorkspaceStatus status;
     private String region;
     private Map<String, Object> metadata;
+    /**
+     * The workspace's own governance settings, grouped by area ({@code pii}, {@code guardrail}, and
+     * so on), for a store that keeps them apart from {@link #metadata}. Nullable: the file store does
+     * not set it, and readers that find nothing here fall back to {@link #metadata}.
+     */
+    private Map<String, Object> settings;
     private Instant createdAt;
     private Instant updatedAt;
 }
