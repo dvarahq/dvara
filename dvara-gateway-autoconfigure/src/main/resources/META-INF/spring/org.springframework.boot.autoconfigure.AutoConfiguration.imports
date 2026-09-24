@@ -9,3 +9,4 @@ com.dvarahq.autoconfigure.config.yaml.repo.YamlConfigStoreAutoConfiguration
 com.dvarahq.autoconfigure.workspace.WorkspaceLookupScopeAutoConfiguration
 com.dvarahq.autoconfigure.actuator.ActuatorAuthAutoConfiguration
 com.dvarahq.autoconfigure.cache.InMemoryResponseCacheAutoConfiguration
+com.dvarahq.autoconfigure.config.bootstrap.BootstrapLoaderAutoConfiguration

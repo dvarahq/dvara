@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.dvarahq.server.config;
+package com.dvarahq.autoconfigure.config.bootstrap;
 
 import com.dvarahq.autoconfigure.config.yaml.repo.YamlConfigStore;
 import com.dvarahq.autoconfigure.config.yaml.repo.YamlConfigStoreAutoConfiguration;
@@ -22,6 +22,7 @@ import com.dvarahq.core.routing.RoutingStrategyFactory;
 import com.dvarahq.core.apikey.ApiKeyRepository;
 import com.dvarahq.core.workspace.WorkspaceRepository;
 import com.dvarahq.core.routing.RouteRepository;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -55,11 +56,13 @@ public class BootstrapLoaderAutoConfiguration {
     public BootstrapLoader bootstrapLoader(WorkspaceRepository workspaceRepository,
                                            ApiKeyRepository apiKeyRepository,
                                            RouteRepository routeRepository,
-                                           RoutingEngine routingEngine,
-                                           RoutingStrategyFactory strategyFactory,
+                                           ObjectProvider<RoutingEngine> routingEngine,
+                                           ObjectProvider<RoutingStrategyFactory> strategyFactory,
                                            Environment environment) {
+        // Optional: an application that stores configuration without serving requests has no
+        // routing table to update.
         return new BootstrapLoader(workspaceRepository, apiKeyRepository, routeRepository,
-                routingEngine, strategyFactory, environment);
+                routingEngine.getIfAvailable(), strategyFactory.getIfAvailable(), environment);
     }
 
     /**

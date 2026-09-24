@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.dvarahq.server.config;
+package com.dvarahq.autoconfigure.config.bootstrap;
 
 import com.dvarahq.core.apikey.ApiKey;
 import com.dvarahq.core.apikey.ApiKeyGenerator;
@@ -314,6 +314,25 @@ class BootstrapLoaderTest {
         assertThat(routes.get(1).getId()).isEqualTo("claude-route");
         assertThat(routes.get(1).getStrategy()).isEqualTo("weighted");
         assertThat(routes.get(1).getProviders()).hasSize(3); // 2 weighted + 1 fallback
+    }
+
+    /** An application that stores configuration without serving requests has no routing table. */
+    @Test
+    void withNoRoutingEngine_routesAreSeededAndNothingIsRouted() throws IOException {
+        BootstrapLoader storeOnly = new BootstrapLoader(workspaceRepository, apiKeyRepository,
+                routeRepository, null, null, environment);
+        Path file = writeBootstrapFile("""
+                routes:
+                  - id: gpt-route
+                    model: "gpt*"
+                    provider: openai
+                """);
+        when(environment.getProperty("GATEWAY_BOOTSTRAP_FILE")).thenReturn(file.toString());
+
+        storeOnly.run(new DefaultApplicationArguments());
+
+        verify(routeRepository).save(any(Route.class));
+        verify(routeRepository, never()).findAll();
     }
 
     @Test

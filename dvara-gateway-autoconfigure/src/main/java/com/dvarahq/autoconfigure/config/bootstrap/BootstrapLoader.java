@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.dvarahq.server.config;
+package com.dvarahq.autoconfigure.config.bootstrap;
 
 import com.dvarahq.autoconfigure.config.yaml.GatewayYamlLoader;
 import com.dvarahq.core.apikey.ApiKey;
@@ -56,6 +56,10 @@ import java.util.stream.Collectors;
  * <p>
  * Enabled by setting the {@code DVARA_BOOTSTRAP_FILE} env var to the file path. The legacy
  * {@code GATEWAY_BOOTSTRAP_FILE} name is read as a fallback.
+ * <p>
+ * It lives beside the configuration stores rather than on the request path, so an application that
+ * stores configuration without serving requests can seed it too. Such an application has no routing
+ * engine; the routes are seeded and the routing-table update is skipped, since nothing there routes.
  */
 public class BootstrapLoader implements ApplicationRunner {
 
@@ -69,6 +73,11 @@ public class BootstrapLoader implements ApplicationRunner {
     private final RoutingStrategyFactory strategyFactory;
     private final Environment environment;
 
+    /**
+     * @param routingEngine   the routing table to update after seeding routes, or null where no
+     *                        requests are routed
+     * @param strategyFactory builds each route's strategy for that table; null alongside a null engine
+     */
     public BootstrapLoader(WorkspaceRepository workspaceRepository,
                            ApiKeyRepository apiKeyRepository,
                            RouteRepository routeRepository,
@@ -394,6 +403,9 @@ public class BootstrapLoader implements ApplicationRunner {
     }
 
     private void propagateRoutes() {
+        if (routingEngine == null || strategyFactory == null) {
+            return; // nothing here routes requests; whatever serves them reads the seeded routes
+        }
         List<Route> allRoutes = routeRepository.findAll();
         List<RoutingEngine.ResolvedRoute> resolved = allRoutes.stream()
                 .map(this::toResolvedRoute)

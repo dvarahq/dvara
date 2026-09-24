@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.dvarahq.server.config;
+package com.dvarahq.autoconfigure.config.bootstrap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -47,6 +47,17 @@ class BootstrapLoaderConditionTest {
     @Test
     void withoutTheYamlStore_theLoaderRegisters() {
         runner.run(context -> assertThat(context).hasSingleBean(BootstrapLoader.class));
+    }
+
+    /** Where configuration is stored but no request is routed, there is no routing engine to update. */
+    @Test
+    void withoutARoutingEngine_theLoaderStillRegisters() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(BootstrapLoaderAutoConfiguration.class))
+                .withBean(WorkspaceRepository.class, () -> mock(WorkspaceRepository.class))
+                .withBean(ApiKeyRepository.class, () -> mock(ApiKeyRepository.class))
+                .withBean(RouteRepository.class, () -> mock(RouteRepository.class))
+                .run(context -> assertThat(context).hasSingleBean(BootstrapLoader.class));
     }
 
     @Test
