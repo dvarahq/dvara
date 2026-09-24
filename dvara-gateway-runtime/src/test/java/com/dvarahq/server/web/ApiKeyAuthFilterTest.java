@@ -168,6 +168,56 @@ class ApiKeyAuthFilterTest {
      * that case would look exactly like one that had checked them. So there is no such filter: the
      * store is required, and the message says what is missing.
      */
+    // --- a key with no id is a configuration fault, refused here rather than one filter later ---
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"", "  "})
+    void keyWithNoId_isRefused500_andNeverReachesTheChain(String id) throws Exception {
+        var filter = new ApiKeyAuthFilter(repository);
+        when(request.getHeader("Authorization")).thenReturn("Bearer " + VALID_KEY);
+        when(repository.findByKeyHash(VALID_KEY_HASH)).thenReturn(Optional.of(
+                ApiKey.builder().id(id).workspaceId("acme").status(ApiKeyStatus.ACTIVE).build()));
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(response).setStatus(500);
+        verify(chain, never()).doFilter(any(), any());
+        // Nothing downstream is told a key was accepted.
+        verify(request, never()).setAttribute(eq(ApiKeyAuthFilter.API_KEY_ATTR), any());
+        var error = (Map<?, ?>) MAPPER.readValue(responseBody.toString(), Map.class).get("error");
+        assertThat(error.get("code")).isEqualTo("api_key_misconfigured");
+        assertThat(error.get("type")).isEqualTo("server_error");
+        assertThat((String) error.get("message")).contains("no id");
+    }
+
+    @Test
+    void keyWithNoId_isLoggedOnce_notOnEveryRequest() throws Exception {
+        var filter = new ApiKeyAuthFilter(repository);
+        when(request.getHeader("Authorization")).thenReturn("Bearer " + VALID_KEY);
+        when(repository.findByKeyHash(VALID_KEY_HASH)).thenReturn(Optional.of(
+                ApiKey.builder().workspaceId("acme").status(ApiKeyStatus.ACTIVE).build()));
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(ApiKeyAuthFilter.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            filter.doFilterInternal(request, response, chain);
+            responseBody.getBuffer().setLength(0);
+            filter.doFilterInternal(request, response, chain);
+
+            assertThat(appender.list)
+                    .filteredOn(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR)
+                    .singleElement()
+                    .satisfies(e -> assertThat(e.getFormattedMessage())
+                            .contains("resolved without an id")
+                            .doesNotContain(VALID_KEY));
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
     @Test
     void noRepository_isRefusedAtConstruction() {
         assertThatThrownBy(() -> new ApiKeyAuthFilter(null))

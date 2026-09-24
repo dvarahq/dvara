@@ -86,7 +86,8 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
             if (!ApiKeyAuthFilter.isWebhookApprovalAction(request.getRequestURI())) {
                 // Every other /v1 request was authenticated before it got here, or refused there.
                 throw new IllegalStateException("A request to " + request.getRequestURI() + " reached"
-                        + " rate limiting with no API key on it: ApiKeyAuthFilter did not run before it.");
+                        + " rate limiting with no API key id on it. ApiKeyAuthFilter must run first and"
+                        + " publish the id of the key it accepted.");
             }
             // The one path that takes no key. Its callers share one bucket, which is the point: it
             // takes an unauthenticated, state-changing action from the public internet.

@@ -75,6 +75,9 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(ApiKeyAuthFilter.class);
 
+    /** Hashes of keys already logged as having no id, so each is logged once, not on every request. */
+    private final java.util.Set<String> keysReportedWithoutId = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /**
      * The rate limiter's bucket identity for this request, never the bearer token: the limiter
      * passes whatever it is given straight to its store, where a token would sit in plaintext.
@@ -223,6 +226,23 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             reject(response, request, HttpStatus.UNAUTHORIZED,
                     "API key has expired.",
                     "api_key_expired");
+            return;
+        }
+
+        // A key must have an id: rate limiting, usage, cost and budgets are all attributed to it, and a
+        // null id cannot be stored as a request attribute (setAttribute(name, null) removes it). A key
+        // without one is a configuration fault, not the caller's, so this is a 500 that says so, rather
+        // than letting the request fail one filter later with a message about something else.
+        if (apiKey.getId() == null || apiKey.getId().isBlank()) {
+            if (keysReportedWithoutId.add(keyHash)) {
+                log.error("An API key resolved without an id (key hash {}...), so requests made with it are "
+                        + "refused. Every key in the gateway's configuration needs an id.",
+                        keyHash.substring(0, Math.min(12, keyHash.length())));
+            }
+            reject(response, request, HttpStatus.INTERNAL_SERVER_ERROR,
+                    "This API key has no id in the gateway's configuration, so the request cannot be "
+                            + "accounted for. The operator must give every key an id.",
+                    "api_key_misconfigured", "server_error");
             return;
         }
 
