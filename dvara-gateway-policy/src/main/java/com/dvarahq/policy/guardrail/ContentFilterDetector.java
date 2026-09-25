@@ -144,12 +144,8 @@ public class ContentFilterDetector implements GuardrailDetector {
             return contentPatternRegistry.getPatterns();
         }
 
-        // A null metadata map must not skip the typed store: the map is the legacy fallback, and its
-        // absence cannot decide whether the typed rows are read. Null is unreachable on PostgreSQL,
-        // where an empty JSONB deserializes to an empty map, and reachable on any store that leaves
-        // the field null.
-        Map<String, Object> metadata = workspace.getMetadata() == null
-                ? Map.of() : workspace.getMetadata();
+        // Never null: the typed store is read whatever the workspace carries.
+        Map<String, Object> metadata = workspace.governanceSettings();
 
         // Content filtering off for this workspace? typed row first, map as the bridge.
         Boolean typedContentEnabled = guardrailSettings == null ? null

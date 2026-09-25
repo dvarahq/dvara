@@ -74,8 +74,8 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
 
         if (workspaceId != null) {
             Workspace workspace = workspaceRepository.findById(workspaceId).orElse(null);
-            if (workspace != null && workspace.getMetadata() != null) {
-                Map<String, Object> meta = workspace.getMetadata();
+            if (workspace != null) {
+                Map<String, Object> meta = workspace.governanceSettings();
                 warningThreshold = parseIntOrDefault(
                         meta.get("guardrail.context.warning-threshold-pct"),
                         DEFAULT_WARNING_THRESHOLD_PCT,

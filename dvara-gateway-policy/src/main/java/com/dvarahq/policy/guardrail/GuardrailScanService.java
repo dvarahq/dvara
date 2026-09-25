@@ -451,8 +451,8 @@ public class GuardrailScanService implements GuardrailEnforcer {
                     scanResponses = typed.scanStreamingResponses();
                 }
             }
-            if (workspace != null && workspace.getMetadata() != null) {
-                Map<String, Object> meta = workspace.getMetadata();
+            if (workspace != null) {
+                Map<String, Object> meta = workspace.governanceSettings();
 
                 // YAML 1.1 via SettingsBooleans, not Boolean.parseBoolean: under that parser "yes"
                 // reads as false and would switch the guardrail off, as would an unreadable value.

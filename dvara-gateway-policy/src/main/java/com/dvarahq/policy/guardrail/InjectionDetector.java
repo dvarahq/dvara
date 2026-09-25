@@ -176,10 +176,10 @@ public class InjectionDetector implements GuardrailDetector {
             return Map.of();
         }
         Workspace workspace = workspaceRepository.findById(workspaceId).orElse(null);
-        if (workspace == null || workspace.getMetadata() == null) {
+        if (workspace == null) {
             return Map.of();
         }
-        Object raw = workspace.getMetadata().get("guardrail.injection.custom-patterns");
+        Object raw = workspace.governanceSettings().get("guardrail.injection.custom-patterns");
         if (!(raw instanceof Map<?, ?> map) || map.isEmpty()) {
             return Map.of();
         }

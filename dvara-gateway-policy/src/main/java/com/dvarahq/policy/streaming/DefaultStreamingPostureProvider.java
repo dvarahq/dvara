@@ -59,8 +59,7 @@ public final class DefaultStreamingPostureProvider implements StreamingPosturePr
     public StreamingPosture resolve(String workspaceId, List<String> groundingSources) {
         Workspace workspace = workspaceId == null || workspaces == null
                 ? null : workspaces.findById(workspaceId).orElse(null);
-        Map<String, Object> metadata = workspace == null || workspace.getMetadata() == null
-                ? Map.of() : workspace.getMetadata();
+        Map<String, Object> metadata = workspace == null ? Map.of() : workspace.governanceSettings();
         return StreamingPostureResolver.resolve(defaults,
                 workspaceId == null ? null : piiSettings.resolve(workspaceId),
                 guardrailSettings == null || workspaceId == null
