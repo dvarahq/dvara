@@ -424,8 +424,9 @@ DVARA_AUDIT_FILE_PATH=/var/lib/dvara/audit.log
 DVARA_AUDIT_HMAC_SECRET=$(openssl rand -base64 32)
 ```
 
-Without the path, events are dropped. With the path but no secret of your own, the gateway refuses
-to start rather than sign with the shipped placeholder. The chain is tamper-evident, not
+Without the path, events are dropped. With the path, the gateway refuses to start unless the secret
+is at least 32 characters and is not a placeholder: not the shipped default, and not a value from
+DVARA's own examples, such as `dev-only-change-me`. The chain is tamper-evident, not
 tamper-proof: it detects an edited, removed or reordered record, and anyone holding the secret can
 rewrite it.
 

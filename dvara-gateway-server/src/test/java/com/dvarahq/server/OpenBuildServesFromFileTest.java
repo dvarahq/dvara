@@ -183,7 +183,7 @@ class OpenBuildServesFromFileTest {
                         + "m.content.collect { it.toString() }.join(' ') }.join(' | ')");
     }
 
-    static final String AUDIT_SECRET = "open-build-test-audit-secret";
+    static final String AUDIT_SECRET = "open-build-test-audit-secret-for-the-file-chain";
 
     /** Carried in the prompt so only the redaction test reaches the echoing matcher. */
     static final String ECHO_MARKER = "gate-echo";

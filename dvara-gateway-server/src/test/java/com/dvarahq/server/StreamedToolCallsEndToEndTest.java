@@ -116,7 +116,7 @@ class StreamedToolCallsEndToEndTest {
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
         registry.add("dvara.audit.file.path", () -> configDir.resolve("audit.log").toString());
-        registry.add("dvara.audit.hmac-secret", () -> "e2e-tool-calls-audit-secret");
+        registry.add("dvara.audit.hmac-secret", () -> "e2e-tool-calls-audit-secret-for-the-file-chain");
     }
 
     /** Streams what an upstream decoder produces for one call whose arguments arrive in two slices. */

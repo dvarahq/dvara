@@ -76,13 +76,16 @@ public class GatewayAutoConfiguration {
     }
 
     /**
-     * Refuse the shipped default secret, rather than sign a chain with a key everyone has.
+     * Refuse a secret that is not a secret, rather than sign a chain with a key others can know.
      *
-     * <p>A chain signed with {@code default-dev-secret-change-in-production} is not tamper-evident
-     * against anyone who has read the repository — which is everyone, once it is public. Writing it
-     * anyway would produce a file that reads as evidence and is not, and this is the one moment an
-     * operator can be told. Failing at startup is recoverable in seconds; discovering it when the
-     * chain is needed is not.
+     * <p>A chain signed with a value published in a repository is not tamper-evident against anyone
+     * who has read it. That covers the built-in default and the placeholders DVARA's own Compose files
+     * and examples carry, which are copied unchanged often enough to matter. A short value is refused
+     * too: a word someone typed is not a key. Writing the chain anyway would produce a file that reads
+     * as evidence and is not, and this is the one moment an operator can be told. Failing at startup
+     * is recoverable in seconds; discovering it when the chain is needed is not.
+     *
+     * <p>The messages name the variable and how to generate a value, and never repeat the value.
      */
     private static String requireRealSecret(String secret, String path) {
         if (secret == null || secret.isBlank()) {
@@ -91,18 +94,40 @@ public class GatewayAutoConfiguration {
                             + "configured. The chain would be unsigned. Set DVARA_AUDIT_HMAC_SECRET "
                             + "(openssl rand -base64 32), or unset the path to disable audit writing.");
         }
-        if (DEV_AUDIT_SECRET.equals(secret)) {
+        String trimmed = secret.trim();
+        if (PUBLISHED_AUDIT_SECRETS.contains(trimmed)) {
             throw new IllegalStateException(
-                    "dvara.audit.file.path is set to " + path + " but dvara.audit.hmac-secret is "
-                            + "still the shipped development default. Everyone has that value, so "
-                            + "the chain it signs is not tamper-evident against anyone. Set "
-                            + "DVARA_AUDIT_HMAC_SECRET to a real secret (openssl rand -base64 32).");
+                    "dvara.audit.file.path is set to " + path + " but DVARA_AUDIT_HMAC_SECRET is "
+                            + "a placeholder published in DVARA's own configuration or examples. "
+                            + "Anyone can have that value, so the chain it signs is not "
+                            + "tamper-evident against anyone. Set it to a real secret "
+                            + "(openssl rand -base64 32).");
+        }
+        if (trimmed.length() < MIN_AUDIT_SECRET_LENGTH) {
+            throw new IllegalStateException(
+                    "dvara.audit.file.path is set to " + path + " but DVARA_AUDIT_HMAC_SECRET is "
+                            + trimmed.length() + " characters long, and at least "
+                            + MIN_AUDIT_SECRET_LENGTH + " are required. Generate one with "
+                            + "openssl rand -base64 32.");
         }
         return secret;
     }
 
-    /** The value application.yml ships, which must never sign a chain anyone relies on. */
-    private static final String DEV_AUDIT_SECRET = "default-dev-secret-change-in-production";
+    /**
+     * Values published for this secret, which must never sign a chain anyone relies on: the one
+     * application.yml ships, and the placeholders DVARA's Compose files and examples carry.
+     */
+    private static final java.util.Set<String> PUBLISHED_AUDIT_SECRETS = java.util.Set.of(
+            "default-dev-secret-change-in-production",
+            "dev-only-change-me",
+            "local-only-change-me",
+            "replace-with-openssl-rand-output");
+
+    /**
+     * The shortest secret accepted. openssl rand -base64 32 gives 44 characters and
+     * openssl rand -hex 16 gives 32.
+     */
+    private static final int MIN_AUDIT_SECRET_LENGTH = 32;
 
     /**
      * Drops events, loudly once and quietly thereafter.

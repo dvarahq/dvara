@@ -38,6 +38,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class FileAuditWiringTest {
 
+    /** A value the writer accepts: 48 characters of base64. */
+    private static final String REAL_SECRET = "c2VjcmV0LWZvci10ZXN0cy1vbmx5LW5vdC1hLXJlYWwta2V5";
+
+
     @TempDir
     Path dir;
 
@@ -61,13 +65,13 @@ class FileAuditWiringTest {
         Path file = dir.resolve("audit.log");
         runner.withPropertyValues(
                         "dvara.audit.file.path=" + file,
-                        "dvara.audit.hmac-secret=a-real-secret")
+                        "dvara.audit.hmac-secret=" + REAL_SECRET)
                 .run(context -> {
                     assertThat(context.getBean(AuditWriter.class)).isInstanceOf(FileAuditWriter.class);
                     context.getBean(AuditWriter.class).write(AuditEvent.of("POLICY_DENIED", Map.of("rule", "r1")));
 
                     assertThat(Files.readAllLines(file)).hasSize(1);
-                    assertThat(FileAuditChainVerifier.verify(file, "a-real-secret").valid()).isTrue();
+                    assertThat(FileAuditChainVerifier.verify(file, REAL_SECRET).valid()).isTrue();
                 });
     }
 
@@ -83,7 +87,7 @@ class FileAuditWiringTest {
         runner.withBean("theirs", AuditWriter.class, () -> theirs)
                 .withPropertyValues(
                         "dvara.audit.file.path=" + dir.resolve("unused.log"),
-                        "dvara.audit.hmac-secret=a-real-secret")
+                        "dvara.audit.hmac-secret=" + REAL_SECRET)
                 .run(context -> {
                     assertThat(context.getBeansOfType(AuditWriter.class))
                             .as("the default stands down; even a configured file path does not bring it back")
@@ -96,7 +100,7 @@ class FileAuditWiringTest {
     void thereIsExactlyOneAuditWriterBean() {
         runner.withPropertyValues(
                         "dvara.audit.file.path=" + dir.resolve("one.log"),
-                        "dvara.audit.hmac-secret=a-real-secret")
+                        "dvara.audit.hmac-secret=" + REAL_SECRET)
                 .run(context -> assertThat(context.getBeansOfType(AuditWriter.class))
                         .as("exactly one AuditWriter bean, so a @Primary writer from another module "
                                 + "cannot collide with it")
@@ -104,17 +108,45 @@ class FileAuditWiringTest {
     }
 
     /**
-     * The shipped development secret must not sign a chain: everyone has that value, so a chain
-     * signed with it is not tamper-evident against anybody.
+     * A value published for this secret must not sign a chain: anyone can have it, so a chain signed
+     * with it is not tamper-evident against anybody. That is the built-in default and every
+     * placeholder DVARA's own configuration and examples carry.
      */
-    @Test
-    void theShippedDevelopmentSecretIsRefused() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "default-dev-secret-change-in-production", "dev-only-change-me", "local-only-change-me",
+            "replace-with-openssl-rand-output"})
+    void aPublishedSecretIsRefused(String published) {
         runner.withPropertyValues(
                         "dvara.audit.file.path=" + dir.resolve("insecure.log"),
-                        "dvara.audit.hmac-secret=default-dev-secret-change-in-production")
+                        "dvara.audit.hmac-secret=" + published)
                 .run(context -> assertThat(context).hasFailed()
                         .getFailure()
-                        .hasMessageContaining("shipped development default"));
+                        .rootCause()
+                        .hasMessageContaining("placeholder published")
+                        .hasMessageContaining("DVARA_AUDIT_HMAC_SECRET")
+                        .hasMessageNotContaining(published));
+    }
+
+    @Test
+    void aSecretShorterThan32CharactersIsRefused() {
+        String thirtyOne = "a".repeat(31);
+        runner.withPropertyValues(
+                        "dvara.audit.file.path=" + dir.resolve("short.log"),
+                        "dvara.audit.hmac-secret=" + thirtyOne)
+                .run(context -> assertThat(context).hasFailed()
+                        .getFailure()
+                        .rootCause()
+                        .hasMessageContaining("31 characters long, and at least 32 are required")
+                        .hasMessageNotContaining(thirtyOne));
+    }
+
+    @Test
+    void aSecretOfExactly32CharactersIsAccepted() {
+        runner.withPropertyValues(
+                        "dvara.audit.file.path=" + dir.resolve("exact.log"),
+                        "dvara.audit.hmac-secret=" + "b".repeat(32))
+                .run(context -> assertThat(context.getBean(AuditWriter.class)).isInstanceOf(FileAuditWriter.class));
     }
 
     @Test
@@ -149,7 +181,7 @@ class FileAuditWiringTest {
                         new SystemEnvironmentPropertySource(
                                 StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
                                 Map.of("DVARA_AUDIT_FILE_PATH", file.toString(),
-                                        "DVARA_AUDIT_HMAC_SECRET", "a-real-secret"))))
+                                        "DVARA_AUDIT_HMAC_SECRET", REAL_SECRET))))
                 .run(context -> {
                     assertThat(context.getBean(AuditWriter.class))
                             .as("DVARA_AUDIT_FILE_PATH must reach dvara.audit.file.path, or the "
@@ -158,7 +190,7 @@ class FileAuditWiringTest {
 
                     context.getBean(AuditWriter.class).write(AuditEvent.of("POLICY_DENIED", Map.of()));
                     assertThat(Files.readAllLines(file)).hasSize(1);
-                    assertThat(FileAuditChainVerifier.verify(file, "a-real-secret").valid()).isTrue();
+                    assertThat(FileAuditChainVerifier.verify(file, REAL_SECRET).valid()).isTrue();
                 });
     }
 
@@ -174,7 +206,7 @@ class FileAuditWiringTest {
                 .withInitializer(context -> context.getEnvironment().getPropertySources().addFirst(
                         new SystemEnvironmentPropertySource(
                                 StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
-                                Map.of("DVARA_AUDIT_HMAC_SECRET", "a-real-secret"))))
+                                Map.of("DVARA_AUDIT_HMAC_SECRET", REAL_SECRET))))
                 .run(context -> assertThat(context.getBean(AuditWriter.class))
                         .isNotInstanceOf(FileAuditWriter.class));
     }
