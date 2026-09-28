@@ -108,7 +108,9 @@ class ChatFilterTest {
             var p = e.payload();
             return "POLICY_DENIED".equals(e.eventType())
                     && "key-id-1".equals(p.get("api_key"))   // the key id, whole — it is not a secret
-                    && p.containsKey("user_id");
+                    && p.containsKey("user_id")
+                    && "gpt-4o".equals(p.get("model"))       // #29: what was refused, not only why
+                    && Integer.valueOf(403).equals(p.get("status"));
         }));
     }
 
