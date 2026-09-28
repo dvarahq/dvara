@@ -138,6 +138,19 @@ class ResponsesMappingTest {
     }
 
     @Test
+    void theEndUserIdMapsFromUserOrSafetyIdentifier() {
+        // #54: dropped on /v1/responses, so it reached neither the provider nor cost attribution.
+        assertThat(controller.toInternal(ResponseRequest.builder().model("gpt-4o").input("hi")
+                .user("customer-42").build()).getUser()).isEqualTo("customer-42");
+        assertThat(controller.toInternal(ResponseRequest.builder().model("gpt-4o").input("hi")
+                .safetyIdentifier("sid-7").build()).getUser()).isEqualTo("sid-7");
+        assertThat(controller.toInternal(ResponseRequest.builder().model("gpt-4o").input("hi")
+                .user("customer-42").safetyIdentifier("sid-7").build()).getUser()).isEqualTo("sid-7");
+        assertThat(controller.toInternal(ResponseRequest.builder().model("gpt-4o").input("hi")
+                .user("  ").build()).getUser()).isNull();
+    }
+
+    @Test
     void scalarParams_mapToChatRequest() {
         ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("gpt-4o")
                 .input("hi").maxOutputTokens(256).temperature(0.7).topP(0.9).stream(true).build());

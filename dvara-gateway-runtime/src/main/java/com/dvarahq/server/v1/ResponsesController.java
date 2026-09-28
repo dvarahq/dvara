@@ -424,7 +424,15 @@ public class ResponsesController {
                 .topP(r.getTopP())
                 .responseFormat(parseTextFormat(r.getText()))
                 .metadata(r.getMetadata())
+                .user(endUser(r))
                 .build();
+    }
+
+    /** The end-user id: {@code safety_identifier} if sent, else {@code user}; blank is none (#54). */
+    private static String endUser(ResponseRequest r) {
+        String id = r.getSafetyIdentifier() != null && !r.getSafetyIdentifier().isBlank()
+                ? r.getSafetyIdentifier() : r.getUser();
+        return id == null || id.isBlank() ? null : id;
     }
 
     private List<MultimodalMessage> parseInput(Object input) {
