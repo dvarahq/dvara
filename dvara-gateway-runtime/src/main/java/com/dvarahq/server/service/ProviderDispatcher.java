@@ -334,7 +334,7 @@ public class ProviderDispatcher {
             // the error code from the original semantic.
             selected = routingStrategy.route(request, capable, ctx);
         } else {
-            selected = routingStrategy.route(request, healthy, ctx);
+            selected = routeExplainingAbsence(request, healthy, capable, ctx);
         }
 
         // Expose the matched route id so post-dispatch filters can scope on
@@ -449,6 +449,37 @@ public class ProviderDispatcher {
     }
 
     /** What the refusal names: function calling, or function calling on a stream. */
+    /**
+     * The strategy's choice, with a truthful reason when there is none. A strategy says NO_PROVIDER, "no
+     * provider configured for model ... set the key", when a provider that serves the model is configured
+     * and was only left out because it cannot take something the request needs, such as tools. The
+     * caller was then told to set a key that was already set.
+     */
+    private LlmProvider routeExplainingAbsence(ChatRequest request, List<LlmProvider> candidates,
+                                               List<LlmProvider> capable, RequestContext ctx) {
+        try {
+            return routingStrategy.route(request, candidates, ctx);
+        } catch (GatewayException e) {
+            if (!"NO_PROVIDER".equals(e.getCode())) {
+                throw e;
+            }
+            List<String> servesModel = providers.stream()
+                    .filter(p -> !capable.contains(p))
+                    .filter(p -> p.supports(request))
+                    .map(LlmProvider::name)
+                    .toList();
+            if (servesModel.isEmpty()) {
+                throw e;
+            }
+            String needs = hasToolsRequirement(request) ? toolsRequirementName(request)
+                    : hasResponseFormatRequirement(request)
+                            ? "response_format: " + responseFormatTypeName(request.getResponseFormat())
+                            : "everything this request asks for";
+            throw new GatewayException("NO_CAPABLE_PROVIDER", "Provider " + String.join(", ", servesModel)
+                    + " serves model " + request.getModel() + " but does not support " + needs + ".");
+        }
+    }
+
     private static String toolsRequirementName(ChatRequest request) {
         return request.isStream() ? "tool calls on a stream (streamed function calling)"
                 : "tool calls (function calling)";

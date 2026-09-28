@@ -226,6 +226,49 @@ class ResilientLlmProviderTest {
                 .hasMessageContaining("too many recent requests failed");
     }
 
+    /** The library's text could name an internal upstream address; the caller gets the gateway's sentence. */
+    @Test
+    void anUnreachableUpstreamIsDescribedWithoutItsAddress() {
+        when(delegate.chat(any())).thenThrow(new org.springframework.web.client.ResourceAccessException(
+                "I/O error on POST request for \"http://internal-host:9400/v1/chat/completions\": Connection refused"));
+        ResilientLlmProvider resilient = new ResilientLlmProvider(delegate, circuitBreaker,
+                Retry.of("none", RetryConfig.custom().maxAttempts(1).build()), chatTimeLimiter, streamingTimeLimiter);
+
+        assertThatThrownBy(() -> resilient.chat(chatRequest()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessage("Provider test-provider could not be reached")
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("PROVIDER_ERROR"));
+    }
+
+    /** A program fault in an adapter is not shown to the caller as a Java message. */
+    @Test
+    void anUnexpectedFaultIsNotShownAsAJavaMessage() {
+        when(delegate.chat(any())).thenThrow(new NullPointerException(
+                "Cannot invoke \"java.util.List.stream()\" because the return value is null"));
+        ResilientLlmProvider resilient = new ResilientLlmProvider(delegate, circuitBreaker,
+                Retry.of("none", RetryConfig.custom().maxAttempts(1).build()), chatTimeLimiter, streamingTimeLimiter);
+
+        assertThatThrownBy(() -> resilient.chat(chatRequest()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessage("Provider test-provider call failed unexpectedly");
+    }
+
+    /** A retry is counted when it is sent, once per retried attempt. */
+    @Test
+    void aRetryIsCountedWhenItIsSent() {
+        ChatResponse ok = ChatResponse.builder().id("ok").build();
+        when(delegate.chat(any()))
+                .thenThrow(new GatewayException("PROVIDER_ERROR", "fail"))
+                .thenThrow(new GatewayException("PROVIDER_ERROR", "fail"))
+                .thenReturn(ok);
+        java.util.concurrent.atomic.AtomicInteger sent = new java.util.concurrent.atomic.AtomicInteger();
+        ResilientLlmProvider resilient = new ResilientLlmProvider(delegate, circuitBreaker, retry,
+                chatTimeLimiter, streamingTimeLimiter, sent::incrementAndGet);
+
+        assertThat(resilient.chat(chatRequest()).getId()).isEqualTo("ok");
+        assertThat(sent.get()).as("two retries reached the provider").isEqualTo(2);
+    }
+
     @Test
     void chat_circuitOpenExceptionIncludesProviderName() {
         when(delegate.chat(any())).thenThrow(new GatewayException("PROVIDER_ERROR", "fail"));
@@ -417,7 +460,8 @@ class ResilientLlmProviderTest {
         assertThatThrownBy(() -> resilient.chat(chatRequest()))
                 .isInstanceOf(GatewayException.class)
                 .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("PROVIDER_ERROR"))
-                .hasMessageContaining("network error");
+                // The gateway's sentence; the exception's own text is logged, not returned.
+                .hasMessage("Provider test-provider call failed unexpectedly");
     }
 
     @Test

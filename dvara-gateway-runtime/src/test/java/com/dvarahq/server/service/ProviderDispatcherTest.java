@@ -813,6 +813,26 @@ class ProviderDispatcherTest {
         verify(incapable, never()).chat(any());
     }
 
+    /**
+     * The model's provider is configured but cannot take what the request needs, and another provider can
+     * but does not serve the model. The strategy then said "no provider configured ... set the key", and
+     * the key was set. It now names the provider and what it lacks.
+     */
+    @Test
+    void aConfiguredProviderThatLacksAFeatureIsNotCalledUnconfigured() {
+        LlmProvider servesModel = mockProviderWithCaps("deepseek", true, noCaps());
+        LlmProvider hasFeature = mockProviderWithCaps("openai", false, fullCaps());
+
+        ProviderDispatcher dispatcher = dispatcher(List.of(servesModel, hasFeature));
+
+        assertThatThrownBy(() -> dispatcher.chat(
+                chatRequestWithFormat("deepseek-chat", new ResponseFormat.JsonSchema("test", java.util.Map.of(), false))))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(ex -> assertThat(((GatewayException) ex).getCode()).isEqualTo("NO_CAPABLE_PROVIDER"))
+                .hasMessageContaining("deepseek").hasMessageContaining("json_schema")
+                .hasMessageNotContaining("configured");
+    }
+
     @Test
     void chat_jsonSchema_noCapableProvider_throwsNoCapableProvider() {
         LlmProvider incapable = mockProviderWithCaps("ollama", true, noCaps());

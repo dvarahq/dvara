@@ -318,6 +318,17 @@ class GlobalExceptionHandlerTest {
     // Code lowercasing
     // -------------------------------------------------------------------------
 
+    /** A provider's own 429 is a rate limit the caller can wait out, not a bad gateway. */
+    @Test
+    void anUpstream429IsReportedAsARateLimit() {
+        HttpServletResponse response = mockResponse("trace-429");
+        var result = handler.handleGatewayException(GatewayException.upstream(429, "OpenAI API error 429"),
+                mockRequest(), response);
+
+        assertThat(result.getStatusCode().value()).isEqualTo(429);
+        assertThat(result.getBody().getError().getType()).isEqualTo("provider_rate_limited");
+    }
+
     @Test
     void handleGatewayException_lowercasesCode() {
         HttpServletResponse response = mockResponse("trace-8");

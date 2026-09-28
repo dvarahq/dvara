@@ -250,6 +250,11 @@ public class GlobalExceptionHandler {
         } else if ("PRIORITY_THROTTLED".equals(code)) {
             status = HttpStatus.TOO_MANY_REQUESTS;
             type = "priority_throttle_error";
+        } else if ("PROVIDER_ERROR".equals(code) && Integer.valueOf(429).equals(ex.getUpstreamStatus())) {
+            // The provider itself answered 429. That is a rate limit the caller can wait out, not a bad
+            // gateway, so it is reported as one: a 502 told clients to treat it as a failure.
+            status = HttpStatus.TOO_MANY_REQUESTS;
+            type = "provider_rate_limited";
         } else if ("PROVIDER_RATE_LIMITED".equals(code)) {
             // the upstream credential's quota is near exhaustion and no fallback provider covered
             // the call. Surface a 429 with the provider's advertised Retry-After (added on the builder).

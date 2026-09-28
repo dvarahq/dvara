@@ -169,17 +169,16 @@ public class ResilienceAutoConfiguration {
         // Counted here rather than through GatewayMetrics, which is in the runtime module this
         // module cannot see, so gateway_retries_total is emitted wherever the retry runs.
         retry.getEventPublisher()
-                .onRetry(event -> {
-                    log.warn("Retry attempt #{} for provider [{}]: {}",
-                            event.getNumberOfRetryAttempts(), name, event.getLastThrowable().getMessage());
-                    if (meterRegistry != null) {
-                        io.micrometer.core.instrument.Counter.builder("gateway_retries_total")
-                                .description("Total provider call retries")
-                                .tag("provider", name)
-                                .register(meterRegistry)
-                                .increment();
-                    }
-                });
+                .onRetry(event -> log.warn("Retry attempt #{} for provider [{}]: {}",
+                        event.getNumberOfRetryAttempts(), name, event.getLastThrowable().getMessage()));
+        // gateway_retries_total counts a retry when it is sent (see ResilientLlmProvider), not when it
+        // is scheduled: a timeout during the backoff cancels a retry that never reaches the provider.
+        Runnable retrySent = meterRegistry == null ? null
+                : () -> io.micrometer.core.instrument.Counter.builder("gateway_retries_total")
+                        .description("Total provider call retries")
+                        .tag("provider", name)
+                        .register(meterRegistry)
+                        .increment();
 
         // Time Limiters
         TimeLimiter chatTimeLimiter = TimeLimiter.of("provider-" + name + "-chat",
@@ -198,7 +197,8 @@ public class ResilienceAutoConfiguration {
                 name, retryConfig.getMaxAttempts(), cbConfig.getFailureRateThreshold(),
                 timeoutConfig.getChatTimeoutMs());
 
-        return new ResilientLlmProvider(provider, circuitBreaker, retry, chatTimeLimiter, streamingTimeLimiter);
+        return new ResilientLlmProvider(provider, circuitBreaker, retry, chatTimeLimiter, streamingTimeLimiter,
+                retrySent);
     }
 
     /**

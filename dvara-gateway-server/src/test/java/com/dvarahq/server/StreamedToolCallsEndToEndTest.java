@@ -219,9 +219,9 @@ class StreamedToolCallsEndToEndTest {
         // The mock provider declares no tool-call support, so with tools on a stream the request is
         // refused rather than served with the call dropped. The stream is opened on the emitter's
         // thread, so the refusal arrives on the async dispatch before anything is written, as the
-        // same 400 a non-streaming call gets. The code is no_provider rather than no_capable_provider:
-        // the capability filter leaves the test provider standing, and it is the route that then
-        // finds nobody for mock/*.
+        // same 400 a non-streaming call gets. The code is no_capable_provider: the mock provider
+        // serves mock/* and is configured, it only cannot stream tool calls, and the error says so
+        // rather than claiming no provider is configured.
         MvcResult started = mockMvc.perform(post("/v1/chat/completions")
                         .header("Authorization", "Bearer " + LOG_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -230,7 +230,8 @@ class StreamedToolCallsEndToEndTest {
                 .andReturn();
         String body = mockMvc.perform(asyncDispatch(started))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("no_provider"))
+                .andExpect(jsonPath("$.error.code").value("no_capable_provider"))
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("does not support")))
                 .andReturn().getResponse().getContentAsString();
         assertThat(body).doesNotContain("chat.completion.chunk");
     }
