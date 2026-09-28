@@ -573,6 +573,13 @@ public class ProviderDispatcher {
         Optional.ofNullable(routingCtx.getMatchedRoute()).ifPresent(routeConfig -> {
             CanaryConfig canary = routeConfig.getCanaryConfig();
             if (canary == null) return;
+            // A scoped canary compares traffic from its own workspace only. Every other workspace is
+            // sent to the baseline and is not part of the test, so counting it skewed the baseline arm.
+            String scope = canary.getWorkspaceScope();
+            if (scope != null && !scope.isBlank()) {
+                Object ws = request.getMetadata() != null ? request.getMetadata().get("workspace_id") : null;
+                if (ws == null || !scope.equals(ws.toString())) return;
+            }
 
             String variant;
             if (providerName.equals(canary.getBaselineProvider())) {
