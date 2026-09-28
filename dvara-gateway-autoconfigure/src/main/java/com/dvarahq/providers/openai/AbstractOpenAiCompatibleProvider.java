@@ -15,6 +15,8 @@
  */
 package com.dvarahq.providers.openai;
 
+import com.dvarahq.providers.support.ProviderErrors;
+
 import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
@@ -123,6 +125,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal(upstreamLabel(), res);
                     throw GatewayException.upstream(res.getStatusCode().value(),
                             upstreamLabel() + " API error " + res.getStatusCode().value()
                                 + GatewayException.describeHttpStatus(res.getStatusCode().value()));
@@ -182,6 +185,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .body(parts.build())
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal(upstreamLabel(), res);
                     throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " file upload error "
                             + res.getStatusCode().value()
                             + GatewayException.describeHttpStatus(res.getStatusCode().value()));
@@ -197,6 +201,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .body(requestJson)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal(upstreamLabel(), res);
                     throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " batch submit error "
                             + res.getStatusCode().value()
                             + GatewayException.describeHttpStatus(res.getStatusCode().value()));
@@ -210,6 +215,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .uri(batchUri(), batchId)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal(upstreamLabel(), res);
                     throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " batch fetch error "
                             + res.getStatusCode().value()
                             + GatewayException.describeHttpStatus(res.getStatusCode().value()));
@@ -223,6 +229,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .uri(batchCancelUri(), batchId)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal(upstreamLabel(), res);
                     throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " batch cancel error "
                             + res.getStatusCode().value()
                             + GatewayException.describeHttpStatus(res.getStatusCode().value()));
@@ -236,6 +243,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .uri(fileContentUri(), fileId)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal(upstreamLabel(), res);
                     throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " file download error "
                             + res.getStatusCode().value()
                             + GatewayException.describeHttpStatus(res.getStatusCode().value()));
