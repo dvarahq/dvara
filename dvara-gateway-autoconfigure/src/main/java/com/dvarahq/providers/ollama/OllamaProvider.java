@@ -84,8 +84,10 @@ public class OllamaProvider extends AbstractLlmProvider {
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
                     ProviderErrors.logRefusal("Ollama", res);
+                    // Named with the model: "does not support tools" is a property of the model (#30 A1).
                     throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Ollama error " + res.getStatusCode().value()
+                            "Ollama error " + res.getStatusCode().value() + " for model "
+                                + stripPrefix(request.getModel())
                                 + GatewayException.describeHttpStatus(res.getStatusCode().value()));
                 })
                 .body(OllamaResponse.class);
@@ -136,7 +138,7 @@ public class OllamaProvider extends AbstractLlmProvider {
     private Map<String, Object> buildChatBody(ChatRequest request) {
         rejectUnsupportedContentBlocks(request);
         List<Map<String, Object>> messages = request.getMessages().stream()
-                .<Map<String, Object>>map(m -> Map.of("role", m.getRole(), "content", extractText(m)))
+                .map(this::serializeMessage)
                 .collect(Collectors.toList());
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -147,7 +149,55 @@ public class OllamaProvider extends AbstractLlmProvider {
         if (request.getTopP()        != null) body.put("top_p",       request.getTopP());
         if (request.getStop() != null) body.put("stop", request.getStop());
         if (request.getSeed() != null) body.put("seed", request.getSeed());
+        applyTools(body, request);
         return body;
+    }
+
+    /**
+     * One message in the OpenAI shape Ollama's {@code /v1} endpoint reads, with the tool metadata of an
+     * agent loop (#30): {@code tool_calls} on an assistant message, {@code tool_call_id} on a tool result.
+     */
+    private Map<String, Object> serializeMessage(MultimodalMessage m) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("role", m.getRole());
+        out.put("content", extractText(m));
+        if (m.getToolCalls() != null && !m.getToolCalls().isEmpty()) {
+            out.put("tool_calls", m.getToolCalls().stream()
+                    .map(tc -> Map.of(
+                            "id", tc.getId() == null ? "" : tc.getId(),
+                            "type", "function",
+                            "function", Map.of(
+                                    "name", tc.getName() == null ? "" : tc.getName(),
+                                    "arguments", tc.getArguments() == null ? "" : tc.getArguments())))
+                    .collect(Collectors.toList()));
+        }
+        if (m.getToolCallId() != null) {
+            out.put("tool_call_id", m.getToolCallId());
+        }
+        if (m.getName() != null) {
+            out.put("name", m.getName());
+        }
+        return out;
+    }
+
+    /**
+     * Tool definitions and {@code tool_choice}, passed through as given (#30). The gateway never drops
+     * them: a model without tool support makes Ollama refuse the request, and that refusal is returned.
+     */
+    private void applyTools(Map<String, Object> body, ChatRequest request) {
+        if (request.getTools() == null || request.getTools().isEmpty()) return;
+        body.put("tools", request.getTools().stream()
+                .map(t -> {
+                    Map<String, Object> function = new LinkedHashMap<>();
+                    function.put("name", t.getName());
+                    if (t.getDescription() != null) function.put("description", t.getDescription());
+                    if (t.getParameters() != null) function.put("parameters", t.getParameters());
+                    return Map.of("type", "function", "function", function);
+                })
+                .collect(Collectors.toList()));
+        if (request.getToolChoice() != null) {
+            body.put("tool_choice", request.getToolChoice());
+        }
     }
 
     private void rejectUnsupportedContentBlocks(ChatRequest request) {
@@ -160,8 +210,7 @@ public class OllamaProvider extends AbstractLlmProvider {
                             + "provider (OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI) for now.");
                 }
                 // No tool-block branch: a tool call travels on the message's toolCalls, not as a
-                // content block, and the dispatcher keeps a request carrying tools off a provider
-                // whose capabilities declare no tool support, as this one's do.
+                // content block, and serializeMessage carries it (#30).
             }
         }
     }
@@ -187,9 +236,7 @@ public class OllamaProvider extends AbstractLlmProvider {
         List<ChatResponse.Choice> choices = resp.getChoices().stream()
                 .map(c -> ChatResponse.Choice.builder()
                         .index(c.getIndex())
-                        .message(MultimodalMessage.assistant(
-                                c.getMessage() != null && c.getMessage().getContent() != null
-                                        ? c.getMessage().getContent() : ""))
+                        .message(toAssistantMessage(c.getMessage()))
                         .finishReason(c.getFinishReason())
                         .build())
                 .toList();
@@ -211,9 +258,32 @@ public class OllamaProvider extends AbstractLlmProvider {
                 .build();
     }
 
+    /** The model's reply, carrying any tool calls it made (#30) so they reach the agent. */
+    private static MultimodalMessage toAssistantMessage(OllamaResponse.OllamaMessage m) {
+        String text = m != null && m.getContent() != null ? m.getContent() : "";
+        if (m == null || m.getToolCalls() == null || m.getToolCalls().isEmpty()) {
+            return MultimodalMessage.assistant(text);
+        }
+        return MultimodalMessage.builder()
+                .role("assistant")
+                .content(List.of(new ContentBlock.TextBlock(text)))
+                .toolCalls(m.getToolCalls().stream()
+                        .map(tc -> com.dvarahq.core.model.ToolCall.builder()
+                                .id(tc.getId())
+                                .name(tc.getFunction() != null ? tc.getFunction().getName() : null)
+                                .arguments(tc.getFunction() != null ? tc.getFunction().getArguments() : null)
+                                .build())
+                        .toList())
+                .build();
+    }
+
+    /**
+     * Tool calls are supported on the plain path (#30). Streamed tool calls are not declared: that path is
+     * not verified against Ollama end to end (BR-105-3), so the dispatcher keeps refusing it.
+     */
     @Override
     public ProviderCapabilities capabilities() {
-        return new ProviderCapabilities(true, false, false, false, false, 32_000);
+        return new ProviderCapabilities(true, false, true, false, false, 32_000);
     }
 
     @Override
@@ -368,6 +438,20 @@ public class OllamaProvider extends AbstractLlmProvider {
         static class OllamaMessage {
             private String role;
             private String content;
+            @JsonProperty("tool_calls") private List<OllamaToolCall> toolCalls;
+        }
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class OllamaToolCall {
+            private String id;
+            private String type;
+            private OllamaFunction function;
+        }
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class OllamaFunction {
+            private String name;
+            private String arguments;
         }
 
         @Data @JsonIgnoreProperties(ignoreUnknown = true)
