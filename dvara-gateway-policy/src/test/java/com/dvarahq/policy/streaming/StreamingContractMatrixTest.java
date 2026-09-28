@@ -962,12 +962,29 @@ class StreamingContractMatrixTest {
             return new Run(delivered.toString(), chunks, List.copyOf(events));
         }
         int safety = 0;
-        while (guard.hasNext() && safety++ < 10_000) {
-            SseChunk chunk = guard.next();
-            chunks.add(chunk);
-            if (chunk.getDelta() != null) {
-                delivered.append(chunk.getDelta());
+        RuntimeException failure = null;
+        try {
+            while (guard.hasNext() && safety++ < 10_000) {
+                SseChunk chunk = guard.next();
+                chunks.add(chunk);
+                if (chunk.getDelta() != null) {
+                    delivered.append(chunk.getDelta());
+                }
             }
+        } catch (RuntimeException e) {
+            failure = e; // what the controller catches, to end the stream with an error
+        }
+        if (termination.equals("ERROR")) {
+            // A broken upstream ends refused, or with the upstream's own error, never with a finish
+            // the upstream did not send: a normal terminal made half an answer read as a whole one.
+            boolean refused = chunks.stream().anyMatch(c -> "content_filter".equals(c.getFinishReason()));
+            if (!refused) {
+                assertThat(failure).as("a broken stream ends with the upstream's error")
+                        .hasMessageContaining("upstream connection reset");
+                assertThat(chunks).as("no terminal the upstream did not send").noneMatch(SseChunk::isDone);
+            }
+        } else if (failure != null) {
+            throw failure;
         }
         guard.close();
         return new Run(delivered.toString(), chunks, List.copyOf(events));

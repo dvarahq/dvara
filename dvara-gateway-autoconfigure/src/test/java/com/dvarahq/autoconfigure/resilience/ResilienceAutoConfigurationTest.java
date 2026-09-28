@@ -135,6 +135,45 @@ class ResilienceAutoConfigurationTest {
         assertThat(healthRegistry.getHealth("openai")).isEqualTo(ProviderHealthStatus.HEALTHY);
     }
 
+    /**
+     * A provider whose circuit opened must come back once the wait is over, with no call arriving. The
+     * dispatcher sends nothing to an unhealthy provider, so a breaker that waited for a call to move to
+     * half-open kept the provider out until a restart.
+     */
+    @Test
+    void anOpenCircuitMovesToHalfOpenByItselfAfterTheWait() throws Exception {
+        GatewayProperties properties = new GatewayProperties();
+        properties.getResilience().getRetry().setMaxAttempts(1);
+        GatewayProperties.CircuitBreakerConfig cb = properties.getResilience().getCircuitBreaker();
+        cb.setSlidingWindowSize(2);
+        cb.setMinimumNumberOfCalls(2);
+        cb.setWaitDurationInOpenStateMs(200);
+        Resilience4jProviderHealthRegistry healthRegistry = new Resilience4jProviderHealthRegistry();
+        BeanPostProcessor processor = createProcessor(properties, healthRegistry);
+        LlmProvider raw = mockProvider("openai");
+        when(raw.chat(any())).thenThrow(new GatewayException("PROVIDER_ERROR", "upstream down"));
+        LlmProvider wrapped = (LlmProvider) processor.postProcessAfterInitialization(raw, "openAiProvider");
+
+        for (int i = 0; i < 2; i++) {
+            try {
+                wrapped.chat(chatRequest());
+            } catch (GatewayException expected) {
+                // each call fails, and both count against the circuit
+            }
+        }
+        assertThat(healthRegistry.getHealth("openai")).isEqualTo(ProviderHealthStatus.UNHEALTHY);
+
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (healthRegistry.getHealth("openai") == ProviderHealthStatus.UNHEALTHY
+                && System.currentTimeMillis() < deadline) {
+            Thread.sleep(25);
+        }
+        assertThat(healthRegistry.getHealth("openai"))
+                .as("after the wait, with no call made, the provider is offered a trial call again")
+                .isEqualTo(ProviderHealthStatus.DEGRADED);
+        assertThat(healthRegistry.isAvailable("openai")).isTrue();
+    }
+
     @Test
     void beanPostProcessor_wrapsMultipleProviders() {
         Resilience4jProviderHealthRegistry healthRegistry = new Resilience4jProviderHealthRegistry();

@@ -384,6 +384,10 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
     }
 
     private ChatResponse mapChatResponse(OaiChatResponse oai) {
+        if (oai == null || oai.getChoices() == null || oai.getChoices().isEmpty()) {
+            // An empty reply is the upstream's failure. Left alone it became a null-pointer message.
+            throw new GatewayException("PROVIDER_ERROR", upstreamLabel() + " returned an empty response");
+        }
         List<ChatResponse.Choice> choices = oai.getChoices().stream()
                 .map(c -> ChatResponse.Choice.builder()
                         .index(c.getIndex())
