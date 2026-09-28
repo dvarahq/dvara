@@ -33,6 +33,8 @@ import java.util.List;
 public class Message {
 
     @NotBlank(message = "role is required")
+    @jakarta.validation.constraints.Pattern(regexp = "system|user|assistant|tool|developer|function",
+            message = "role must be one of system, user, assistant, tool or developer")
     private String role;
 
     /** String for simple text, List<ContentPart> for multimodal content. */

@@ -310,7 +310,7 @@ class GlobalExceptionHandlerTest {
 
         assertThat(result.getError().getType()).isEqualTo("invalid_request_error");
         assertThat(result.getError().getCode()).isEqualTo("invalid_json");
-        assertThat(result.getError().getMessage()).contains("Invalid or missing request body");
+        assertThat(result.getError().getMessage()).isEqualTo("The request body is missing.");
         assertThat(result.getError().getTraceId()).isEqualTo("trace-7");
     }
 

@@ -81,8 +81,41 @@ public class GlobalExceptionHandler {
     public ErrorResponse handleUnreadable(HttpMessageNotReadableException ex,
                                           HttpServletResponse response) {
         String traceId = response.getHeader(TraceIdFilter.HEADER);
-        return ErrorResponse.of("Invalid or missing request body: " + ex.getMessage(),
-                "invalid_request_error", "invalid_json", traceId);
+        return ErrorResponse.of(describeUnreadable(ex), "invalid_request_error", "invalid_json", traceId);
+    }
+
+    /**
+     * What is wrong with the body, in the caller's terms. The parser's own message names internal Java
+     * types (a list of the gateway's DTO class, a token enum), which say nothing to a caller and show how
+     * the gateway is built. The field is named by its path in the JSON the caller sent.
+     */
+    static String describeUnreadable(HttpMessageNotReadableException ex) {
+        for (Throwable t = ex.getCause(); t != null; t = t.getCause()) {
+            if (t instanceof tools.jackson.core.exc.StreamReadException) {
+                return "The request body is not valid JSON.";
+            }
+            if (t instanceof tools.jackson.core.JacksonException je) {
+                String field = jsonPath(je.getPath());
+                return field.isEmpty()
+                        ? "The request body could not be read: a value has the wrong type."
+                        : "The field '" + field + "' has the wrong type or format.";
+            }
+        }
+        return ex.getCause() == null
+                ? "The request body is missing."
+                : "The request body could not be read.";
+    }
+
+    private static String jsonPath(java.util.List<tools.jackson.core.JacksonException.Reference> path) {
+        StringBuilder b = new StringBuilder();
+        for (tools.jackson.core.JacksonException.Reference ref : path) {
+            if (ref.getPropertyName() != null) {
+                b.append(b.isEmpty() ? "" : ".").append(ref.getPropertyName());
+            } else if (ref.getIndex() >= 0) {
+                b.append('[').append(ref.getIndex()).append(']');
+            }
+        }
+        return b.toString();
     }
 
     /**
