@@ -51,6 +51,14 @@ public class ChatRequest {
      * seed parameter refuses the request rather than ignoring it. Null when the client set none.
      */
     private Long seed;
+
+    /**
+     * The caller's end-user id (OpenAI's {@code user}), relayed to providers that take one: OpenAI's
+     * {@code user}, Anthropic's {@code metadata.user_id}. It changes nothing about the answer, so a
+     * provider with no such field ignores it. The paid side records it on the cost row, so cost can be
+     * attributed to an end user. Null when the client set none.
+     */
+    private String user;
     private ResponseFormat responseFormat;
     private Map<String, Object> metadata;
 
