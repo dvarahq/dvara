@@ -116,6 +116,16 @@ class PiiPatternRegistryTest {
         assertMatches(PiiEntityType.PERSON_NAME, "Mrs. Jane Doe");
     }
 
+    /** #19: speech-to-text writes a spoken "Ms." as "Miss"; the name is protected either way. */
+    @Test
+    void personName_matchesMissAndMx() {
+        assertMatches(PiiEntityType.PERSON_NAME, "Miss Delgado");
+        assertMatches(PiiEntityType.PERSON_NAME, "Miss Maria Delgado");
+        assertMatches(PiiEntityType.PERSON_NAME, "Mx. Rivera");
+        assertMatches(PiiEntityType.PERSON_NAME, "Mx Rivera");
+        assertNoMatch(PiiEntityType.PERSON_NAME, "I will miss the bus");
+    }
+
     @Test
     void mergeWithCustom_addsCustomPatterns() {
         var merged = registry.mergeWithCustom(Map.of("custom_id", "CUST-\\d{6}"));
