@@ -397,6 +397,26 @@ class AnthropicProviderTest {
     }
 
     @Test
+    void chat_imageUrl_isForwardedAsAnthropicUrlSource() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(content().string(containsString("\"type\":\"url\"")))
+              .andExpect(content().string(containsString("\"url\":\"https://example.com/sofa.jpg\"")))
+              .andRespond(withSuccess(anthropicSuccessBody("msg-url", "end_turn", "A sofa.", 50, 3),
+                      MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder()
+                .model("claude-haiku-4-5")
+                .messages(List.of(MultimodalMessage.builder().role("user")
+                        .content(List.of(new ContentBlock.TextBlock("What is this?"),
+                                new ContentBlock.ImageBlock(ContentBlock.ImageBlock.URL_MEDIA_TYPE,
+                                        "https://example.com/sofa.jpg")))
+                        .build()))
+                .build());
+
+        server.verify();
+    }
+
+    @Test
     void chat_textOnlyMessage_keepsStringContentForm() {
         // A text-only message uses the string form of the content field, not the typed-blocks form.
         server.expect(requestTo(containsString("/v1/messages")))

@@ -52,16 +52,23 @@ final class ChatInputs {
     /**
      * An image part: a {@code data:} URL becomes base64 data with its media type, any other URL is carried
      * as-is under {@code image/url} for providers that fetch it, and base64-only providers refuse it.
+     * {@code detail} is read from {@code image_url.detail} (Chat Completions) or from the part itself
+     * (the Responses API's {@code input_image}).
      */
     static ContentBlock image(Map<?, ?> part, String partName) {
         Object imageUrl = part.get("image_url");
         String url;
+        Object detail = part.get("detail");
         if (imageUrl instanceof Map<?, ?> m) {
             Object u = m.get("url");
             url = u != null ? u.toString() : null;
+            if (m.get("detail") != null) {
+                detail = m.get("detail");
+            }
         } else {
             url = imageUrl != null ? imageUrl.toString() : null;
         }
+        String d = detail == null || detail.toString().isBlank() ? null : detail.toString();
         if (url == null || url.isBlank()) {
             throw new GatewayException("INVALID_REQUEST", partName + " requires image_url");
         }
@@ -74,9 +81,9 @@ final class ChatInputs {
             String meta = url.substring(5, comma);
             String data = url.substring(comma + 1);
             String mediaType = meta.contains(";") ? meta.substring(0, meta.indexOf(';')) : meta;
-            return new ContentBlock.ImageBlock(mediaType.isBlank() ? "image/jpeg" : mediaType, data);
+            return new ContentBlock.ImageBlock(mediaType.isBlank() ? "image/jpeg" : mediaType, data, d);
         }
-        return new ContentBlock.ImageBlock("image/url", url);
+        return new ContentBlock.ImageBlock(ContentBlock.ImageBlock.URL_MEDIA_TYPE, url, d);
     }
 
     /** OpenAI's {@code stop}: a string or an array of strings. Null when absent. */

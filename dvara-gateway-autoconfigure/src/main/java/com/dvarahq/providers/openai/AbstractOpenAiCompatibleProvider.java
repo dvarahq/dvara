@@ -377,10 +377,23 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 // toString().
                 .map(b -> switch (b) {
                     case ContentBlock.TextBlock tb -> (Object) Map.of("type", "text", "text", tb.text());
-                    case ContentBlock.ImageBlock ib -> Map.of("type", "image_url",
-                            "image_url", Map.of("url", "data:" + ib.mediaType() + ";base64," + ib.data()));
+                    case ContentBlock.ImageBlock ib -> Map.of("type", "image_url", "image_url", imageUrl(ib));
                 })
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * OpenAI's {@code image_url} object: a URL the caller sent is passed as-is (wrapping it as base64
+     * made OpenAI refuse it with a 400), base64 goes back into a {@code data:} URL, and
+     * {@code detail} travels when the caller set it — {@code low} is a fraction of the tokens.
+     */
+    private static Map<String, Object> imageUrl(ContentBlock.ImageBlock ib) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("url", ib.isUrl() ? ib.data() : "data:" + ib.mediaType() + ";base64," + ib.data());
+        if (ib.detail() != null) {
+            m.put("detail", ib.detail());
+        }
+        return m;
     }
 
     private ChatResponse mapChatResponse(OaiChatResponse oai) {

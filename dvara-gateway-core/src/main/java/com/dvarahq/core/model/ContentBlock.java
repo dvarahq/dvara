@@ -15,6 +15,7 @@
  */
 package com.dvarahq.core.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
@@ -58,7 +59,26 @@ public sealed interface ContentBlock
         @Override public String textContent() { return text; }
     }
 
-    record ImageBlock(String mediaType, String data) implements ContentBlock {
+    /**
+     * An image: base64 {@code data} with its {@code mediaType}, or — when {@code mediaType} is
+     * {@link #URL_MEDIA_TYPE} — a URL in {@code data} for a provider that fetches it.
+     * {@code detail} is OpenAI's {@code low} / {@code high} / {@code auto}, or null when the caller
+     * sent none. It changes what the call costs (a {@code low} image is a fixed, small number of
+     * tokens), so it travels to the provider rather than being dropped.
+     */
+    record ImageBlock(String mediaType, String data, String detail) implements ContentBlock {
+
+        /** The media type an image carried as a URL has, in place of a real one. */
+        public static final String URL_MEDIA_TYPE = "image/url";
+
+        public ImageBlock(String mediaType, String data) {
+            this(mediaType, data, null);
+        }
+
+        /** True when {@code data} is a URL, not base64. Not a property: the cache round-trips this record as JSON. */
+        @JsonIgnore
+        public boolean isUrl() { return URL_MEDIA_TYPE.equals(mediaType); }
+
         @Override public String textContent() { return null; }
     }
 }

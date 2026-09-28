@@ -254,6 +254,8 @@ public class GeminiProvider extends AbstractLlmProvider {
             for (ContentBlock b : msg.getContent()) {
                 parts.add(switch (b) {
                     case ContentBlock.TextBlock tb -> Map.<String, Object>of("text", tb.text());
+                    case ContentBlock.ImageBlock ib when ib.isUrl() -> throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                            "Gemini takes images as base64 data: URLs on this gateway, not https URLs");
                     case ContentBlock.ImageBlock ib -> Map.<String, Object>of(
                             "inlineData", Map.of(
                                     "mimeType", ib.mediaType(),

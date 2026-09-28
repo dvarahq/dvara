@@ -604,4 +604,44 @@ class OpenAiProviderTest {
 
         server.verify();
     }
+    private static final String OK_BODY = """
+            {"id": "c-img", "object": "chat.completion", "created": 1704067200, "model": "gpt-4o-mini",
+             "choices": [{"index": 0, "message": {"role": "assistant", "content": "a sofa"}, "finish_reason": "stop"}],
+             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
+            """;
+
+    private static ChatRequest imageRequest(ContentBlock.ImageBlock image) {
+        return ChatRequest.builder().model("gpt-4o-mini")
+                .messages(List.of(MultimodalMessage.builder().role("user")
+                        .content(List.of(new ContentBlock.TextBlock("What is in the photo?"), image)).build()))
+                .build();
+    }
+
+    @Test
+    void chat_imageUrl_isSentAsTheUrl_notWrappedAsBase64() {
+        // Wrapped as data:image/url;base64,https://… it was refused by OpenAI with a 400.
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.messages[0].content[1].type").value("image_url"))
+              .andExpect(jsonPath("$.messages[0].content[1].image_url.url").value("https://example.com/sofa.jpg"))
+              .andExpect(jsonPath("$.messages[0].content[1].image_url.detail").doesNotExist())
+              .andRespond(withSuccess(OK_BODY, MediaType.APPLICATION_JSON));
+
+        provider.chat(imageRequest(new ContentBlock.ImageBlock(
+                ContentBlock.ImageBlock.URL_MEDIA_TYPE, "https://example.com/sofa.jpg")));
+
+        server.verify();
+    }
+
+    @Test
+    void chat_imageDetail_reachesOpenAi() {
+        // detail: low is a fraction of the tokens of the default; dropping it multiplied the cost.
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.messages[0].content[1].image_url.url").value("data:image/png;base64,iVBORw0KGgo="))
+              .andExpect(jsonPath("$.messages[0].content[1].image_url.detail").value("low"))
+              .andRespond(withSuccess(OK_BODY, MediaType.APPLICATION_JSON));
+
+        provider.chat(imageRequest(new ContentBlock.ImageBlock("image/png", "iVBORw0KGgo=", "low")));
+
+        server.verify();
+    }
 }

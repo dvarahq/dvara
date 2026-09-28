@@ -314,6 +314,8 @@ public class BedrockProvider extends AbstractLlmProvider {
             for (ContentBlock b : msg.getContent()) {
                 blocks.add(switch (b) {
                     case ContentBlock.TextBlock tb -> Map.<String, Object>of("text", tb.text());
+                    case ContentBlock.ImageBlock ib when ib.isUrl() -> throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                            "Bedrock takes images as base64 data: URLs, not https URLs");
                     case ContentBlock.ImageBlock ib -> Map.<String, Object>of(
                             "image", Map.of(
                                     "format", stripImageMimePrefix(ib.mediaType()),

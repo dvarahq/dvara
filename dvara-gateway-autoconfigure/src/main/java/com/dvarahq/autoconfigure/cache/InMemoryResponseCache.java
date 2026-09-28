@@ -236,7 +236,9 @@ public final class InMemoryResponseCache implements ResponseCache {
             } else if (block instanceof ContentBlock.ImageBlock image) {
                 // A hash of the data, not only its type: two pictures with the same question are different
                 // questions, and the same picture sent again with the same question is the same one.
-                append(sb, "image:" + image.mediaType() + ":" + sha256(image.data() == null ? "" : image.data()));
+                // The detail too: the same picture at low and at high detail is a different call.
+                append(sb, "image:" + image.mediaType() + ":" + image.detail() + ":"
+                        + sha256(image.data() == null ? "" : image.data()));
             }
         }
         return sb.toString();
