@@ -15,6 +15,8 @@
  */
 package com.dvarahq.providers.gemini;
 
+import com.dvarahq.providers.support.ProviderErrors;
+
 import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
@@ -92,6 +94,7 @@ public class GeminiProvider extends AbstractLlmProvider {
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal("Gemini", res);
                     throw GatewayException.upstream(res.getStatusCode().value(),
                             "Gemini API error " + res.getStatusCode().value()
                                 + GatewayException.describeHttpStatus(res.getStatusCode().value()));
