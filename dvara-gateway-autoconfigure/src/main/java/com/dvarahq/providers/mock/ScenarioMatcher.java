@@ -19,6 +19,8 @@ import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.model.ChatRequest;
 import groovy.lang.Closure;
 
+import java.util.Map;
+
 /**
  * A file-based matcher loaded from a {@code .groovy} scenario file. The
  * predicate and response are both Groovy closures captured at file load time
@@ -69,9 +71,19 @@ public final class ScenarioMatcher implements MockMatcher {
 
     @Override
     public String respond(ChatRequest request) {
+        return reply(request).text();
+    }
+
+    /**
+     * The closure may return the text, or a map {@code [content: '...', usage: [prompt_tokens: 1200,
+     * completion_tokens: 80]]} to report that usage as given instead of the mock's estimate (#56).
+     * Either token count may be left out and is then estimated.
+     */
+    @Override
+    public MockReply reply(ChatRequest request) {
+        Object result;
         try {
-            Object result = respondClosure.call(request);
-            return result != null ? result.toString() : "";
+            result = respondClosure.call(request);
         } catch (GatewayException e) {
             throw e;
         } catch (Exception e) {
@@ -79,5 +91,24 @@ public final class ScenarioMatcher implements MockMatcher {
                     "Mock scenario '" + name + "' from " + sourceFile + ": response closure failed: "
                             + e.getMessage(), e);
         }
+        if (!(result instanceof Map<?, ?> map)) {
+            return MockReply.text(result != null ? result.toString() : "");
+        }
+        Object content = map.get("content");
+        Map<?, ?> usage = map.get("usage") instanceof Map<?, ?> u ? u : Map.of();
+        return new MockReply(content != null ? content.toString() : "",
+                tokens(usage, "prompt_tokens"), tokens(usage, "completion_tokens"));
+    }
+
+    private Integer tokens(Map<?, ?> usage, String field) {
+        Object v = usage.get(field);
+        if (v == null) {
+            return null;
+        }
+        if (!(v instanceof Number n) || n.intValue() < 0) {
+            throw new GatewayException("PROVIDER_ERROR", "Mock scenario '" + name + "' from " + sourceFile
+                    + ": usage." + field + " must be a non-negative number, got " + v);
+        }
+        return n.intValue();
     }
 }

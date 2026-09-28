@@ -157,10 +157,10 @@ public class MockProvider extends AbstractLlmProvider {
         checkErrorRate();
         simulateLatency(latencyMs);
 
-        String text = resolveResponse(request);
-        text = applyResponseFormat(text, request.getResponseFormat());
-        int promptTokens = estimateTokens(request);
-        int completionTokens = text.length() / 4;
+        MockReply reply = resolveResponse(request);
+        String text = applyResponseFormat(reply.text(), request.getResponseFormat());
+        int promptTokens = promptTokens(reply, request);
+        int completionTokens = completionTokens(reply, text);
 
         return ChatResponse.builder()
                 .id("mock-" + UUID.randomUUID().toString().replace("-", ""))
@@ -185,11 +185,22 @@ public class MockProvider extends AbstractLlmProvider {
         checkErrorRate();
         simulateLatency(latencyMs);
 
-        String text = applyResponseFormat(resolveResponse(request), request.getResponseFormat());
+        MockReply reply = resolveResponse(request);
+        String text = applyResponseFormat(reply.text(), request.getResponseFormat());
         String[] words = text.split("\\s+");
         String id = "mock-" + UUID.randomUUID().toString().replace("-", "");
 
-        return new MockSseIterator(words, id, request.getModel(), streamTokenDelayMs, estimateTokens(request), text.length() / 4);
+        return new MockSseIterator(words, id, request.getModel(), streamTokenDelayMs,
+                promptTokens(reply, request), completionTokens(reply, text));
+    }
+
+    /** A scenario's own usage wins (#56); otherwise the estimate. */
+    private int promptTokens(MockReply reply, ChatRequest request) {
+        return reply.promptTokens() != null ? reply.promptTokens() : estimateTokens(request);
+    }
+
+    private static int completionTokens(MockReply reply, String text) {
+        return reply.completionTokens() != null ? reply.completionTokens() : text.length() / 4;
     }
 
     @Override
@@ -271,21 +282,21 @@ public class MockProvider extends AbstractLlmProvider {
      * The default response flows through {@link ResponseEvaluator}, so it may be a
      * {@code groovy:}-prefixed script too.
      */
-    private String resolveResponse(ChatRequest request) {
+    private MockReply resolveResponse(ChatRequest request) {
         for (MockMatcher matcher : fileScenarios) {
             if (matcher.matches(request)) {
                 fireTelemetryMatched(matcher, MockMatcherTelemetry.Source.FILE, request);
-                return matcher.respond(request);
+                return matcher.reply(request);
             }
         }
         for (MockMatcher matcher : yamlMatchers) {
             if (matcher.matches(request)) {
                 fireTelemetryMatched(matcher, MockMatcherTelemetry.Source.YAML, request);
-                return matcher.respond(request);
+                return matcher.reply(request);
             }
         }
         fireTelemetryFallthrough(request);
-        return response.evaluate(request);
+        return MockReply.text(response.evaluate(request));
     }
 
     private String applyResponseFormat(String text, ResponseFormat format) {

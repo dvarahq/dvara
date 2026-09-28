@@ -46,6 +46,9 @@ import java.util.stream.Stream;
  * respond = { request -&gt; 'Your balance is $42' }
  * </pre>
  *
+ * {@code respond} may instead return a map, {@code [content: 'Your balance is $42', usage: [prompt_tokens:
+ * 1200, completion_tokens: 80]]}, to report that usage as given rather than the mock's estimate (#56).
+ *
  * The loader evaluates the script once at startup. The closures captured in
  * {@code when} and {@code respond} are retained and reused for every incoming
  * request. Evaluation errors (invalid Groovy syntax, missing or wrong-typed

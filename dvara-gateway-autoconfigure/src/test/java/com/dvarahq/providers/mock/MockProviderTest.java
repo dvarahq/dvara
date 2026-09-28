@@ -266,6 +266,59 @@ class MockProviderTest {
         assertThat(provider.chat(withImage).getUsage().getPromptTokens()).isEqualTo(1 + 765);
     }
 
+    /** #56 A1: a scenario that sets usage is reported as given, on both the plain and the streamed path. */
+    @Test
+    void aScenarioThatSetsUsage_isReportedAsGiven() {
+        var provider = new MockProvider("default", 0, 0, 0.0);
+        groovy.lang.Binding binding = new groovy.lang.Binding();
+        new groovy.lang.GroovyShell(binding).evaluate(
+                "when = { req -> true }\n"
+                + "respond = { req -> [content: 'priced', usage: [prompt_tokens: 1200, completion_tokens: 80]] }\n"
+                + "partial = { req -> [content: 'half', usage: [prompt_tokens: 50]] }\n");
+        groovy.lang.Closure<?> always = (groovy.lang.Closure<?>) binding.getVariable("when");
+        provider.replaceFileScenarios(List.of(new ScenarioMatcher("usage", "test:usage", always,
+                (groovy.lang.Closure<?>) binding.getVariable("respond"))));
+        ChatRequest request = ChatRequest.builder().model("mock/vision")
+                .messages(List.of(MultimodalMessage.user("hi"))).build();
+
+        ChatResponse response = provider.chat(request);
+        assertThat(response.getUsage().getPromptTokens()).isEqualTo(1200);
+        assertThat(response.getUsage().getCompletionTokens()).isEqualTo(80);
+        assertThat(response.getUsage().getTotalTokens()).isEqualTo(1280);
+
+        SseChunk last = null;
+        for (Iterator<SseChunk> it = provider.streamChat(request); it.hasNext(); ) {
+            last = it.next();
+        }
+        assertThat(last.getUsage().getPromptTokens()).isEqualTo(1200);
+        assertThat(last.getUsage().getCompletionTokens()).isEqualTo(80);
+
+        // A count left out is estimated: "half" is 4 characters, 1 token.
+        provider.replaceFileScenarios(List.of(new ScenarioMatcher("partial", "test:partial", always,
+                (groovy.lang.Closure<?>) binding.getVariable("partial"))));
+        ChatResponse partial = provider.chat(request);
+        assertThat(partial.getUsage().getPromptTokens()).isEqualTo(50);
+        assertThat(partial.getUsage().getCompletionTokens()).isEqualTo(1);
+    }
+
+    /** #56 A1: a negative or non-numeric count is the scenario's error, named with its file. */
+    @Test
+    void aScenarioWithABadUsageCount_failsNamingTheScenario() {
+        var provider = new MockProvider("default", 0, 0, 0.0);
+        groovy.lang.Binding binding = new groovy.lang.Binding();
+        new groovy.lang.GroovyShell(binding).evaluate(
+                "when = { req -> true }\n"
+                + "respond = { req -> [content: 'x', usage: [prompt_tokens: -1]] }\n");
+        provider.replaceFileScenarios(List.of(new ScenarioMatcher("bad", "test:bad",
+                (groovy.lang.Closure<?>) binding.getVariable("when"),
+                (groovy.lang.Closure<?>) binding.getVariable("respond"))));
+
+        assertThatThrownBy(() -> provider.chat(ChatRequest.builder().model("mock/x")
+                .messages(List.of(MultimodalMessage.user("hi"))).build()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("bad").hasMessageContaining("prompt_tokens");
+    }
+
     @Test
     void anImageIsBilledByTheAllowance_lowDetailByTheLowOne_andBothAreSettable() {
         // #56: a scripted vision call was billed as its text alone.
