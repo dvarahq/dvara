@@ -82,8 +82,17 @@ public class GatewayException extends RuntimeException {
     }
 
     /** A {@code PROVIDER_ERROR} for an error status the upstream answered with, carrying that status. */
+    /**
+     * Upstream statuses that mean the provider rejected <em>the request</em> (#53): invalid, unknown model,
+     * too large, unprocessable. The caller gets a 400, and the call is neither retried nor failed over: the
+     * same request fails the same way anywhere. A 401/403 is the gateway's credential, not the caller's
+     * request, and stays a provider error.
+     */
+    public static final java.util.Set<Integer> REJECTED_REQUEST_STATUSES = java.util.Set.of(400, 404, 413, 422);
+
     public static GatewayException upstream(int status, String message) {
-        return new GatewayException("PROVIDER_ERROR", message, status);
+        return new GatewayException(REJECTED_REQUEST_STATUSES.contains(status) ? "PROVIDER_REJECTED_REQUEST"
+                : "PROVIDER_ERROR", message, status);
     }
 
     public String getCode() {

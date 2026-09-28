@@ -329,6 +329,31 @@ class GlobalExceptionHandlerTest {
         assertThat(result.getBody().getError().getType()).isEqualTo("provider_rate_limited");
     }
 
+    /** #53: a request the provider rejected is the caller's to fix: a 400, not a bad gateway. */
+    @Test
+    void anUpstreamRejectionOfTheRequestIsReportedAsABadRequest() {
+        for (int upstream : new int[] {400, 404, 413, 422}) {
+            var result = handler.handleGatewayException(GatewayException.upstream(upstream, "API error " + upstream),
+                    mockRequest(), mockResponse("trace-" + upstream));
+
+            assertThat(result.getStatusCode().value()).as("upstream %d", upstream).isEqualTo(400);
+            assertThat(result.getBody().getError().getType()).isEqualTo("invalid_request_error");
+            assertThat(result.getBody().getError().getCode()).isEqualTo("provider_rejected_request");
+        }
+    }
+
+    /** #53: a refused gateway credential or an upstream 5xx is not the caller's fault: still a 502. */
+    @Test
+    void anUpstreamCredentialRefusalOrServerErrorIsStillABadGateway() {
+        for (int upstream : new int[] {401, 403, 500, 503}) {
+            var result = handler.handleGatewayException(GatewayException.upstream(upstream, "API error " + upstream),
+                    mockRequest(), mockResponse("trace-" + upstream));
+
+            assertThat(result.getStatusCode().value()).as("upstream %d", upstream).isEqualTo(502);
+            assertThat(result.getBody().getError().getCode()).isEqualTo("provider_error");
+        }
+    }
+
     @Test
     void handleGatewayException_lowercasesCode() {
         HttpServletResponse response = mockResponse("trace-8");

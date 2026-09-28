@@ -388,6 +388,35 @@ class ProviderDispatcherTest {
                 .hasMessage("primary down");
     }
 
+    /** #53: a request the provider rejected fails the same way anywhere; it is not failed over. */
+    @Test
+    void chat_doesNotFallbackWhenTheProviderRejectedTheRequest() {
+        LlmProvider primary = mockProvider("openai", true);
+        LlmProvider secondary = mockProvider("anthropic", true);
+
+        when(primary.chat(any())).thenThrow(GatewayException.upstream(400, "OpenAI API error 400"));
+
+        ProviderDispatcher dispatcher = dispatcher(List.of(primary, secondary));
+
+        assertThatThrownBy(() -> dispatcher.chat(chatRequest("gpt-4o")))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("PROVIDER_REJECTED_REQUEST"));
+        verify(secondary, never()).chat(any());
+    }
+
+    /** #53: the gateway's own credential being refused is a provider failure, and still fails over. */
+    @Test
+    void chat_stillFallsBackWhenTheProviderRefusedTheGatewaysCredential() {
+        LlmProvider primary = mockProvider("openai", true);
+        LlmProvider secondary = mockProvider("anthropic", true);
+
+        when(primary.chat(any())).thenThrow(GatewayException.upstream(401, "OpenAI API error 401"));
+        when(secondary.chat(any())).thenReturn(chatResponse("fallback-401", "claude-3"));
+
+        assertThat(dispatcher(List.of(primary, secondary)).chat(chatRequest("gpt-4o")).getId())
+                .isEqualTo("fallback-401");
+    }
+
     @Test
     void chat_doesNotFallbackOnNoProviderError() {
         LlmProvider primary = mockProvider("openai", true);
