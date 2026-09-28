@@ -24,11 +24,13 @@ import com.dvarahq.core.provider.ProviderCapabilities;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -36,6 +38,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 class OllamaProviderTest {
@@ -267,6 +270,97 @@ class OllamaProviderTest {
     }
 
     // -------------------------------------------------------------------------
+    // Tool calls (#30)
+    // -------------------------------------------------------------------------
+
+    private static final String TOOL_CALL_REPLY = """
+            {"id":"chatcmpl-7","object":"chat.completion","created":1,"model":"qwen3:4b-instruct",
+             "choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":"",
+               "tool_calls":[{"id":"call_1","type":"function",
+                 "function":{"name":"get_rate","arguments":"{\\"lane\\":\\"CHI-DAL\\"}"}}]}}],
+             "usage":{"prompt_tokens":120,"completion_tokens":18,"total_tokens":138}}
+            """;
+
+    /** The tool definitions and tool_choice reach Ollama; the model's tool call comes back in OpenAI shape. */
+    @Test
+    void chat_toolsTravelToOllama_andTheModelsToolCallComesBack() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.model").value("qwen3:4b-instruct"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.tools[0].type").value("function"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.tools[0].function.name").value("get_rate"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.tools[0].function.parameters.type").value("object"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.tool_choice").value("auto"))
+              .andRespond(withSuccess(TOOL_CALL_REPLY, MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(ChatRequest.builder()
+                .model("ollama/qwen3:4b-instruct")
+                .messages(List.of(MultimodalMessage.user("Rate for Chicago to Dallas?")))
+                .tools(List.of(com.dvarahq.core.model.ToolDefinition.builder().name("get_rate")
+                        .description("Freight rate for a lane")
+                        .parameters(Map.of("type", "object", "properties", Map.of("lane", Map.of("type", "string"))))
+                        .build()))
+                .toolChoice("auto")
+                .build());
+
+        server.verify();
+        assertThat(response.getChoices().get(0).getFinishReason()).isEqualTo("tool_calls");
+        var call = response.getChoices().get(0).getMessage().getToolCalls().get(0);
+        assertThat(call.getId()).isEqualTo("call_1");
+        assertThat(call.getName()).isEqualTo("get_rate");
+        assertThat(call.getArguments()).isEqualTo("{\"lane\":\"CHI-DAL\"}");
+    }
+
+    /** The next turn: the assistant's tool call and the tool's result go back to Ollama in OpenAI shape. */
+    @Test
+    void chat_theAssistantsToolCallAndTheToolResult_goBackToOllama() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[1].role").value("assistant"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[1].tool_calls[0].id").value("call_1"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[1].tool_calls[0].type").value("function"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[1].tool_calls[0].function.name").value("get_rate"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[1].tool_calls[0].function.arguments").value("{\"lane\":\"CHI-DAL\"}"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[2].role").value("tool"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[2].tool_call_id").value("call_1"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[2].content").value("$1,840"))
+              .andRespond(withSuccess(ollamaSuccessBody("ollama-2", "qwen3:4b-instruct", "It is $1,840.", 140, 6),
+                      MediaType.APPLICATION_JSON));
+
+        MultimodalMessage assistant = MultimodalMessage.builder().role("assistant")
+                .content(List.of(new com.dvarahq.core.model.ContentBlock.TextBlock("")))
+                .toolCalls(List.of(com.dvarahq.core.model.ToolCall.builder().id("call_1").name("get_rate")
+                        .arguments("{\"lane\":\"CHI-DAL\"}").build()))
+                .build();
+        MultimodalMessage toolResult = MultimodalMessage.builder().role("tool").toolCallId("call_1")
+                .content(List.of(new com.dvarahq.core.model.ContentBlock.TextBlock("$1,840"))).build();
+
+        ChatResponse response = provider.chat(ChatRequest.builder()
+                .model("ollama/qwen3:4b-instruct")
+                .messages(List.of(MultimodalMessage.user("Rate for Chicago to Dallas?"), assistant, toolResult))
+                .build());
+
+        server.verify();
+        assertThat(response.getChoices().get(0).getMessage().getToolCalls()).isNullOrEmpty();
+    }
+
+    /** A1: a model without tool support is Ollama's rejection, named with the model; tools are never dropped. */
+    @Test
+    void chat_aModelWithoutToolSupport_isAnUpstreamRejectionNamingTheModel() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andRespond(withStatus(HttpStatus.BAD_REQUEST).contentType(MediaType.APPLICATION_JSON)
+                      .body("{\"error\":{\"message\":\"registry.ollama.ai/library/gemma:2b does not support tools\"}}"));
+
+        assertThatThrownBy(() -> provider.chat(ChatRequest.builder()
+                .model("ollama/gemma:2b")
+                .messages(List.of(MultimodalMessage.user("hi")))
+                .tools(List.of(com.dvarahq.core.model.ToolDefinition.builder().name("get_rate").build()))
+                .build()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("gemma:2b")
+                .satisfies(e -> assertThat(((GatewayException) e).getUpstreamStatus()).isEqualTo(400));
+        server.verify();
+    }
+
+    // -------------------------------------------------------------------------
     // capabilities()
     // -------------------------------------------------------------------------
 
@@ -276,7 +370,8 @@ class OllamaProviderTest {
 
         assertThat(caps.supportsStreaming()).isTrue();
         assertThat(caps.supportsVision()).isFalse();
-        assertThat(caps.supportsToolCalls()).isFalse();
+        assertThat(caps.supportsToolCalls()).isTrue();
+        assertThat(caps.supportsStreamingToolCalls()).isFalse();
         assertThat(caps.supportsStructuredOutputs()).isFalse();
         assertThat(caps.supportsJsonMode()).isFalse();
         assertThat(caps.maxContextTokens()).isEqualTo(32_000);
