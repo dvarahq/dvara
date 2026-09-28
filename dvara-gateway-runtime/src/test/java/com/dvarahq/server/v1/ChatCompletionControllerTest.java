@@ -262,7 +262,36 @@ class ChatCompletionControllerTest {
                         .content("{bad json}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.type").value("invalid_request_error"))
-                .andExpect(jsonPath("$.error.code").value("invalid_json"));
+                .andExpect(jsonPath("$.error.code").value("invalid_json"))
+                .andExpect(jsonPath("$.error.message").value("The request body is not valid JSON."));
+    }
+
+    /** A field of the wrong type is named by its JSON path; the parser's text named internal Java types. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "{\"model\": \"gpt-4o\", \"messages\": \"hi\"}|messages",
+            "{\"model\": \"gpt-4o\", \"messages\": [{\"role\":\"user\",\"content\":\"hi\"}], \"temperature\": \"hot\"}|temperature",
+            "{\"model\": \"gpt-4o\", \"messages\": [{\"role\":\"user\",\"content\":\"hi\"}], \"max_tokens\": \"many\"}|max_tokens",
+            "{\"model\": [\"gpt-4o\"], \"messages\": [{\"role\":\"user\",\"content\":\"hi\"}]}|model"})
+    void aFieldOfTheWrongTypeIsNamedWithoutJavaTypes(String body, String field) throws Exception {
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("invalid_json"))
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("'" + field)))
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("java."))))
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("com.dvarahq"))));
+    }
+
+    /** A message role the chat API does not define was accepted and served. */
+    @Test
+    void anUnknownMessageRoleIsRefused() throws Exception {
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\": \"gpt-4o\", \"messages\": [{\"role\":\"banana\",\"content\":\"hi\"}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_error"))
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("role must be one of")));
     }
 
     // -------------------------------------------------------------------------
