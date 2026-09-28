@@ -139,6 +139,10 @@ public class ResilienceAutoConfiguration {
                 .minimumNumberOfCalls(cbConfig.getMinimumNumberOfCalls())
                 .waitDurationInOpenState(Duration.ofMillis(cbConfig.getWaitDurationInOpenStateMs()))
                 .permittedNumberOfCallsInHalfOpenState(cbConfig.getPermittedCallsInHalfOpen())
+                // Move to half-open when the wait is over, without waiting for a call. The dispatcher
+                // sends nothing to a provider whose breaker is open, so a breaker that only moves when a
+                // call arrives never gets its trial call, and the provider stays out until a restart.
+                .automaticTransitionFromOpenToHalfOpenEnabled(true)
                 // One breaker serves every workspace on this provider, so only what says the provider
                 // itself is failing may count against it: not a caller's bad key or oversized prompt.
                 .recordException(ResilienceAutoConfiguration::isProviderFailure)

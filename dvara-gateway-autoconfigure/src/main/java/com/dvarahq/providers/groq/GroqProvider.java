@@ -188,6 +188,10 @@ public class GroqProvider extends AbstractLlmProvider {
     }
 
     private ChatResponse mapChatResponse(GroqChatResponse groq) {
+        if (groq == null || groq.getChoices() == null || groq.getChoices().isEmpty()) {
+            // An empty reply is the upstream's failure. Left alone it became a null-pointer message.
+            throw new GatewayException("PROVIDER_ERROR", "Groq" + " returned an empty response");
+        }
         List<ChatResponse.Choice> choices = groq.getChoices().stream()
                 .map(c -> ChatResponse.Choice.builder()
                         .index(c.getIndex())

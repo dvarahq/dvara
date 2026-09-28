@@ -328,11 +328,14 @@ public class ProviderDispatcher {
                 .toList();
         LlmProvider selected;
         if (healthy.isEmpty() && !capable.isEmpty()) {
-            // All capable providers unhealthy. Hand the full capable list to
-            // the strategy anyway so it can produce its own NO_PROVIDER
-            // error with a familiar message, rather than silently changing
-            // the error code from the original semantic.
-            selected = routingStrategy.route(request, capable, ctx);
+            // Every capable provider is paused by its circuit breaker. That is a temporary outage, so it
+            // is answered as one: 503, which a client retries. Handing the list to the strategy gave a
+            // 400 saying no provider was configured, which a client does not retry and which was untrue.
+            throw new GatewayException("PROVIDER_CIRCUIT_OPEN",
+                    "No provider for this request is available right now: "
+                    + capable.stream().map(LlmProvider::name).toList()
+                    + " paused after too many recent failures. Retry shortly; each is tried again after a"
+                    + " short cooldown.");
         } else {
             selected = routeExplainingAbsence(request, healthy, capable, ctx);
         }

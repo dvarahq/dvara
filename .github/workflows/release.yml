@@ -39,6 +39,9 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # The minor-line image tag (1.8), cut from the first two numbers. The semver rule in the
+          # metadata action cannot read a four-part hotfix version such as 1.8.2.1.
+          echo "stream=$(echo "$VERSION" | cut -d. -f1-2)" >> "$GITHUB_OUTPUT"
           case "$VERSION" in
             *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
             *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
@@ -124,7 +127,7 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.stream }},enable=${{ steps.version.outputs.prerelease == 'false' }}
             type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable=${{ steps.version.outputs.prerelease == 'false' }}
           labels: |

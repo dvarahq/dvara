@@ -51,11 +51,12 @@ def current_release() -> str:
     # demand that the README name the rc.
     parsed = []
     for t in out:
-        m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?", t)
+        # A hotfix has a fourth number (1.8.2.1): it is newer than 1.8.2 and older than 1.8.3.
+        m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-rc(\d+))?", t)
         if m:
-            major, minor, patch, rc = m.groups()
+            major, minor, patch, hotfix, rc = m.groups()
             # A final release outranks every candidate of the same number.
-            parsed.append(((int(major), int(minor), int(patch),
+            parsed.append(((int(major), int(minor), int(patch), int(hotfix or 0),
                             0 if rc else 1, int(rc or 0)), t))
     if not parsed:
         print("::error::no release tag found, so the README cannot be checked against one. "
