@@ -235,6 +235,48 @@ class RateLimitServletFilterTest {
     }
 
     /**
+     * Every call that spends tokens is held to the allowance before it is sent. /v1/responses was only
+     * charged after it was served, so a caller using it alone was never refused; embeddings were never
+     * charged at all.
+     */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"/v1/responses", "/v1/embeddings"})
+    void tokenEstimation_reservesForEveryTokenSpendingEndpoint(String uri) throws Exception {
+        TokenEstimator tokenEstimator = mock(TokenEstimator.class);
+        when(tokenEstimator.estimateTokens(any(String.class))).thenReturn(40);
+        filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, null);
+
+        when(request.getRequestURI()).thenReturn(uri);
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("sk-test");
+        when(request.getContentLength()).thenReturn(40);
+        when(request.getInputStream()).thenReturn(mockInputStream("{\"model\":\"m\",\"input\":\"hello\"}"));
+        when(rateLimiter.checkLimit(eq("sk-test"), eq(40), any(EffectiveRateLimit.class)))
+                .thenReturn(RateLimitResult.allow());
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(rateLimiter).checkLimit(eq("sk-test"), eq(40), any(EffectiveRateLimit.class));
+        verify(request).setAttribute(RateLimitServletFilter.RESERVED_TOKENS_ATTR, 40);
+    }
+
+    /** A call that spends no tokens reserves none, and its body is not read. */
+    @Test
+    void tokenEstimation_skipsCallsThatSpendNoTokens() throws Exception {
+        TokenEstimator tokenEstimator = mock(TokenEstimator.class);
+        filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, null);
+        when(request.getRequestURI()).thenReturn("/v1/responses/resp_123");
+        when(request.getMethod()).thenReturn("GET");
+        when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("sk-test");
+        when(rateLimiter.checkLimit(eq("sk-test"), any(EffectiveRateLimit.class))).thenReturn(RateLimitResult.allow());
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(tokenEstimator, never()).estimateTokens(any(String.class));
+        verify(request, never()).getInputStream();
+    }
+
+    /**
      * A chunked body over the estimation cap is forwarded whole and not estimated. Cutting it at the
      * cap and replaying the prefix would hand the controller truncated JSON with nothing to say the
      * gateway had done the cutting.
@@ -327,11 +369,12 @@ class RateLimitServletFilterTest {
     }
 
     @Test
-    void tokenEstimation_skippedForNonChatEndpoints() throws Exception {
+    void tokenEstimation_skippedForAnUploadThatSpendsNoTokens() throws Exception {
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
         filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, null);
 
-        when(request.getRequestURI()).thenReturn("/v1/embeddings");
+        // Embeddings used to be here, as a call that is not estimated; they spend tokens, and are now.
+        when(request.getRequestURI()).thenReturn("/v1/files");
         when(request.getMethod()).thenReturn("POST");
         when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("sk-test");
         when(rateLimiter.checkLimit(eq("sk-test"), any(EffectiveRateLimit.class)))
