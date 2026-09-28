@@ -226,6 +226,10 @@ public class MistralProvider extends AbstractLlmProvider {
     }
 
     private ChatResponse mapChatResponse(MistralChatResponse mistral) {
+        if (mistral == null || mistral.getChoices() == null || mistral.getChoices().isEmpty()) {
+            // An empty reply is the upstream's failure. Left alone it became a null-pointer message.
+            throw new GatewayException("PROVIDER_ERROR", "Mistral" + " returned an empty response");
+        }
         List<ChatResponse.Choice> choices = mistral.getChoices().stream()
                 .map(c -> ChatResponse.Choice.builder()
                         .index(c.getIndex())

@@ -302,6 +302,24 @@ class OpenAiProviderTest {
         server.verify();
     }
 
+    /** An empty reply is the upstream's failure, said plainly; it used to surface as a null-pointer message. */
+    @Test
+    void chat_emptyReply_isAProviderErrorNotANullPointer() {
+        for (String body : List.of("{}", "{\"choices\":[]}")) {
+            server.expect(requestTo(containsString("/chat/completions")))
+                  .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+            assertThatThrownBy(() -> provider.chat(ChatRequest.builder()
+                            .model("gpt-4o")
+                            .messages(List.of(MultimodalMessage.user("Hello")))
+                            .build()))
+                    .isInstanceOf(GatewayException.class)
+                    .hasMessage("OpenAI returned an empty response")
+                    .satisfies(ex -> assertThat(((GatewayException) ex).getCode()).isEqualTo("PROVIDER_ERROR"));
+            server.verify();
+            server.reset();
+        }
+    }
+
     @Test
     void chat_serverError_throwsGatewayException() {
         server.expect(requestTo(containsString("/chat/completions")))
