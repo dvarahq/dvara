@@ -262,7 +262,23 @@ class MockProviderTest {
                                 new ContentBlock.ImageBlock("image/png", "A".repeat(40_000))))
                         .build()))
                 .build();
-        assertThat(provider.chat(withImage).getUsage().getPromptTokens()).isEqualTo(1);
+        // The text's 4 chars are 1 token; the image is its allowance (#56), never its 40,000 base64 chars.
+        assertThat(provider.chat(withImage).getUsage().getPromptTokens()).isEqualTo(1 + 765);
+    }
+
+    @Test
+    void anImageIsBilledByTheAllowance_lowDetailByTheLowOne_andBothAreSettable() {
+        // #56: a scripted vision call was billed as its text alone.
+        var provider = new MockProvider("ok", 0, 0, 0.0);
+        ChatRequest twoImages = ChatRequest.builder().model("mock/vision")
+                .messages(List.of(MultimodalMessage.builder().role("user").content(List.of(
+                        new ContentBlock.ImageBlock("image/png", "AAAA"),
+                        new ContentBlock.ImageBlock("image/png", "BBBB", "low"))).build()))
+                .build();
+        assertThat(provider.chat(twoImages).getUsage().getPromptTokens()).isEqualTo(765 + 85);
+
+        provider.setImageTokens(1000, 100);
+        assertThat(provider.chat(twoImages).getUsage().getPromptTokens()).isEqualTo(1100);
     }
 
     @Test

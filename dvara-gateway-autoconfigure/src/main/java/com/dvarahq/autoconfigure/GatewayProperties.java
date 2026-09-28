@@ -84,6 +84,13 @@ public class GatewayProperties {
         private int streamTokenDelayMs = 20;
         private double errorRate = 0.0;
         /**
+         * Prompt tokens the mock reports for each image (#56): a scripted vision call is otherwise billed
+         * as its text alone. Default 765, gpt-4o's charge for a 1024x1024 image at high detail, the same
+         * default as the paid side's per-call estimate; {@code imageTokensLow} for {@code detail: low}.
+         */
+        private int imageTokens = 765;
+        private int imageTokensLow = 85;
+        /**
          * Wiremock-style conditional matchers evaluated in declaration order.
          * First matcher whose {@code when} Groovy predicate returns {@code true} wins.
          * If no matcher matches, falls through to {@link #response}.

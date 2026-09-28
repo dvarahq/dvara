@@ -311,6 +311,7 @@ public class ProviderAutoConfiguration {
 
         MockProvider provider = new MockProvider(cfg.getResponse(), compiled,
                 cfg.getLatencyMs(), cfg.getStreamTokenDelayMs(), cfg.getErrorRate());
+        provider.setImageTokens(cfg.getImageTokens(), cfg.getImageTokensLow());
 
         // Wire telemetry if a bean exists; otherwise the provider keeps its no-op default.
         MockMatcherTelemetry telemetry = telemetryProvider.getIfAvailable();
