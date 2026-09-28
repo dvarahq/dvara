@@ -58,6 +58,9 @@ public class PolicyEnforcementFilter implements ChatFilter {
         this.workspaceRepository = workspaceRepository;
     }
 
+    /** What {@code GlobalExceptionHandler} answers a {@code POLICY_DENIED} with. */
+    static final int DENIED_STATUS = 403;
+
     @Override public int order() { return FilterOrder.POLICY_ENFORCEMENT; }
 
     @Override
@@ -87,7 +90,7 @@ public class PolicyEnforcementFilter implements ChatFilter {
         ctx.setPolicyDecision(decision);
 
         if (!decision.allowed()) {
-            auditPolicyDenial(ctx, policyCtx, decision);
+            auditPolicyDenial(request, policyCtx, decision);
             throw new GatewayException("POLICY_DENIED", decision.reason());
         }
 
@@ -113,8 +116,15 @@ public class PolicyEnforcementFilter implements ChatFilter {
                 .filter(r -> !r.isBlank());
     }
 
-    private void auditPolicyDenial(FilterContext ctx, PolicyContext policyCtx, PolicyDecision decision) {
+    /**
+     * The denial says what was refused as well as why (#29): the model as the client asked for it, and
+     * the status the client gets. They were only on the request's GATEWAY_RESPONSE row, so an audit
+     * view, report or SIEM subscriber reading denials on their own saw a denial with no subject.
+     */
+    private void auditPolicyDenial(ChatRequest request, PolicyContext policyCtx, PolicyDecision decision) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("model", request.getModel());
+        payload.put("status", DENIED_STATUS);
         payload.put("policy_id", decision.policyId());
         payload.put("rule_id", decision.ruleId());
         payload.put("reason", decision.reason());
