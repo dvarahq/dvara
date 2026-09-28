@@ -45,4 +45,9 @@ public interface MockMatcher {
 
     /** Produces the fake response body for a matched request. */
     String respond(ChatRequest request);
+
+    /** Produces the response and, if the matcher sets it, the usage to report (#56). */
+    default MockReply reply(ChatRequest request) {
+        return MockReply.text(respond(request));
+    }
 }
