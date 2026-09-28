@@ -181,9 +181,12 @@ public class PiiPatternRegistry {
                 Pattern.compile("(?i)(?:NPI)[\\s#:]*\\d{10}"),
                 PiiEntityType.NPI_NUMBER, "npi", 0.9));
 
-        // Person name (salutation heuristic)
+        // Person name (salutation heuristic). Miss and Mx are here because speech-to-text picks between
+        // homophones: a spoken "Ms. Delgado" can arrive as "Miss Delgado" (#19). Titles are case-sensitive
+        // and need a capitalised word after them, so "I miss Paris" does not match; a sentence-initial
+        // "Miss Paris" does, the same trade-off Dr and Ms already make.
         patterns.add(new PatternEntry(
-                Pattern.compile("(?:Mr\\.?|Mrs\\.?|Ms\\.?|Dr\\.?|Prof\\.?)\\s+[A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,2}"),
+                Pattern.compile("(?:Mr\\.?|Mrs\\.?|Ms\\.?|Miss|Mx\\.?|Dr\\.?|Prof\\.?)\\s+[A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,2}"),
                 PiiEntityType.PERSON_NAME, "person_name", 0.7));
 
         // India Aadhaar — 12 digits, optional spaces (Verhoeff post-validated).
