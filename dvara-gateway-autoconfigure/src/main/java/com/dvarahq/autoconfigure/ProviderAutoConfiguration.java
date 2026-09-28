@@ -174,7 +174,9 @@ public class ProviderAutoConfiguration {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getGemini();
         String baseUrl = cfg.getBaseUrl() != null ? cfg.getBaseUrl() : GEMINI_BASE_URL;
         RestClient.Builder builder = clientFor("gemini", restClientBuilder, secretProvider);
-        return new GeminiProvider(secretProvider, baseUrl, builder);
+        GeminiProvider provider = new GeminiProvider(secretProvider, baseUrl, builder);
+        provider.setImageFetcher(imageFetcher(props));
+        return provider;
     }
 
     @Bean
@@ -184,7 +186,19 @@ public class ProviderAutoConfiguration {
                                            RestClient.Builder restClientBuilder) {
         GatewayProperties.BedrockConfig cfg = props.getProviders().getBedrock();
         RestClient.Builder builder = tlsOnly("bedrock", restClientBuilder);
-        return new BedrockProvider(secretProvider, cfg.getRegion(), builder);
+        BedrockProvider provider = new BedrockProvider(secretProvider, cfg.getRegion(), builder);
+        provider.setImageFetcher(imageFetcher(props));
+        return provider;
+    }
+
+    /** The image-URL fetcher for providers that take bytes only (#55); the disabled one unless turned on. */
+    private static com.dvarahq.providers.support.ImageFetcher imageFetcher(GatewayProperties props) {
+        GatewayProperties.ImageFetchConfig cfg = props.getImageFetch();
+        if (!cfg.isEnabled()) {
+            return com.dvarahq.providers.support.ImageFetcher.DISABLED;
+        }
+        return new com.dvarahq.providers.support.ImageFetcher(true, cfg.getMaxBytes(), cfg.getTimeout(),
+                java.util.Set.copyOf(cfg.getContentTypes()));
     }
 
     @Bean

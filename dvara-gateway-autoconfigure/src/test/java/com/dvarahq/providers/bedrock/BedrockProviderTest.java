@@ -654,6 +654,45 @@ class BedrockProviderTest {
         server.verify();
     }
 
+    /** #55: off by default, an image URL is refused as before; on, it is fetched and sent as bytes. */
+    @Test
+    void chat_imageUrl_isRefusedWhenFetchingIsOff_andInlinedWhenOn() {
+        ChatRequest request = ChatRequest.builder()
+                .model("bedrock/anthropic.claude-3-sonnet-20240229-v1")
+                .messages(List.of(MultimodalMessage.builder().role("user")
+                        .content(List.of(new ContentBlock.TextBlock("Describe this image"),
+                                new ContentBlock.ImageBlock(ContentBlock.ImageBlock.URL_MEDIA_TYPE,
+                                        "https://example.com/cat.png")))
+                        .build()))
+                .build();
+        assertThatThrownBy(() -> provider.chat(request)).isInstanceOf(GatewayException.class)
+                .hasMessageContaining("base64");
+
+        java.util.List<String> fetched = new java.util.ArrayList<>();
+        provider.setImageFetcher(stubFetcher(fetched));
+        server.expect(requestTo(containsString("/converse")))
+              .andExpect(content().string(containsString("\"format\":\"png\"")))
+              .andExpect(content().string(containsString("\"bytes\":\"iVBORw0KGgo=\"")))
+              .andRespond(withSuccess(converseSuccessBody("end_turn", "A cat.", 300, 3), MediaType.APPLICATION_JSON));
+
+        provider.chat(request);
+
+        server.verify();
+        assertThat(fetched).containsExactly("https://example.com/cat.png");
+    }
+
+    /** A fetcher that answers every URL with one PNG, standing in for the real fetch (#55). */
+    private static com.dvarahq.providers.support.ImageFetcher stubFetcher(java.util.List<String> fetched) {
+        return new com.dvarahq.providers.support.ImageFetcher(true, 1024, java.time.Duration.ofSeconds(1),
+                java.util.Set.of("image/png")) {
+            @Override
+            public FetchedImage fetch(String url) {
+                fetched.add(url);
+                return new FetchedImage("image/png", "iVBORw0KGgo=");
+            }
+        };
+    }
+
     // -------------------------------------------------------------------------
     // capabilities()
     // -------------------------------------------------------------------------

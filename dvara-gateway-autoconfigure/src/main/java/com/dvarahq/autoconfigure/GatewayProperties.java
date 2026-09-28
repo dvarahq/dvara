@@ -31,6 +31,7 @@ public class GatewayProperties {
     private List<RouteDefinition> routes = new ArrayList<>();
     private Resilience resilience = new Resilience();
     private RateLimitConfig rateLimit = new RateLimitConfig();
+    private ImageFetchConfig imageFetch = new ImageFetchConfig();
     // Encryption (dvara.encryption.*) and region (dvara.region.*) live in their own
     // @ConfigurationProperties classes, GatewayEncryptionProperties and GatewayRegionProperties,
     // so their prefixes stay outside the LLM-gateway-only dvara.llm-gateway namespace.
@@ -60,6 +61,21 @@ public class GatewayProperties {
     public static class ProviderConfig {
         private String apiKey;
         private String baseUrl;
+    }
+
+    /**
+     * {@code dvara.llm-gateway.image-fetch}: fetching an https image URL for Gemini and Bedrock, which take
+     * image bytes only (#55). Off by default: turning it on lets callers make the gateway fetch URLs, a
+     * deliberate egress decision. Private, loopback, link-local and metadata addresses are always refused.
+     */
+    @Data
+    public static class ImageFetchConfig {
+        private boolean enabled = false;
+        /** Largest image fetched; Bedrock's own limit is 3.75 MB. */
+        private long maxBytes = 5L * 1024 * 1024;
+        /** For the whole fetch, redirects included. */
+        private java.time.Duration timeout = java.time.Duration.ofSeconds(5);
+        private List<String> contentTypes = new ArrayList<>(List.of("image/png", "image/jpeg", "image/gif", "image/webp"));
     }
 
     @Data
