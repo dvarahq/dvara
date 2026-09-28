@@ -45,11 +45,16 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -161,6 +166,46 @@ class ProviderDispatcherTest {
         assertThat(result.getId()).isEqualTo("healthy-primary");
         verify(healthy).chat(any());
         verify(unhealthy, never()).chat(any());
+    }
+
+    /**
+     * A canary scoped to one workspace reports that workspace's traffic only. Other workspaces are sent
+     * to the baseline too, and counting them skewed the baseline arm with traffic outside the test.
+     */
+    @Test
+    void aScopedCanaryReportsOnlyItsOwnWorkspace() {
+        LlmProvider baseline = mockProvider("openai", true);
+        when(baseline.chat(any())).thenReturn(chatResponse("r1", "gpt-4o"));
+        com.dvarahq.core.routing.RouteConfig route = com.dvarahq.core.routing.RouteConfig.builder().id("route-1")
+                .canaryConfig(com.dvarahq.core.routing.CanaryConfig.builder()
+                        .baselineProvider("openai").candidateProvider("anthropic").splitPct(10)
+                        .workspaceScope("in-scope").build())
+                .build();
+        RoutingStrategy strategy = new RoutingStrategy() {
+            @Override public LlmProvider route(ChatRequest request, List<LlmProvider> providers) {
+                return baseline;
+            }
+            @Override public LlmProvider route(ChatRequest request, List<LlmProvider> providers,
+                                               com.dvarahq.core.routing.RequestContext ctx) {
+                ctx.setMatchedRoute(route);
+                return baseline;
+            }
+        };
+        CanaryMetricsCollector collector = mock(CanaryMetricsCollector.class);
+        ProviderDispatcher dispatcher = new ProviderDispatcher(
+                List.of(baseline), strategy, name -> ProviderHealthStatus.HEALTHY, DEFAULT_FALLBACK,
+                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                collector, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
+
+        dispatcher.chat(withWorkspace(chatRequest("gpt-4o"), "another-workspace"));
+        verify(collector, never()).record(any(), any(), anyLong(), anyDouble(), anyBoolean());
+
+        dispatcher.chat(withWorkspace(chatRequest("gpt-4o"), "in-scope"));
+        verify(collector).record(eq("route-1"), eq("baseline"), anyLong(), anyDouble(), eq(false));
+    }
+
+    private static ChatRequest withWorkspace(ChatRequest request, String workspaceId) {
+        return request.toBuilder().metadata(new java.util.HashMap<>(Map.of("workspace_id", workspaceId))).build();
     }
 
     @Test
