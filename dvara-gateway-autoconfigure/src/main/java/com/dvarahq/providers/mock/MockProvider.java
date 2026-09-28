@@ -69,6 +69,9 @@ public class MockProvider extends AbstractLlmProvider {
     private final int streamTokenDelayMs;
     private final double errorRate;
     private final Random random;
+    /** Prompt tokens reported per image, and per {@code detail: low} image (#56). */
+    private int imageTokens = 765;
+    private int imageTokensLow = 85;
 
     public MockProvider(String response, int latencyMs, int streamTokenDelayMs, double errorRate) {
         this(response, List.of(), latencyMs, streamTokenDelayMs, errorRate, new Random());
@@ -309,18 +312,29 @@ public class MockProvider extends AbstractLlmProvider {
         }
     }
 
+    /** Sets the prompt tokens reported per image, and per {@code detail: low} image (#56). */
+    public void setImageTokens(int perImage, int perLowDetailImage) {
+        this.imageTokens = Math.max(0, perImage);
+        this.imageTokensLow = Math.max(0, perLowDetailImage);
+    }
+
     private int estimateTokens(ChatRequest request) {
         if (request.getMessages() == null) return 0;
-        int chars = request.getMessages().stream()
-                .mapToInt(m -> {
-                    if (m.getContent() == null) return 0;
-                    return m.getContent().stream()
-                            // The text only: not the block's toString, and not an image's base64 data.
-                            .mapToInt(b -> b.textContent() != null ? b.textContent().length() : 0)
-                            .sum();
-                })
-                .sum();
-        return chars / 4;
+        int chars = 0;
+        int images = 0;
+        for (var m : request.getMessages()) {
+            if (m.getContent() == null) continue;
+            for (var b : m.getContent()) {
+                // The text by its length, not the block's toString; an image by an allowance, not its
+                // base64 data (#56: counting nothing billed a scripted vision call as its text alone).
+                if (b instanceof com.dvarahq.core.model.ContentBlock.ImageBlock ib) {
+                    images += "low".equalsIgnoreCase(ib.detail()) ? imageTokensLow : imageTokens;
+                } else if (b.textContent() != null) {
+                    chars += b.textContent().length();
+                }
+            }
+        }
+        return chars / 4 + images;
     }
 
     // -------------------------------------------------------------------------
