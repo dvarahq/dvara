@@ -454,6 +454,7 @@ public class ChatCompletionController {
                 .presencePenalty(req.getPresencePenalty())
                 .stop(ChatInputs.stopSequences(req.getStop()))
                 .seed(req.getSeed())
+                .user(req.getUser() == null || req.getUser().isBlank() ? null : req.getUser())
                 .responseFormat(parseResponseFormat(req.getResponseFormat()))
                 .tools(toToolDefinitions(req.getTools()))
                 .toolChoice(req.getToolChoice())

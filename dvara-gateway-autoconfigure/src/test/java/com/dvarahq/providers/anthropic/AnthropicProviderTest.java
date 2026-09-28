@@ -417,6 +417,19 @@ class AnthropicProviderTest {
     }
 
     @Test
+    void chat_userField_becomesAnthropicMetadataUserId() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(content().string(containsString("\"metadata\":{\"user_id\":\"customer-42\"}")))
+              .andRespond(withSuccess(anthropicSuccessBody("msg-u", "end_turn", "ok", 5, 1),
+                      MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("claude-haiku-4-5")
+                .messages(List.of(MultimodalMessage.user("hi"))).user("customer-42").build());
+
+        server.verify();
+    }
+
+    @Test
     void chat_textOnlyMessage_keepsStringContentForm() {
         // A text-only message uses the string form of the content field, not the typed-blocks form.
         server.expect(requestTo(containsString("/v1/messages")))

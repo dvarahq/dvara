@@ -1670,6 +1670,26 @@ class ChatCompletionControllerTest {
     }
 
     @Test
+    void theUserFieldTravelsUpstream_andABlankOneIsNone() throws Exception {
+        // #33: it was accepted and dropped, so an end-user id never reached the provider or the cost row.
+        when(dispatcher.chat(any())).thenReturn(chatResponse("id", "gpt-4o", "ok"));
+
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"model": "gpt-4o", "messages": [{"role": "user", "content": "Hi"}], "user": "customer-42"}
+                        """))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"model": "gpt-4o", "messages": [{"role": "user", "content": "Hi"}], "user": "  "}
+                        """))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<ChatRequest> sent = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(dispatcher, org.mockito.Mockito.times(2)).chat(sent.capture());
+        assertThat(sent.getAllValues().get(0).getUser()).isEqualTo("customer-42");
+        assertThat(sent.getAllValues().get(1).getUser()).isNull();
+    }
+
+    @Test
     void aSingleStopStringIsOneSequence() throws Exception {
         when(dispatcher.chat(any())).thenReturn(chatResponse("id", "gpt-4o", "ok"));
 

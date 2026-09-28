@@ -295,6 +295,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         if (request.getPresencePenalty()  != null) body.put("presence_penalty",  request.getPresencePenalty());
         if (request.getStop() != null) body.put("stop", request.getStop());
         if (request.getSeed() != null) body.put("seed", request.getSeed());
+        if (request.getUser() != null) body.put("user", request.getUser());
         applyResponseFormat(body, request.getResponseFormat());
         applyTools(body, request);
         return body;

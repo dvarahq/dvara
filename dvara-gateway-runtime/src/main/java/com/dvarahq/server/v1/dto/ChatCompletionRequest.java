@@ -69,7 +69,7 @@ public class ChatCompletionRequest {
     /** Only {@code 1} (or absent) is accepted; the gateway returns one choice. */
     private Integer n;
 
-    /** Accepted and ignored: a caller-side tracking id. The gateway attributes by API key. */
+    /** The caller's end-user id: relayed to the provider, and recorded for cost attribution (#33). */
     private String user;
 
     /** A string or an array of strings; relayed to the provider. */

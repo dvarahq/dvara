@@ -580,6 +580,35 @@ class OpenAiProviderTest {
         server.verify();
     }
 
+    private static final String USER_OK = """
+            {"id": "c-u", "object": "chat.completion", "created": 1704067200, "model": "gpt-4o",
+             "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
+            """;
+
+    @Test
+    void chat_relaysTheUserField() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.user").value("customer-42"))
+              .andRespond(withSuccess(USER_OK, MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("gpt-4o")
+                .messages(List.of(MultimodalMessage.user("hi"))).user("customer-42").build());
+
+        server.verify();
+    }
+
+    @Test
+    void chat_withNoUser_sendsNoUserField() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.user").doesNotExist())
+              .andRespond(withSuccess(USER_OK, MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("gpt-4o").messages(List.of(MultimodalMessage.user("hi"))).build());
+
+        server.verify();
+    }
+
     @Test
     void chat_relaysPenaltiesAndMessageName() {
         // frequency_penalty, presence_penalty and a message's name all reach the provider.

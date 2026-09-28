@@ -161,6 +161,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
         if (request.getTemperature() != null) body.put("temperature", request.getTemperature());
         if (request.getTopP()        != null) body.put("top_p",       request.getTopP());
         if (request.getStop()        != null) body.put("stop_sequences", request.getStop());
+        // Anthropic's end-user id lives in metadata.user_id.
+        if (request.getUser()        != null) body.put("metadata", Map.of("user_id", request.getUser()));
         if (request.getSeed() != null) {
             // The Messages API has no seed; serving the call without it would drop what was asked.
             throw new GatewayException("UNSUPPORTED_CAPABILITY",
