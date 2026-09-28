@@ -64,12 +64,24 @@ public class ResilientLlmProvider implements LlmProvider {
     private final Retry retry;
     private final TimeLimiter chatTimeLimiter;
     private final TimeLimiter streamingTimeLimiter;
+    /** Run when a retried attempt is actually sent; null counts nothing. */
+    private final Runnable retrySent;
 
     public ResilientLlmProvider(LlmProvider delegate,
                                 CircuitBreaker circuitBreaker,
                                 Retry retry,
                                 TimeLimiter chatTimeLimiter,
                                 TimeLimiter streamingTimeLimiter) {
+        this(delegate, circuitBreaker, retry, chatTimeLimiter, streamingTimeLimiter, null);
+    }
+
+    public ResilientLlmProvider(LlmProvider delegate,
+                                CircuitBreaker circuitBreaker,
+                                Retry retry,
+                                TimeLimiter chatTimeLimiter,
+                                TimeLimiter streamingTimeLimiter,
+                                Runnable retrySent) {
+        this.retrySent = retrySent;
         this.delegate = delegate;
         this.circuitBreaker = circuitBreaker;
         this.retry = retry;
@@ -166,9 +178,15 @@ public class ResilientLlmProvider implements LlmProvider {
             Callable<T> withCircuitBreaker = CircuitBreaker.decorateCallable(circuitBreaker, callable);
             // Checked before every attempt, outside the breaker: a call whose caller timed out must not
             // start another upstream request, and its cancellation is not a provider failure.
+            int[] attempts = {0};
             Callable<T> attempt = () -> {
                 if (Thread.currentThread().isInterrupted()) {
                     throw new CancellationException("Provider " + delegate.name() + " call was cancelled");
+                }
+                // A retry is counted when it is sent. Counting when one was scheduled also counted the
+                // retry a timeout cancelled during its backoff, which never reached the provider.
+                if (attempts[0]++ > 0 && retrySent != null) {
+                    retrySent.run();
                 }
                 return withCircuitBreaker.call();
             };
@@ -220,8 +238,7 @@ public class ResilientLlmProvider implements LlmProvider {
             if (cause instanceof GatewayException ge) {
                 throw ge;
             }
-            throw new GatewayException("PROVIDER_ERROR",
-                    "Provider " + delegate.name() + " call failed: " + cause.getMessage(), cause);
+            throw new GatewayException("PROVIDER_ERROR", failed(cause), cause);
         } catch (TimeoutException e) {
             throw new GatewayException("PROVIDER_ERROR",
                     "Provider " + delegate.name() + " call timed out", e);
@@ -229,8 +246,25 @@ public class ResilientLlmProvider implements LlmProvider {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            throw new GatewayException("PROVIDER_ERROR",
-                    "Provider " + delegate.name() + " call failed: " + e.getMessage(), e);
+            throw new GatewayException("PROVIDER_ERROR", failed(e), e);
         }
+    }
+
+    /**
+     * The caller's sentence for a failure the provider adapter did not describe itself. The library's
+     * own text is logged, never returned: it can name an internal upstream address, or be a
+     * null-pointer message that says nothing to the caller.
+     */
+    private String failed(Throwable cause) {
+        log.warn("Provider [{}] call failed: {}: {}", delegate.name(),
+                cause == null ? "unknown" : cause.getClass().getSimpleName(),
+                cause == null ? "" : cause.getMessage());
+        for (Throwable t = cause; t != null; t = t.getCause()) {
+            if (t instanceof java.io.IOException
+                    || t instanceof org.springframework.web.client.ResourceAccessException) {
+                return "Provider " + delegate.name() + " could not be reached";
+            }
+        }
+        return "Provider " + delegate.name() + " call failed unexpectedly";
     }
 }

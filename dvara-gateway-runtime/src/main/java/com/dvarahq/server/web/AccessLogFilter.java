@@ -134,7 +134,11 @@ public class AccessLogFilter extends OncePerRequestFilter {
         putIfPresent(request, ATTR_TOKENS_PROMPT, "tokens_prompt");
         putIfPresent(request, ATTR_TOKENS_COMPLETION, "tokens_completion");
         putIfPresent(request, ATTR_TOKENS_TOTAL, "tokens_total");
-        putIfPresent(request, ATTR_ERROR_CODE, "error_code");
+        // Lower case, as the API returns it: the log and the reply must name one code the same way.
+        Object errorCode = request.getAttribute(ATTR_ERROR_CODE);
+        if (errorCode != null) {
+            MDC.put("error_code", errorCode.toString().toLowerCase(java.util.Locale.ROOT));
+        }
 
         // Priority tier
         Object priorityTier = request.getAttribute("priorityTier");
