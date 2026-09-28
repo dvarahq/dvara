@@ -97,7 +97,7 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
         // Estimate tokens for pre-request token budget check
         int estimatedTokens = 0;
         HttpServletRequest effectiveRequest = request;
-        if (tokenEstimator != null && isChatCompletionRequest(request)) {
+        if (tokenEstimator != null && isTokenMeteredRequest(request)) {
             int contentLength = request.getContentLength();
             // Skip estimation for oversized bodies (avoids OOM)
             if (contentLength < 0 || contentLength <= MAX_ESTIMATION_BODY_BYTES) {
@@ -184,9 +184,18 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
         chain.doFilter(effectiveRequest, response);
     }
 
-    private boolean isChatCompletionRequest(HttpServletRequest request) {
-        return "POST".equalsIgnoreCase(request.getMethod())
-                && request.getRequestURI().contains("/chat/completions");
+    /**
+     * The calls that spend tokens, so each is held to the tokens-per-minute allowance before it is sent.
+     * Chat alone was: /v1/responses was only charged after it was served, so a caller using it alone was
+     * never refused, and embeddings were never charged at all. A /v1/responses call settles against this
+     * reservation like a chat call does; an embedding keeps its estimate as its charge.
+     */
+    private boolean isTokenMeteredRequest(HttpServletRequest request) {
+        if (!"POST".equalsIgnoreCase(request.getMethod())) {
+            return false;
+        }
+        String uri = request.getRequestURI();
+        return uri.contains("/chat/completions") || uri.endsWith("/v1/responses") || uri.endsWith("/v1/embeddings");
     }
 
     /**
