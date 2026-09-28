@@ -163,13 +163,15 @@ class ProviderDispatcherTest {
         verify(unhealthy, never()).chat(any());
     }
 
+    /**
+     * Every capable provider paused by its circuit is a temporary outage: 503 PROVIDER_CIRCUIT_OPEN, which a
+     * client retries. Handing the list to the strategy gave 400 NO_PROVIDER from any strategy that drops
+     * unhealthy providers itself, saying no provider was configured.
+     */
     @Test
-    void chat_allUnhealthy_fallsThroughToStrategyWithFullList() {
+    void chat_allUnhealthy_isATemporaryOutageNotAMissingProvider() {
         LlmProvider providerA = mockProvider("openai", true);
         LlmProvider providerB = mockProvider("anthropic", true);
-
-        ChatResponse expected = chatResponse("fallthrough-1", "gpt-4o");
-        when(providerA.chat(any())).thenReturn(expected);
 
         ProviderHealthRegistry allUnhealthy = name -> ProviderHealthStatus.UNHEALTHY;
 
@@ -178,9 +180,11 @@ class ProviderDispatcherTest {
                 TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
-        ChatResponse result = dispatcher.chat(chatRequest("gpt-4o"));
-
-        assertThat(result.getId()).isEqualTo("fallthrough-1");
+        assertThatThrownBy(() -> dispatcher.chat(chatRequest("gpt-4o")))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(ex -> assertThat(((GatewayException) ex).getCode()).isEqualTo("PROVIDER_CIRCUIT_OPEN"))
+                .hasMessageContaining("openai").hasMessageNotContaining("configured");
+        verify(providerA, never()).chat(any());
     }
 
     // -------------------------------------------------------------------------
