@@ -285,12 +285,15 @@ public class AnthropicProvider extends AbstractLlmProvider {
                     case ContentBlock.TextBlock tb -> Map.<String, Object>of(
                             "type", "text",
                             "text", tb.text());
+                    // A URL is Anthropic's url source; wrapped as base64 it was refused.
                     case ContentBlock.ImageBlock ib -> Map.<String, Object>of(
                             "type", "image",
-                            "source", Map.of(
-                                    "type", "base64",
-                                    "media_type", ib.mediaType(),
-                                    "data", ib.data()));
+                            "source", ib.isUrl()
+                                    ? Map.of("type", "url", "url", ib.data())
+                                    : Map.of(
+                                            "type", "base64",
+                                            "media_type", ib.mediaType(),
+                                            "data", ib.data()));
                     // No default: the switch is exhaustive over ContentBlock's permitted kinds, so a
                     // new kind is a compile error here rather than a block silently relayed as text.
                 })

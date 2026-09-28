@@ -246,6 +246,26 @@ class InMemoryResponseCacheTest {
                 .isEmpty();
     }
 
+    @Test
+    void theSamePictureAtAnotherDetailIsADifferentCall() {
+        var cache = new InMemoryResponseCache(10, 300);
+        cache.put(withImage("aGVsbG8=", null), response("cat"));
+
+        assertThat(cache.get(withImage("aGVsbG8=", "low")))
+                .as("detail: low costs a fraction of the tokens; it is not the same call")
+                .isEmpty();
+    }
+
+    private static ChatRequest withImage(String data, String detail) {
+        return ChatRequest.builder().model("gpt-4o")
+                .messages(List.of(MultimodalMessage.builder().role("user")
+                        .content(List.of(new ContentBlock.TextBlock("what is this?"),
+                                new ContentBlock.ImageBlock("image/png", data, detail)))
+                        .build()))
+                .metadata(Map.of("workspace_id", "acme"))
+                .build();
+    }
+
     private static ChatRequest conversation(String callId, String resultFor, String arguments) {
         return ChatRequest.builder().model("gpt-4o")
                 .messages(List.of(

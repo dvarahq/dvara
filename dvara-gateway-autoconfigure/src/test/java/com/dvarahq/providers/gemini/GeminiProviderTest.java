@@ -553,6 +553,23 @@ class GeminiProviderTest {
         server.verify();
     }
 
+    @Test
+    void chat_imageUrl_isRefusedClearly_notSentAsGarbage() {
+        // Gemini's inlineData is base64; an https URL wrapped as base64 would reach it as nonsense.
+        ChatRequest request = ChatRequest.builder()
+                .model("gemini-2.0-flash")
+                .messages(List.of(MultimodalMessage.builder().role("user")
+                        .content(List.of(new ContentBlock.TextBlock("Describe"),
+                                new ContentBlock.ImageBlock(ContentBlock.ImageBlock.URL_MEDIA_TYPE,
+                                        "https://example.com/sofa.jpg")))
+                        .build()))
+                .build();
+
+        assertThatThrownBy(() -> provider.chat(request))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("base64");
+    }
+
     // -------------------------------------------------------------------------
     // listModels
     // -------------------------------------------------------------------------

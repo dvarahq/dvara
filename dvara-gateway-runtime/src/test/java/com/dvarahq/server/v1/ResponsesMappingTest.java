@@ -110,6 +110,34 @@ class ResponsesMappingTest {
     }
 
     @Test
+    void input_imageItem_keepsItsUrlAndDetail() {
+        // The Responses API puts detail on the part; a URL stays a URL.
+        Map<String, Object> imagePart = Map.of("type", "input_image",
+                "image_url", "https://example.com/sofa.jpg", "detail", "low");
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("gpt-4o")
+                .input(List.of(Map.of("role", "user", "content", List.of(imagePart)))).build());
+
+        ContentBlock.ImageBlock img = (ContentBlock.ImageBlock) internal.getMessages().get(0).getContent().get(0);
+        assertThat(img.isUrl()).isTrue();
+        assertThat(img.data()).isEqualTo("https://example.com/sofa.jpg");
+        assertThat(img.detail()).isEqualTo("low");
+    }
+
+    @Test
+    void chatImagePart_readsDetailFromImageUrl() {
+        // Chat Completions puts detail inside image_url.
+        ContentBlock.ImageBlock img = (ContentBlock.ImageBlock) ChatInputs.chatPart(Map.of("type", "image_url",
+                "image_url", Map.of("url", "data:image/png;base64,AAAA", "detail", "low")));
+        assertThat(img.mediaType()).isEqualTo("image/png");
+        assertThat(img.data()).isEqualTo("AAAA");
+        assertThat(img.detail()).isEqualTo("low");
+
+        ContentBlock.ImageBlock none = (ContentBlock.ImageBlock) ChatInputs.chatPart(Map.of("type", "image_url",
+                "image_url", Map.of("url", "data:image/png;base64,AAAA")));
+        assertThat(none.detail()).isNull();
+    }
+
+    @Test
     void scalarParams_mapToChatRequest() {
         ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("gpt-4o")
                 .input("hi").maxOutputTokens(256).temperature(0.7).topP(0.9).stream(true).build());
