@@ -81,4 +81,11 @@ public class ResponseRequest {
     private Object toolChoice;
     private Object prompt;
     private List<String> include;
+
+    /** The caller's end-user id (#54): relayed to the provider and recorded for cost attribution, as on Chat Completions (#33). */
+    private String user;
+
+    /** OpenAI's newer name for the end-user id; wins over {@link #user} when both are sent (#54). */
+    @JsonProperty("safety_identifier")
+    private String safetyIdentifier;
 }
