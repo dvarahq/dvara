@@ -16,6 +16,7 @@
 package com.dvarahq.policy.streaming;
 
 import com.dvarahq.core.audit.AuditEvent;
+import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.audit.AuditWriter;
 import com.dvarahq.core.enforcement.AuditIntent;
 import com.dvarahq.core.enforcement.ContinuationGroup;
@@ -119,6 +120,12 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
     private boolean scanIncomplete;
     private boolean scanFailed;
     private boolean truncated;
+    /**
+     * Why the upstream stopped early, rethrown to the caller once what may be delivered has been. The
+     * guard used to close a broken stream with its own normal terminal chunk, so a cut-off answer reached
+     * the client with a finish reason the upstream never sent, and was recorded as complete.
+     */
+    private RuntimeException upstreamFailure;
     private boolean cancellationScheduled;
     private int piiEntityCount;
     private int guardrailDetectionCount;
@@ -167,6 +174,9 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
     @Override
     public boolean hasNext() {
         fill();
+        if (outQueue.isEmpty() && upstreamFailure != null && !terminated) {
+            throw upstreamFailure;
+        }
         return !outQueue.isEmpty();
     }
 
@@ -202,11 +212,20 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
                 }
             } catch (RuntimeException e) {
                 log.warn("Upstream failed for workspace {}: {}", workspaceId, e.getMessage());
+                upstreamFailure = e;
                 finalise(true);
                 return;
             }
             if (!more) {
                 upstreamDone = true;
+                if (!deliveredTerminal) {
+                    // No terminal chunk: the upstream stopped before it finished. The same rule the
+                    // caller applies to a stream with no terminal, which this guard would otherwise hide.
+                    upstreamFailure = new GatewayException("PROVIDER_ERROR",
+                            "The upstream stream ended before it finished; the answer is incomplete");
+                    finalise(true);
+                    return;
+                }
                 finalise(false);
                 return;
             }
@@ -585,6 +604,16 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
      * call as a single fragment carrying its complete arguments.
      */
     private void emitTerminal(String text, List<ToolCallDelta> calls) {
+        if (upstreamFailure != null) {
+            // What was received and enforced still goes out, but as an ordinary chunk: the failure is
+            // rethrown after it, and no finish the upstream did not send is invented.
+            outQueue.add(SseChunk.builder()
+                    .id(lastId).model(lastModel)
+                    .delta(text.isEmpty() ? null : text)
+                    .toolCalls(calls.isEmpty() ? null : List.copyOf(calls))
+                    .done(false).build());
+            return;
+        }
         outQueue.add(SseChunk.builder()
                 .id(lastId).model(lastModel)
                 .delta(text.isEmpty() ? null : text)
@@ -594,7 +623,7 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
     }
 
     private void emitTerminalIfNeeded() {
-        if (!deliveredTerminal) {
+        if (!deliveredTerminal && upstreamFailure == null) {
             outQueue.add(SseChunk.builder()
                     .id(lastId).model(lastModel)
                     .finishReason(terminalFinishReason()).usage(lastUsage).done(true).build());

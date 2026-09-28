@@ -177,6 +177,10 @@ public class OllamaProvider extends AbstractLlmProvider {
     }
 
     private ChatResponse mapToInternal(OllamaResponse resp, String model) {
+        if (resp == null || resp.getChoices() == null || resp.getChoices().isEmpty()) {
+            // An empty reply is the upstream's failure. Left alone it became a null-pointer message.
+            throw new GatewayException("PROVIDER_ERROR", "Ollama" + " returned an empty response");
+        }
         List<ChatResponse.Choice> choices = resp.getChoices().stream()
                 .map(c -> ChatResponse.Choice.builder()
                         .index(c.getIndex())

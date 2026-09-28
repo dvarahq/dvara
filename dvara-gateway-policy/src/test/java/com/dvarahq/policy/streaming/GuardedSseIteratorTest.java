@@ -42,6 +42,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -412,12 +413,37 @@ class GuardedSseIteratorTest {
 
         var guarded = new GuardedSseIterator(upstream, piiDetector, guardrailDetector,
                 auditWriter, "t1", config);
-        List<SseChunk> result = drain(guarded);
+        List<SseChunk> result = new ArrayList<>();
 
-        // Should flush buffered content and terminate
-        assertThat(result.getLast().isDone()).isTrue();
-        // Buffered content is flushed with "stop"; empty buffer would produce "content_filter"
+        // What arrived is delivered, then the upstream's own failure: the caller ends the stream with an
+        // error. The guard used to close with a "stop" terminal the upstream never sent.
+        assertThatThrownBy(() -> {
+            while (guarded.hasNext()) {
+                result.add(guarded.next());
+            }
+        }).hasMessage("Connection reset");
         assertThat(result.stream().anyMatch(c -> c.getDelta() != null && c.getDelta().contains("Hello"))).isTrue();
+        assertThat(result).noneMatch(SseChunk::isDone);
+    }
+
+    /** An upstream that ends with no terminal chunk stopped before it finished, and is reported so. */
+    @Test
+    void anUpstreamEndingWithoutItsTerminalIsAFailureNotAStop() {
+        var config = config(PiiAction.LOG, GuardrailAction.LOG);
+        var upstream = List.of(SseChunk.builder().id("c").model("m").delta("half an").done(false).build())
+                .iterator();
+        var guarded = new GuardedSseIterator(upstream, piiDetector, guardrailDetector,
+                auditWriter, "t1", config);
+        List<SseChunk> result = new ArrayList<>();
+
+        assertThatThrownBy(() -> {
+            while (guarded.hasNext()) {
+                result.add(guarded.next());
+            }
+        }).isInstanceOf(com.dvarahq.core.exception.GatewayException.class).hasMessageContaining("incomplete");
+        assertThat(result).noneMatch(SseChunk::isDone);
+        assertThat(auditEvents).anyMatch(e -> "STREAMING_ENFORCEMENT_SUMMARY".equals(e.eventType())
+                && Boolean.TRUE.equals(e.payload().get("truncated")));
     }
 
     // ---- Passthrough when both PII and guardrail disabled ----
@@ -1166,7 +1192,13 @@ class GuardedSseIteratorTest {
 
         var guarded = new GuardedSseIterator(failing, piiDetector, guardrailDetector,
                 auditWriter, "t1", config);
-        String fullText = drain(guarded).stream()
+        List<SseChunk> received = new ArrayList<>();
+        assertThatThrownBy(() -> {
+            while (guarded.hasNext()) {
+                received.add(guarded.next());
+            }
+        }).hasMessage("provider connection reset");
+        String fullText = received.stream()
                 .map(SseChunk::getDelta).filter(d -> d != null).reduce("", String::concat);
 
         assertThat(fullText).contains("a partial answer");
