@@ -570,6 +570,41 @@ class GeminiProviderTest {
                 .hasMessageContaining("base64");
     }
 
+    /** #55: with image fetching on, the URL is fetched and its bytes inlined as Gemini's inlineData. */
+    @Test
+    void chat_imageUrl_withFetchingOn_isFetchedAndInlined() {
+        java.util.List<String> fetched = new java.util.ArrayList<>();
+        provider.setImageFetcher(stubFetcher(fetched));
+        server.expect(requestTo(containsString("generateContent")))
+                .andExpect(jsonPath("$.contents[0].parts[1].inlineData.mimeType").value("image/png"))
+                .andExpect(jsonPath("$.contents[0].parts[1].inlineData.data").value("iVBORw0KGgo="))
+                .andRespond(withSuccess(geminiSuccessBody("STOP", "A sofa.", 300, 3), MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder()
+                .model("gemini-2.0-flash")
+                .messages(List.of(MultimodalMessage.builder().role("user")
+                        .content(List.of(new ContentBlock.TextBlock("Describe"),
+                                new ContentBlock.ImageBlock(ContentBlock.ImageBlock.URL_MEDIA_TYPE,
+                                        "https://example.com/sofa.jpg")))
+                        .build()))
+                .build());
+
+        server.verify();
+        assertThat(fetched).containsExactly("https://example.com/sofa.jpg");
+    }
+
+    /** A fetcher that answers every URL with one PNG, standing in for the real fetch (#55). */
+    private static com.dvarahq.providers.support.ImageFetcher stubFetcher(java.util.List<String> fetched) {
+        return new com.dvarahq.providers.support.ImageFetcher(true, 1024, java.time.Duration.ofSeconds(1),
+                java.util.Set.of("image/png")) {
+            @Override
+            public FetchedImage fetch(String url) {
+                fetched.add(url);
+                return new FetchedImage("image/png", "iVBORw0KGgo=");
+            }
+        };
+    }
+
     // -------------------------------------------------------------------------
     // listModels
     // -------------------------------------------------------------------------

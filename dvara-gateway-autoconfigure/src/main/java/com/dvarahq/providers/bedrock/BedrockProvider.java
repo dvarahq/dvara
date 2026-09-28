@@ -15,6 +15,7 @@
  */
 package com.dvarahq.providers.bedrock;
 
+import com.dvarahq.providers.support.ImageFetcher;
 import com.dvarahq.providers.support.ProviderErrors;
 
 import com.dvarahq.core.exception.GatewayException;
@@ -62,6 +63,13 @@ public class BedrockProvider extends AbstractLlmProvider {
     private static final DateTimeFormatter AMZ_DATE = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
 
     private final RestClient restClient;
+    /** Fetches an https image URL to inline it (#55); off unless the operator turned fetching on. */
+    private ImageFetcher imageFetcher = ImageFetcher.DISABLED;
+
+    /** Lets an https image URL be fetched and inlined (#55), with the fetcher's own address and size checks. */
+    public void setImageFetcher(ImageFetcher imageFetcher) {
+        this.imageFetcher = imageFetcher != null ? imageFetcher : ImageFetcher.DISABLED;
+    }
 
     public BedrockProvider(SecretProvider secretProvider, String region, RestClient.Builder builder) {
         super("bedrock");
@@ -317,8 +325,16 @@ public class BedrockProvider extends AbstractLlmProvider {
             for (ContentBlock b : msg.getContent()) {
                 blocks.add(switch (b) {
                     case ContentBlock.TextBlock tb -> Map.<String, Object>of("text", tb.text());
-                    case ContentBlock.ImageBlock ib when ib.isUrl() -> throw new GatewayException("UNSUPPORTED_CAPABILITY",
-                            "Bedrock takes images as base64 data: URLs, not https URLs");
+                    case ContentBlock.ImageBlock ib when ib.isUrl() -> {
+                        if (!imageFetcher.enabled()) {
+                            throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                                    "Bedrock takes images as base64 data: URLs, not https URLs");
+                        }
+                        ImageFetcher.FetchedImage image = imageFetcher.fetch(ib.data());
+                        yield Map.<String, Object>of("image", Map.of(
+                                "format", stripImageMimePrefix(image.mediaType()),
+                                "source", Map.of("bytes", image.base64())));
+                    }
                     case ContentBlock.ImageBlock ib -> Map.<String, Object>of(
                             "image", Map.of(
                                     "format", stripImageMimePrefix(ib.mediaType()),

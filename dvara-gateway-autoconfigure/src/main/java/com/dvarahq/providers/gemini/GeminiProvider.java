@@ -15,6 +15,7 @@
  */
 package com.dvarahq.providers.gemini;
 
+import com.dvarahq.providers.support.ImageFetcher;
 import com.dvarahq.providers.support.ProviderErrors;
 
 import com.dvarahq.core.exception.GatewayException;
@@ -57,6 +58,8 @@ public class GeminiProvider extends AbstractLlmProvider {
 
     private final RestClient restClient;
     private final SecretProvider secretProvider;
+    /** Fetches an https image URL to inline it (#55); off unless the operator turned fetching on. */
+    private ImageFetcher imageFetcher = ImageFetcher.DISABLED;
 
     public GeminiProvider(SecretProvider secretProvider, String baseUrl, RestClient.Builder builder) {
         super("gemini");
@@ -64,6 +67,11 @@ public class GeminiProvider extends AbstractLlmProvider {
         this.restClient = builder
                 .baseUrl(baseUrl)
                 .build();
+    }
+
+    /** Lets an https image URL be fetched and inlined (#55), with the fetcher's own address and size checks. */
+    public void setImageFetcher(ImageFetcher imageFetcher) {
+        this.imageFetcher = imageFetcher != null ? imageFetcher : ImageFetcher.DISABLED;
     }
 
     public GeminiProvider(SecretProvider secretProvider, String baseUrl) {
@@ -257,8 +265,14 @@ public class GeminiProvider extends AbstractLlmProvider {
             for (ContentBlock b : msg.getContent()) {
                 parts.add(switch (b) {
                     case ContentBlock.TextBlock tb -> Map.<String, Object>of("text", tb.text());
-                    case ContentBlock.ImageBlock ib when ib.isUrl() -> throw new GatewayException("UNSUPPORTED_CAPABILITY",
-                            "Gemini takes images as base64 data: URLs on this gateway, not https URLs");
+                    case ContentBlock.ImageBlock ib when ib.isUrl() -> {
+                        if (!imageFetcher.enabled()) {
+                            throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                                    "Gemini takes images as base64 data: URLs on this gateway, not https URLs");
+                        }
+                        ImageFetcher.FetchedImage image = imageFetcher.fetch(ib.data());
+                        yield Map.<String, Object>of("inlineData", Map.of("mimeType", image.mediaType(), "data", image.base64()));
+                    }
                     case ContentBlock.ImageBlock ib -> Map.<String, Object>of(
                             "inlineData", Map.of(
                                     "mimeType", ib.mediaType(),
