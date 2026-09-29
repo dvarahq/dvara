@@ -188,7 +188,7 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
      * The calls that spend tokens, so each is held to the tokens-per-minute allowance before it is sent.
      * Chat alone was: /v1/responses was only charged after it was served, so a caller using it alone was
      * never refused, and embeddings were never charged at all. A /v1/responses call settles against this
-     * reservation like a chat call does; an embedding keeps its estimate as its charge.
+     * reservation like a chat call does, and so does an embedding.
      */
     private boolean isTokenMeteredRequest(HttpServletRequest request) {
         if (!"POST".equalsIgnoreCase(request.getMethod())) {

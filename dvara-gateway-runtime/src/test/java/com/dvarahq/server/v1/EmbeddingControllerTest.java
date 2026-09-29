@@ -106,6 +106,32 @@ class EmbeddingControllerTest {
                 .andExpect(jsonPath("$.usage.total_tokens").value(5));
     }
 
+    /** The filter reserved an estimate: the actual settles against it, so the call is charged once. */
+    @Test
+    void usage_settlesAgainstTheFiltersReservation_notOnTopOfIt() throws Exception {
+        when(dispatcher.embed(any())).thenReturn(EmbeddingResponse.builder()
+                .object("list").model("text-embedding-3-small")
+                .data(List.of(EmbeddingResponse.EmbeddingData.builder().object("embedding").index(0)
+                        .embedding(List.of(0.1)).build()))
+                .usage(EmbeddingResponse.Usage.builder().promptTokens(5).totalTokens(5).build())
+                .build());
+
+        mockMvc.perform(post("/v1/embeddings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\":\"text-embedding-3-small\",\"input\":\"Hello\"}"))
+                .andExpect(status().isOk());
+
+        // The rate-limit filter runs in this slice and reserves its estimate for the body; the settlement
+        // hands exactly that back, with the actual 5.
+        org.mockito.ArgumentCaptor<Integer> estimate = org.mockito.ArgumentCaptor.forClass(Integer.class);
+        org.mockito.Mockito.verify(rateLimiter).checkLimit(any(), estimate.capture(), any());
+        assertThat(estimate.getValue()).isPositive();
+        org.mockito.Mockito.verify(rateLimiter).reconcileTokens(any(), org.mockito.ArgumentMatchers.eq(estimate.getValue()),
+                org.mockito.ArgumentMatchers.eq(5), org.mockito.ArgumentMatchers.anyLong());
+        org.mockito.Mockito.verify(rateLimiter, org.mockito.Mockito.never())
+                .reconcileTokens(any(), org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.anyInt());
+    }
+
     @Test
     void dimensions_reachTheProviderRatherThanBeingDroppedAsAnUnknownField() throws Exception {
         // An unknown JSON property is not an error, so if the DTO dropped this field a caller asking
