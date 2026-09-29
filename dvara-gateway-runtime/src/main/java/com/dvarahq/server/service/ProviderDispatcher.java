@@ -144,6 +144,7 @@ public class ProviderDispatcher {
         final ChatRequest req = applyResolvedModel(request, routingCtx);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
+        setServedModelAttribute(req.getModel());
         Observation obs = Observation.createNotStarted("gateway.provider.chat", observationRegistry)
                 .lowCardinalityKeyValue("provider", primary.name())
                 .lowCardinalityKeyValue("model", req.getModel());
@@ -203,6 +204,7 @@ public class ProviderDispatcher {
         final ChatRequest req = applyResolvedModel(request, routingCtx);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
+        setServedModelAttribute(req.getModel());
         Observation obs = Observation.createNotStarted("gateway.provider.stream", observationRegistry)
                 .lowCardinalityKeyValue("provider", primary.name())
                 .lowCardinalityKeyValue("model", req.getModel());
@@ -465,6 +467,7 @@ public class ProviderDispatcher {
                         route.getId(), failedProvider.name(), target.describe(), i + 1);
                 metrics.recordFallback(failedProvider.name(), provider.name());
                 setProviderAttribute(provider.name());
+                setServedModelAttribute(mapped.getModel());   // billed as the model that served it
                 clearCredentialFingerprint();
                 return call.execute(provider, mapped);
             } catch (GatewayException e) {
@@ -664,6 +667,21 @@ public class ProviderDispatcher {
         if (format instanceof ResponseFormat.JsonObject) return "json_object";
         if (format instanceof ResponseFormat.Text) return "text";
         return "unknown";
+    }
+
+    /**
+     * Request attribute naming the model the call was actually sent to: the caller's, a pinned or tiered
+     * route's, or a fallback target's mapped model. Usage and cost are recorded against it, so a call a
+     * backup model served is priced as that model, not as the one the caller named.
+     */
+    public static final String SERVED_MODEL_ATTR = "gateway.served.model";
+
+    private void setServedModelAttribute(String model) {
+        ServletRequestAttributes attrs =
+                (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if (attrs != null && model != null) {
+            attrs.getRequest().setAttribute(SERVED_MODEL_ATTR, model);
+        }
     }
 
     private void setProviderAttribute(String providerName) {

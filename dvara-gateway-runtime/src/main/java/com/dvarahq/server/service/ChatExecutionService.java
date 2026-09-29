@@ -386,7 +386,7 @@ public class ChatExecutionService {
         Attribution who = Attribution.capture(httpRequest);
         if (who.apiKeyId() == null || who.apiKeyId().isBlank()) {
             who = new Attribution(settlement.limiterKey(), ctx.getWorkspaceId(), who.provider(),
-                    who.credentialFingerprint());
+                    who.credentialFingerprint(), who.servedModel());
         }
         persistStreamingUsage(httpRequest, streamRequest, outputText, ctx, latencyMs, error,
                 reportedUsage, settlement, who);
@@ -470,8 +470,9 @@ public class ChatExecutionService {
         calculateCost(who, governedRequest, synthetic);
     }
 
-    private void persistTokenUsage(Attribution who, ChatRequest internalRequest,
+    private void persistTokenUsage(Attribution who, ChatRequest callerRequest,
                                    ChatResponse response, boolean estimated, String cacheStatus) {
+        ChatRequest internalRequest = who.billed(callerRequest);
         ChatResponse.Usage usage = response.getUsage();
         int inputTokens = usage != null ? usage.getPromptTokens() : 0;
         int outputTokens = usage != null ? usage.getCompletionTokens() : 0;
@@ -503,7 +504,8 @@ public class ChatExecutionService {
         usageListeners.forEach(listener -> listener.usageRecorded(workspaceId));
     }
 
-    private void calculateCost(Attribution who, ChatRequest internalRequest, ChatResponse response) {
+    private void calculateCost(Attribution who, ChatRequest callerRequest, ChatResponse response) {
+        ChatRequest internalRequest = who.billed(callerRequest);
         String apiKeyId = who.apiKeyId();
         String provider = who.provider();
         String workspaceId = who.workspaceId();
@@ -543,7 +545,23 @@ public class ChatExecutionService {
      * first two before the loop and the rest right after {@code openStream}, and the tail never
      * reads the request again.
      */
-    public record Attribution(String apiKeyId, String workspaceId, String provider, String credentialFingerprint) {
+    public record Attribution(String apiKeyId, String workspaceId, String provider, String credentialFingerprint,
+                              String servedModel) {
+
+        public Attribution(String apiKeyId, String workspaceId, String provider, String credentialFingerprint) {
+            this(apiKeyId, workspaceId, provider, credentialFingerprint, null);
+        }
+
+        /**
+         * The request as it is recorded: with the model that served it, which the dispatcher stamps. A call a
+         * route's backup served is priced as the backup's model; without this it was recorded as the
+         * caller's model on the backup's provider, a pair with no price, and wrote no cost at all.
+         */
+        public ChatRequest billed(ChatRequest request) {
+            return servedModel == null || servedModel.equals(request.getModel())
+                    ? request : request.toBuilder().model(servedModel).build();
+        }
+
         /**
          * The half that is known once the stream is open — the provider the dispatcher stamped and
          * the credential the interceptor recorded while opening it — read from the request at that
@@ -554,7 +572,9 @@ public class ChatExecutionService {
             try {
                 String p = (String) httpRequest.getAttribute(AccessLogFilter.ATTR_PROVIDER);
                 String f = (String) httpRequest.getAttribute(CredentialInterceptor.FINGERPRINT_ATTRIBUTE);
-                return new Attribution(apiKeyId, workspaceId, p != null ? p : provider, f != null ? f : credentialFingerprint);
+                String m = (String) httpRequest.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR);
+                return new Attribution(apiKeyId, workspaceId, p != null ? p : provider,
+                        f != null ? f : credentialFingerprint, m != null ? m : servedModel);
             } catch (RuntimeException recycled) {
                 return this;
             }
@@ -568,7 +588,8 @@ public class ChatExecutionService {
                     // Which upstream credential this call went out under, stamped by
                     // CredentialInterceptor. Null on a cache hit and on providers that need no
                     // secret: neither is attributable egress.
-                    (String) httpRequest.getAttribute(CredentialInterceptor.FINGERPRINT_ATTRIBUTE));
+                    (String) httpRequest.getAttribute(CredentialInterceptor.FINGERPRINT_ATTRIBUTE),
+                    (String) httpRequest.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR));
         }
     }
 
