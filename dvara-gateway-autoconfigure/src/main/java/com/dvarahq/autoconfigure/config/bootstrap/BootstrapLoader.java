@@ -320,6 +320,7 @@ public class BootstrapLoader implements ApplicationRunner {
                 .modelPattern(entry.getModel())
                 .strategy(strategy)
                 .providers(providers)
+                .fallbacks(fallbacks(entry))
                 .pinnedModelVersion(entry.getPinnedModelVersion())
                 .version(1)
                 .createdAt(now)
@@ -349,14 +350,22 @@ public class BootstrapLoader implements ApplicationRunner {
             }
         }
 
-        if (entry.getFallback() != null && !entry.getFallback().isBlank()) {
-            providers.add(Route.RouteProvider.builder()
-                    .provider(entry.getFallback())
-                    .weight(0)
-                    .build());
-        }
-
         return providers;
+    }
+
+    /** The route's fallback chain (#7): the single-provider {@code fallback:} first, then {@code fallbacks:}. */
+    private static List<com.dvarahq.core.routing.RouteConfig.FallbackTarget> fallbacks(BootstrapConfig.RouteEntry entry) {
+        List<com.dvarahq.core.routing.RouteConfig.FallbackTarget> chain = new ArrayList<>();
+        if (entry.getFallback() != null && !entry.getFallback().isBlank()) {
+            chain.add(new com.dvarahq.core.routing.RouteConfig.FallbackTarget(entry.getFallback().trim(), null));
+        }
+        if (entry.getFallbacks() != null) {
+            for (BootstrapConfig.FallbackEntry f : entry.getFallbacks()) {
+                chain.add(new com.dvarahq.core.routing.RouteConfig.FallbackTarget(
+                        f.getProvider() == null ? null : f.getProvider().trim(), f.getModel()));
+            }
+        }
+        return List.copyOf(chain);
     }
 
     private String resolveWorkspaceId(String workspaceName) {
@@ -440,7 +449,12 @@ public class BootstrapLoader implements ApplicationRunner {
                 .pinnedModelVersion(route.getPinnedModelVersion())
                 .costTolerancePct(route.getCostTolerancePct() != null ? route.getCostTolerancePct() : 0)
                 .modelTiers(route.getModelTiers())
+                .fallbacks(route.getFallbacks() == null ? List.of() : route.getFallbacks())
                 .build();
+        // #7 AC-CPF-03: a bad chain refuses the table, so no partial chain becomes active.
+        if (config.invalidFallbacks() != null) {
+            throw new IllegalStateException(config.invalidFallbacks());
+        }
 
         return new RoutingEngine.ResolvedRoute(config, strategyFactory.create(config));
     }

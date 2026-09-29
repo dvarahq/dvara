@@ -313,7 +313,10 @@ class BootstrapLoaderTest {
 
         assertThat(routes.get(1).getId()).isEqualTo("claude-route");
         assertThat(routes.get(1).getStrategy()).isEqualTo("weighted");
-        assertThat(routes.get(1).getProviders()).hasSize(3); // 2 weighted + 1 fallback
+        // #7: the fallback is the route's chain, no longer a weight-0 provider a strategy could pick.
+        assertThat(routes.get(1).getProviders()).hasSize(2);
+        assertThat(routes.get(1).getFallbacks())
+                .containsExactly(new com.dvarahq.core.routing.RouteConfig.FallbackTarget("openai", null));
     }
 
     /** An application that stores configuration without serving requests has no routing table. */

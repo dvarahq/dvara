@@ -83,7 +83,12 @@ public class YamlRoutePublisher implements ApplicationRunner {
                 .pinnedModelVersion(route.getPinnedModelVersion())
                 .costTolerancePct(route.getCostTolerancePct() != null ? route.getCostTolerancePct() : 0)
                 .modelTiers(route.getModelTiers())
+                .fallbacks(route.getFallbacks() == null ? List.of() : route.getFallbacks())
                 .build();
+        // #7 AC-CPF-03: a bad chain refuses the table, so no partial chain becomes active.
+        if (config.invalidFallbacks() != null) {
+            throw new IllegalStateException(config.invalidFallbacks());
+        }
         return new RoutingEngine.ResolvedRoute(config, strategyFactory.create(config));
     }
 

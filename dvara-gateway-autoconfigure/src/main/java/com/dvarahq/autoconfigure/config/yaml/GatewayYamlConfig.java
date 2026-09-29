@@ -96,8 +96,22 @@ public class GatewayYamlConfig {
         private List<RouteProviderEntry> providers;
         private String fallback;
 
+        /**
+         * The ordered fallback chain (#7): each a provider and, for a backup in another model family, the
+         * model to ask it for. {@code fallback} is the older single-provider form, read as a one-entry chain
+         * with the request's own model.
+         */
+        private List<FallbackEntry> fallbacks;
+
         @JsonProperty("pinned_model_version")
         private String pinnedModelVersion;
+    }
+
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class FallbackEntry {
+        private String provider;
+        private String model;
     }
 
     @Data

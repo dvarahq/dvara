@@ -230,7 +230,8 @@ key as its API key.
   Groq, Qwen, DeepSeek, Moonshot, ChatGLM, Grok and Ollama. See [Supported providers](#supported-providers).
 - ✅ **Routing strategies** — by model prefix, round-robin, weighted split or canary, with failover.
 - ✅ **Retries, circuit breakers and timeouts** — on by default, adjustable per provider, with
-  fallback to another provider.
+  failover along a route's own chain of backup providers and models. See
+  [Failover to another provider](#failover-to-another-provider).
 - ✅ **Streaming**, including streamed tool calls where the provider relays them.
 - ✅ **Response cache** — exact-match, in memory, per process. Off until
   `dvara.llm-gateway.cache.in-memory.enabled` is `true`.
@@ -352,6 +353,55 @@ condition applies only to a request that sets `max_tokens`. A rule's `action` is
 
 Anything Spring Boot accepts works the same way here: `--server.port=9090` on the command line, or
 `SERVER_PORT=9090` in the environment.
+
+### Failover to another provider
+
+A route can name where its requests go when the provider serving them fails: an ordered chain of
+provider and model. Say which model each backup is asked for; the gateway never picks one for you.
+
+```yaml
+providers:
+  - type: openai
+    api_key: ${OPENAI_API_KEY}
+  - type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+
+routes:
+  - id: support-assistant
+    model: gpt-4o
+    provider: openai
+    fallbacks:
+      - provider: anthropic
+        model: claude-sonnet-4-5
+```
+
+The application keeps sending `gpt-4o`:
+
+```bash
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $DVARA_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Reply with the word ready."}]}'
+```
+
+If OpenAI fails with a server error, an open circuit or a rate limit, after its retries, the same
+request goes to Anthropic as `claude-sonnet-4-5`, on Anthropic's own key. The answer is an ordinary
+chat completion whose `model` is the model that served it (`claude-sonnet-4-5`). The gateway logs
+`Route [support-assistant]: falling back from [openai] to anthropic/claude-sonnet-4-5`, and counts it
+in `gateway_fallbacks_total{from_provider="openai",to_provider="anthropic"}`.
+
+- Only the route's own chain is tried, in order. A route without `fallbacks` does not fail over. A
+  request that matches no route still falls back to another configured provider serving the same model.
+- A backup is skipped if it doesn't serve its model, can't take what the request needs (tools, images,
+  a JSON schema), is paused by its circuit breaker, or the workspace's policy doesn't allow its model.
+  If no backup can take the request, the answer is `503 failover_capability_mismatch`; if every backup
+  that was tried failed, the primary's error.
+- A request the provider rejected (`400`), a policy denial and an authentication failure never fail over.
+- A stream fails over only if it fails to open. Once it has started, an error ends it.
+- A target without `model` is asked for the request's own model, for a provider serving the same one
+  (OpenAI and Azure OpenAI). `fallback: <provider>` is the same as a one-entry chain without a model.
+- At most `dvara.llm-gateway.resilience.fallback.max-attempts` backups are tried (default `3`), none
+  starting more than `...fallback.deadline` after the first attempt (default `60s`). A chain may name
+  five. `...fallback.enabled: false` turns failover off.
 
 ### API keys
 
