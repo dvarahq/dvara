@@ -205,6 +205,7 @@ public final class YamlConfigStore {
                     .modelPattern(entry.getModel())
                     .strategy(entry.getStrategy() != null ? entry.getStrategy() : "model-prefix")
                     .providers(routeProviders(entry))
+                    .fallbacks(fallbacks(entry))
                     .pinnedModelVersion(entry.getPinnedModelVersion())
                     .version(1)
                     .createdAt(now)
@@ -315,12 +316,24 @@ public final class YamlConfigStore {
                     .weight(rp.getWeight() != null ? rp.getWeight() : 1)
                     .build());
         }
-        if (entry.getFallback() != null && !entry.getFallback().isBlank()) {
-            // Weight 0 marks a fallback rather than a share of traffic, which is the convention
-            // FallbackResolver reads.
-            providers.add(Route.RouteProvider.builder().provider(entry.getFallback()).weight(0).build());
-        }
         return List.copyOf(providers);
+    }
+
+    /**
+     * The route's fallback chain (#7). It used to be a weight-0 provider entry, which nothing read and a
+     * strategy could pick as the primary. The single-provider {@code fallback:} is the first target,
+     * with the request's own model; {@code fallbacks:} follow in order.
+     */
+    private static List<com.dvarahq.core.routing.RouteConfig.FallbackTarget> fallbacks(GatewayYamlConfig.RouteEntry entry) {
+        List<com.dvarahq.core.routing.RouteConfig.FallbackTarget> chain = new ArrayList<>();
+        if (entry.getFallback() != null && !entry.getFallback().isBlank()) {
+            chain.add(new com.dvarahq.core.routing.RouteConfig.FallbackTarget(entry.getFallback().trim(), null));
+        }
+        for (GatewayYamlConfig.FallbackEntry f : nullSafe(entry.getFallbacks())) {
+            chain.add(new com.dvarahq.core.routing.RouteConfig.FallbackTarget(
+                    f.getProvider() == null ? null : f.getProvider().trim(), f.getModel()));
+        }
+        return List.copyOf(chain);
     }
 
     /** Placeholders in either half of the template, in a stable order and without duplicates. */

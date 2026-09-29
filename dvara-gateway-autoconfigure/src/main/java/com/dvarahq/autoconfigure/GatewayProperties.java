@@ -186,6 +186,16 @@ public class GatewayProperties {
          * {@link RoutingAutoConfiguration#toRouteConfig}.
          */
         private ShadowConfigDefinition shadowConfig;
+
+        /** The route's ordered fallback chain (#7): provider and, for another model family, model. */
+        private List<FallbackTargetDefinition> fallbacks = new ArrayList<>();
+    }
+
+    @Data
+    public static class FallbackTargetDefinition {
+        private String provider;
+        /** The model to ask this provider for; unset sends the request's own model. */
+        private String model;
     }
 
     @Data
@@ -271,7 +281,15 @@ public class GatewayProperties {
 
     @Data
     public static class FallbackConfig {
+        /** Off: no request fails over, on a route's chain or otherwise. */
         private boolean enabled = true;
+        /** Most fallback targets one request tries after its primary fails (#7 REQ-CPF-07). */
+        private int maxAttempts = 3;
+        /**
+         * How long after the primary's first attempt a fallback may still start (#7 REQ-CPF-07): retry
+         * times fallback must not run a request indefinitely. Targets left when it passes are not tried.
+         */
+        private java.time.Duration deadline = java.time.Duration.ofSeconds(60);
     }
 
     /**

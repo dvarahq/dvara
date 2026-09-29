@@ -39,6 +39,8 @@ public class Route {
     private CanaryConfig canaryConfig;
     private ShadowConfig shadowConfig;
     private Map<String, String> modelTiers;
+    /** The route's ordered fallback chain (#7); see {@link RouteConfig#getFallbacks()}. */
+    private List<RouteConfig.FallbackTarget> fallbacks;
     private int version;
     private Instant createdAt;
     private Instant updatedAt;

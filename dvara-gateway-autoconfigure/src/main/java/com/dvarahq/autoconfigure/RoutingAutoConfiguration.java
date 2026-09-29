@@ -113,6 +113,9 @@ public class RoutingAutoConfiguration {
         List<RoutingEngine.ResolvedRoute> routes = new ArrayList<>();
         for (GatewayProperties.RouteDefinition def : defs) {
             RouteConfig config = toRouteConfig(def);
+            if (config.invalidFallbacks() != null) {
+                throw new IllegalStateException(config.invalidFallbacks());   // #7 AC-CPF-03
+            }
             RoutingStrategy strategy = strategyFactory.create(config);
             routes.add(new RoutingEngine.ResolvedRoute(config, strategy));
         }
@@ -172,6 +175,10 @@ public class RoutingAutoConfiguration {
                 .modelTiers(def.getModelTiers())
                 .canaryConfig(toCanaryConfig(def.getCanaryConfig()))
                 .shadowConfig(toShadowConfig(def.getShadowConfig()))
+                .fallbacks(def.getFallbacks() == null ? List.of() : def.getFallbacks().stream()
+                        .map(f -> new RouteConfig.FallbackTarget(
+                                f.getProvider() == null ? null : f.getProvider().trim(), f.getModel()))
+                        .toList())
                 .build();
     }
 

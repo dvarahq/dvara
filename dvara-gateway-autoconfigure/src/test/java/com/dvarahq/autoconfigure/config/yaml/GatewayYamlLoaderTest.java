@@ -97,6 +97,34 @@ class GatewayYamlLoaderTest {
         assertThat(config.getRoutes().get(1).getFallback()).isEqualTo("openai");
     }
 
+    /** #7: an ordered chain of provider and model; the single-provider {@code fallback:} goes first. */
+    @Test
+    void load_aRoutesFallbackChain_isAStoredRoutesChain() throws IOException {
+        Path configFile = tempDir.resolve("gateway.yaml");
+        Files.writeString(configFile, """
+                routes:
+                  - id: support-assistant
+                    model: gpt-4o
+                    provider: openai
+                    fallback: azure-openai
+                    fallbacks:
+                      - provider: anthropic
+                        model: claude-sonnet-4-5
+                      - provider: mistral
+                        model: mistral-large-latest
+                """);
+        GatewayYamlConfig config = GatewayYamlLoader.load(Map.of("GATEWAY_CONFIG_FILE", configFile.toString())::get)
+                .orElseThrow();
+
+        var route = new com.dvarahq.autoconfigure.config.yaml.repo.YamlConfigStore(config).routes().get(0);
+
+        assertThat(route.getProviders()).extracting("provider").containsExactly("openai");
+        assertThat(route.getFallbacks()).containsExactly(
+                new com.dvarahq.core.routing.RouteConfig.FallbackTarget("azure-openai", null),
+                new com.dvarahq.core.routing.RouteConfig.FallbackTarget("anthropic", "claude-sonnet-4-5"),
+                new com.dvarahq.core.routing.RouteConfig.FallbackTarget("mistral", "mistral-large-latest"));
+    }
+
     @Test
     void load_parsesApiKeys() throws IOException {
         Path configFile = tempDir.resolve("gateway.yaml");

@@ -33,6 +33,7 @@ import com.dvarahq.core.routing.CanaryConfig;
 import com.dvarahq.core.routing.CanaryMetricsCollector;
 import com.dvarahq.core.routing.LatencyTracker;
 import com.dvarahq.core.routing.RequestContext;
+import com.dvarahq.core.routing.RouteConfig;
 import com.dvarahq.core.routing.ShadowDispatcher;
 import com.dvarahq.server.metrics.GatewayMetrics;
 import com.dvarahq.server.web.TraceIdFilter;
@@ -163,12 +164,12 @@ public class ProviderDispatcher {
                 if (isFallbackEligible(e)) {
                     long errorLatencyMs = (System.nanoTime() - startNanos) / 1_000_000;
                     recordCanaryMetrics(primary.name(), req, null, errorLatencyMs, true, routingCtx);
-                    response = attemptFallback(req, primary, e, p -> {
+                    response = attemptFallback(req, primary, e, routingCtx, startNanos, (p, r) -> {
                         long fbStart = System.nanoTime();
-                        ChatResponse fbResponse = p.chat(req);
+                        ChatResponse fbResponse = p.chat(r);
                         long fbLatencyMs = (System.nanoTime() - fbStart) / 1_000_000;
                         if (latencyTracker != null) {
-                            latencyTracker.record(p.name(), req.getModel(), fbLatencyMs);
+                            latencyTracker.record(p.name(), r.getModel(), fbLatencyMs);
                         }
                         return fbResponse;
                     });
@@ -207,12 +208,15 @@ public class ProviderDispatcher {
                 .lowCardinalityKeyValue("model", req.getModel());
         addGenAiRequestAttrs(obs, primary.name(), req.getModel(), "chat", req.getMaxTokens(), req.getTemperature());
         addSessionId(obs);
+        long startNanos = System.nanoTime();
         return obs.observe(() -> {
             try {
                 return primary.streamChat(req);
             } catch (GatewayException e) {
+                // Only while opening the stream (#7 REQ-CPF-08): once an iterator is returned, a failure
+                // reading it is the caller's, and no second provider starts.
                 if (isFallbackEligible(e)) {
-                    return attemptFallback(req, primary, e, p -> p.streamChat(req));
+                    return attemptFallback(req, primary, e, routingCtx, startNanos, (p, r) -> p.streamChat(r));
                 }
                 throw e;
             }
@@ -364,8 +368,142 @@ public class ProviderDispatcher {
                 || "PROVIDER_RATE_LIMITED".equals(e.getCode());
     }
 
-    private <T> T attemptFallback(ChatRequest request, LlmProvider failedProvider,
-                                  GatewayException originalException, ProviderCall<T> call) {
+    // -------------------------------------------------------------------------
+    // Route fallback chains (#7)
+    // -------------------------------------------------------------------------
+
+    private boolean fallbackEnabled = true;
+    private int fallbackMaxAttempts = 3;
+    private java.time.Duration fallbackDeadline = java.time.Duration.ofSeconds(60);
+    private List<com.dvarahq.core.resilience.FallbackTargetGuard> fallbackGuards = List.of();
+
+    /** {@code dvara.llm-gateway.resilience.fallback.*}: on or off, and how far a failover may go. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setFallbackSettings(com.dvarahq.autoconfigure.GatewayProperties properties) {
+        var f = properties.getResilience().getFallback();
+        this.fallbackEnabled = f.isEnabled();
+        this.fallbackMaxAttempts = Math.max(0, f.getMaxAttempts());
+        this.fallbackDeadline = f.getDeadline() != null ? f.getDeadline() : java.time.Duration.ofSeconds(60);
+    }
+
+    /** Every guard a fallback target must pass (#7 REQ-CPF-05); none registered allows every target. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setFallbackGuards(List<com.dvarahq.core.resilience.FallbackTargetGuard> guards) {
+        this.fallbackGuards = guards != null ? List.copyOf(guards) : List.of();
+    }
+
+    private <T> T attemptFallback(ChatRequest request, LlmProvider failedProvider, GatewayException originalException,
+                                  RequestContext routingCtx, long startNanos, ProviderCall<T> call) {
+        if (!fallbackEnabled) {
+            throw originalException;
+        }
+        RouteConfig route = routingCtx.getMatchedRoute();
+        if (route != null) {
+            return attemptRouteChain(route, request, failedProvider, originalException, startNanos, call);
+        }
+        return attemptRegistryFallback(request, failedProvider, originalException, call);
+    }
+
+    /**
+     * A matched route fails over along its own chain and nowhere else (#7 REQ-CPF-02): each target in
+     * order, as a fresh request with that target's model (REQ-CPF-04), and only if the provider serves that
+     * model, can take what the request needs, is healthy, and every guard allows it (REQ-CPF-05). At most
+     * {@code max-attempts} targets, none started after the deadline (REQ-CPF-07). A route with no chain does
+     * not fail over.
+     */
+    private <T> T attemptRouteChain(RouteConfig route, ChatRequest request, LlmProvider failedProvider,
+                                    GatewayException originalException, long startNanos, ProviderCall<T> call) {
+        List<RouteConfig.FallbackTarget> chain = route.getFallbacks() == null ? List.of() : route.getFallbacks();
+        if (chain.isEmpty()) {
+            throw originalException;
+        }
+        long deadlineNanos = startNanos + fallbackDeadline.toNanos();
+        int attempts = 0;
+        boolean capabilityMismatch = false;
+        for (int i = 0; i < chain.size(); i++) {
+            RouteConfig.FallbackTarget target = chain.get(i);
+            if (attempts >= fallbackMaxAttempts || System.nanoTime() > deadlineNanos) {
+                log.warn("Route [{}]: fallback stopped before target {} ({}): {} attempt(s) made, limit {}, deadline {}",
+                        route.getId(), i + 1, target.describe(), attempts, fallbackMaxAttempts, fallbackDeadline);
+                break;
+            }
+            LlmProvider provider = providers.stream().filter(p -> p.name().equals(target.provider())).findFirst().orElse(null);
+            if (provider == null) {
+                log.warn("Route [{}]: fallback target {} names a provider that is not configured; skipped",
+                        route.getId(), target.describe());
+                continue;
+            }
+            // A fresh request per attempt: the caller's and every other attempt's are left as they were.
+            ChatRequest mapped = target.model() == null ? request : request.toBuilder().model(target.model()).build();
+            if (provider.name().equals(failedProvider.name()) && mapped.getModel().equals(request.getModel())) {
+                continue;   // the call that just failed
+            }
+            if (!provider.supports(mapped)) {
+                log.warn("Route [{}]: fallback provider [{}] does not serve model [{}]; skipped",
+                        route.getId(), provider.name(), mapped.getModel());
+                continue;
+            }
+            if (capabilityFilter(List.of(provider), mapped).isEmpty()
+                    || (carriesImage(mapped) && !provider.capabilities().supportsVision())) {
+                capabilityMismatch = true;
+                log.info("Route [{}]: fallback {} cannot take what the request needs; skipped",
+                        route.getId(), target.describe());
+                continue;
+            }
+            if (!healthRegistry.isAvailable(provider.name())) {
+                log.debug("Route [{}]: fallback provider [{}] is paused; skipped", route.getId(), provider.name());
+                continue;
+            }
+            String refused = refusal(mapped, provider.name());
+            if (refused != null) {
+                log.info("Route [{}]: fallback {} refused: {}", route.getId(), target.describe(), refused);
+                continue;
+            }
+            attempts++;
+            try {
+                log.info("Route [{}]: falling back from [{}] to {} (attempt {} of the chain)",
+                        route.getId(), failedProvider.name(), target.describe(), i + 1);
+                metrics.recordFallback(failedProvider.name(), provider.name());
+                setProviderAttribute(provider.name());
+                clearCredentialFingerprint();
+                return call.execute(provider, mapped);
+            } catch (GatewayException e) {
+                log.warn("Route [{}]: fallback {} also failed: {}", route.getId(), target.describe(), e.getCode());
+                metrics.recordProviderError(provider.name(), e.getCode());
+            }
+        }
+        if (attempts == 0 && capabilityMismatch) {
+            throw new GatewayException("FAILOVER_CAPABILITY_MISMATCH",
+                    "Failover blocked: no fallback on this route can take what the request needs. The primary "
+                            + "provider [" + failedProvider.name() + "] failed: " + originalException.getMessage());
+        }
+        throw originalException;
+    }
+
+    /** The first guard's reason to keep {@code request} off {@code provider}, or null when all allow it. */
+    private String refusal(ChatRequest request, String provider) {
+        for (com.dvarahq.core.resilience.FallbackTargetGuard guard : fallbackGuards) {
+            String reason = guard.refuse(request, provider);
+            if (reason != null) {
+                return reason;
+            }
+        }
+        return null;
+    }
+
+    private static boolean carriesImage(ChatRequest request) {
+        return request.getMessages() != null && request.getMessages().stream()
+                .filter(m -> m != null && m.getContent() != null)
+                .flatMap(m -> m.getContent().stream())
+                .anyMatch(b -> b instanceof com.dvarahq.core.model.ContentBlock.ImageBlock);
+    }
+
+    /**
+     * A request that matched no route: the providers registered here that serve the same model, as
+     * before #7. It never changes the model, so it never crosses to another model family.
+     */
+    private <T> T attemptRegistryFallback(ChatRequest request, LlmProvider failedProvider,
+                                          GatewayException originalException, ProviderCall<T> call) {
         List<LlmProvider> fallbacks = fallbackResolver.resolve(request, failedProvider, providers);
 
         // Apply capability filtering to fallback candidates
@@ -401,7 +539,7 @@ public class ProviderDispatcher {
                 // would inherit the failed primary's — a usage row naming one provider and another's
                 // credential. A fallback that does go through it re-stamps its own.
                 clearCredentialFingerprint();
-                return call.execute(fallback);
+                return call.execute(fallback, request);
             } catch (GatewayException e) {
                 log.warn("Fallback provider [{}] also failed: {}", fallback.name(), e.getMessage());
                 metrics.recordProviderError(fallback.name(), e.getCode());
@@ -663,6 +801,6 @@ public class ProviderDispatcher {
 
     @FunctionalInterface
     private interface ProviderCall<T> {
-        T execute(LlmProvider provider);
+        T execute(LlmProvider provider, ChatRequest request);
     }
 }

@@ -88,6 +88,7 @@ public class PolicyEnforcementFilter implements ChatFilter {
 
         PolicyDecision decision = policyEngine.evaluate(policyCtx, request);
         ctx.setPolicyDecision(decision);
+        rememberForFallback(policyCtx);
 
         if (!decision.allowed()) {
             auditPolicyDenial(request, policyCtx, decision);
@@ -95,6 +96,25 @@ public class PolicyEnforcementFilter implements ChatFilter {
         }
 
         return request;
+    }
+
+    /** Request attribute holding the context this request's policy was evaluated in (#7). */
+    public static final String POLICY_CONTEXT_ATTRIBUTE = "dvara.policy.context";
+
+    /**
+     * Keeps the context on the request, so a route fallback to another model is evaluated against the same
+     * policy with the same facts ({@link PolicyFallbackTargetGuard}).
+     */
+    private static void rememberForFallback(PolicyContext policyCtx) {
+        var attrs = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if (attrs != null) {
+            try {
+                attrs.setAttribute(POLICY_CONTEXT_ATTRIBUTE, policyCtx,
+                        org.springframework.web.context.request.RequestAttributes.SCOPE_REQUEST);
+            } catch (IllegalStateException requestIsGone) {
+                // nothing to keep it on
+            }
+        }
     }
 
     /**
