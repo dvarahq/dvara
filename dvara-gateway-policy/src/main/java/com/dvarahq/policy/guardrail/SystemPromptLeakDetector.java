@@ -24,7 +24,11 @@ import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
 import com.dvarahq.core.model.MultimodalMessage;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Detects system prompt leakage in LLM responses (OWASP LLM07).
@@ -36,6 +40,11 @@ import java.util.List;
  * a small fraction of the instruction set, so the verbatim span catches partial disclosure directly:
  * an unbroken run of the prompt's own wording is evidence regardless of what share of the prompt it
  * is.</p>
+ *
+ * <p>Neither test counts wording the caller supplied in the conversation's user or assistant
+ * messages: a reply that restates the format the user asked for is following instructions, not
+ * disclosing them. The verbatim span must also be contiguous in the reply, so a reply that answers
+ * in the prompt's vocabulary a few words at a time is not a quotation.</p>
  *
  * <p>It needs nothing external: it compares the response against the system prompt the caller
  * already sent. Despite implementing the interface it is not a pluggable detector:
@@ -96,10 +105,22 @@ public class SystemPromptLeakDetector implements GuardrailDetector {
     }
 
     /**
-     * Scans response text for leaked system prompt content.
-     * Called by GuardrailScanService with the original request context.
+     * Scans response text for leaked system prompt content, with no conversation to discount.
      */
     public GuardrailScanResult scanForLeakedPrompt(String systemPrompt, String responseText) {
+        return scanForLeakedPrompt(systemPrompt, null, responseText);
+    }
+
+    /**
+     * Scans response text for leaked system prompt content.
+     * Called by GuardrailScanService with the original request context.
+     *
+     * @param conversationText the request's user and assistant wording (see
+     *                         {@link #extractConversationText}); its 4-grams are not secret and do
+     *                         not count towards either rule. May be null.
+     */
+    public GuardrailScanResult scanForLeakedPrompt(String systemPrompt, String conversationText,
+                                                   String responseText) {
         if (systemPrompt == null || systemPrompt.length() < MIN_SYSTEM_PROMPT_LENGTH) {
             return GuardrailScanResult.EMPTY;
         }
@@ -107,7 +128,7 @@ public class SystemPromptLeakDetector implements GuardrailDetector {
             return GuardrailScanResult.EMPTY;
         }
 
-        Overlap overlap = computeOverlap(systemPrompt, responseText);
+        Overlap overlap = computeOverlap(systemPrompt, conversationText, responseText);
 
         if (overlap.ratio() >= similarityThreshold) {
             return detection("system-prompt-leak", Math.min(1.0, overlap.ratio()), overlap.ratio(),
@@ -161,6 +182,29 @@ public class SystemPromptLeakDetector implements GuardrailDetector {
         return result.isEmpty() ? null : result;
     }
 
+    /**
+     * Extracts the user and assistant wording from a ChatRequest: text the caller already has, so a
+     * reply repeating it discloses nothing.
+     */
+    public static String extractConversationText(ChatRequest request) {
+        if (request == null || request.getMessages() == null) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (MultimodalMessage msg : request.getMessages()) {
+            if (("user".equals(msg.getRole()) || "assistant".equals(msg.getRole()))
+                    && msg.getContent() != null) {
+                for (ContentBlock block : msg.getContent()) {
+                    if (block instanceof ContentBlock.TextBlock tb) {
+                        sb.append(tb.text()).append(" \n ");
+                    }
+                }
+            }
+        }
+        String result = sb.toString().trim();
+        return result.isEmpty() ? null : result;
+    }
+
     /** How much of the system prompt the response repeats, and whether any of it is contiguous. */
     record Overlap(double ratio, int longestRun) {
     }
@@ -170,48 +214,62 @@ public class SystemPromptLeakDetector implements GuardrailDetector {
      * Returns fraction of system prompt n-grams found in the response.
      */
     double computeNgramOverlap(String systemPrompt, String responseText) {
-        return computeOverlap(systemPrompt, responseText).ratio();
+        return computeOverlap(systemPrompt, null, responseText).ratio();
     }
 
     /**
-     * The overlap ratio and the longest unbroken run of matching n-grams, in one pass.
+     * The overlap ratio and the longest unbroken run of matching n-grams.
      *
-     * <p>The run is counted over the prompt's n-grams in order, so it measures "the response repeats
-     * this much of the prompt consecutively" — which is what a quotation looks like and what scattered
-     * vocabulary overlap does not.</p>
+     * <p>The run is a quotation: consecutive prompt n-grams that are also consecutive in the response.
+     * Each n-gram merely appearing somewhere is not enough, or a reply that uses the prompt's phrases
+     * in its own order would be stitched into a run it never contains.</p>
+     *
+     * <p>A prompt n-gram that also occurs in the conversation is public: it is neither counted in the
+     * ratio nor allowed to extend a run.</p>
      */
-    Overlap computeOverlap(String systemPrompt, String responseText) {
+    Overlap computeOverlap(String systemPrompt, String conversationText, String responseText) {
         String[] promptWords = normalizeAndSplit(systemPrompt);
         String[] responseWords = normalizeAndSplit(responseText);
 
-        if (promptWords.length < MIN_NGRAM_SIZE) {
+        if (promptWords.length < MIN_NGRAM_SIZE || responseWords.length < MIN_NGRAM_SIZE) {
             return new Overlap(0.0, 0);
         }
 
-        // Build set of response n-grams
-        var responseNgrams = new java.util.HashSet<String>();
-        for (int i = 0; i <= responseWords.length - MIN_NGRAM_SIZE; i++) {
-            responseNgrams.add(joinNgram(responseWords, i, MIN_NGRAM_SIZE));
+        // Where each response n-gram occurs, so a run can be followed position by position.
+        Map<String, List<Integer>> responsePositions = new HashMap<>();
+        for (int j = 0; j <= responseWords.length - MIN_NGRAM_SIZE; j++) {
+            responsePositions.computeIfAbsent(joinNgram(responseWords, j, MIN_NGRAM_SIZE),
+                    k -> new java.util.ArrayList<>()).add(j);
         }
 
-        if (responseNgrams.isEmpty()) {
-            return new Overlap(0.0, 0);
+        Set<String> publicNgrams = new HashSet<>();
+        if (conversationText != null && !conversationText.isBlank()) {
+            String[] conversationWords = normalizeAndSplit(conversationText);
+            for (int i = 0; i <= conversationWords.length - MIN_NGRAM_SIZE; i++) {
+                publicNgrams.add(joinNgram(conversationWords, i, MIN_NGRAM_SIZE));
+            }
         }
 
-        // Count how many system prompt n-grams appear in the response
         int totalPromptNgrams = promptWords.length - MIN_NGRAM_SIZE + 1;
         int matchCount = 0;
-        int currentRun = 0;
         int longestRun = 0;
+        // Run length ending at each response position, for the previous prompt n-gram.
+        Map<Integer, Integer> previousRuns = Map.of();
         for (int i = 0; i <= promptWords.length - MIN_NGRAM_SIZE; i++) {
             String ngram = joinNgram(promptWords, i, MIN_NGRAM_SIZE);
-            if (responseNgrams.contains(ngram)) {
-                matchCount++;
-                currentRun++;
-                longestRun = Math.max(longestRun, currentRun);
-            } else {
-                currentRun = 0;
+            List<Integer> positions = responsePositions.get(ngram);
+            if (positions == null || publicNgrams.contains(ngram)) {
+                previousRuns = Map.of();
+                continue;
             }
+            matchCount++;
+            Map<Integer, Integer> runs = new HashMap<>();
+            for (int j : positions) {
+                int run = previousRuns.getOrDefault(j - 1, 0) + 1;
+                runs.put(j, run);
+                longestRun = Math.max(longestRun, run);
+            }
+            previousRuns = runs;
         }
 
         return new Overlap((double) matchCount / totalPromptNgrams, longestRun);
