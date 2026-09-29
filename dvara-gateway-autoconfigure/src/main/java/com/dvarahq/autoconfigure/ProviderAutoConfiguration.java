@@ -159,11 +159,25 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(OllamaProvider.class)
-    @ConditionalOnProperty(name = "dvara.llm-gateway.providers.ollama.enabled", havingValue = "true")
+    @ConditionalOnExpression("'${dvara.llm-gateway.providers.ollama.enabled:false}' == 'true' "
+            + "or '${dvara.llm-gateway.providers.ollama.per-workspace:false}' == 'true'")
     public OllamaProvider ollamaProvider(GatewayProperties props,
-                                          RestClient.Builder restClientBuilder) {
+                                          RestClient.Builder restClientBuilder,
+                                          org.springframework.beans.factory.ObjectProvider<com.dvarahq.providers.ollama.OllamaEndpointResolver> endpoints) {
         RestClient.Builder builder = tlsOnly("ollama", restClientBuilder);
-        return new OllamaProvider(props.getProviders().getOllama().getBaseUrl(), builder);
+        OllamaProvider provider = new OllamaProvider(props.getProviders().getOllama().getBaseUrl(), builder);
+        if (props.getProviders().getOllama().isPerWorkspace()) {
+            // #30 A6: each workspace's own endpoint. A client that follows no redirect, and not the platform
+            // TLS settings, which are for the platform's providers, not a tenant's endpoint.
+            java.net.http.HttpClient http = java.net.http.HttpClient.newBuilder()
+                    .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
+                    .connectTimeout(java.time.Duration.ofSeconds(10))
+                    .build();
+            provider.usePerWorkspaceEndpoints(endpoints.getIfAvailable(), restClientBuilder.clone()
+                    .requestFactory(new org.springframework.http.client.JdkClientHttpRequestFactory(http))
+                    .build());
+        }
+        return provider;
     }
 
     @Bean

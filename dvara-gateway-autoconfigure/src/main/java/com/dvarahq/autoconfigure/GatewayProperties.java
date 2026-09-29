@@ -82,6 +82,11 @@ public class GatewayProperties {
     public static class OllamaConfig {
         private boolean enabled = false;
         private String  baseUrl = "http://localhost:11434";
+        /**
+         * Each workspace's own Ollama (#30, DVARA Cloud): an {@code ollama/…} call goes to the endpoint the
+         * calling workspace registered, never to {@code base-url}. A workspace with none is refused.
+         */
+        private boolean perWorkspace = false;
     }
 
     @Data
