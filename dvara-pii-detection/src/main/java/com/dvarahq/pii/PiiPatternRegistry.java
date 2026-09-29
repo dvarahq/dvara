@@ -129,9 +129,11 @@ public class PiiPatternRegistry {
                 Pattern.compile("(?<!\\d)\\+[1-9]\\d{6,14}(?!\\d)"),
                 PiiEntityType.PHONE_NUMBER, "phone_intl", 0.85));
 
-        // SSN (reject 000/666/9xx area numbers per SSA rules)
+        // SSN (reject 000/666/9xx area numbers per SSA rules). Bounded: nine digits inside a longer
+        // number, or after a decimal point, are not an SSN. The fractional seconds of a nanosecond
+        // timestamp (…:51.123456789Z) were redacted as one.
         patterns.add(new PatternEntry(
-                Pattern.compile("(?!000|666|9\\d{2})\\d{3}[\\s-]?(?!00)\\d{2}[\\s-]?(?!0000)\\d{4}"),
+                Pattern.compile("(?<![\\d.])(?!000|666|9\\d{2})\\d{3}[\\s-]?(?!00)\\d{2}[\\s-]?(?!0000)\\d{4}(?!\\d)"),
                 PiiEntityType.SSN, "ssn", 0.9));
 
         // Credit card (Visa, MC, Amex, Discover — Luhn post-validated)

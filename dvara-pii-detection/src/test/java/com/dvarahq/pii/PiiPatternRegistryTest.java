@@ -68,6 +68,17 @@ class PiiPatternRegistryTest {
     }
 
     @Test
+    void ssn_isNotFoundInsideTimestampsOrLongerNumbers() {
+        // #77: the fractional seconds of a nanosecond timestamp were redacted as an SSN.
+        assertNoMatch(PiiEntityType.SSN, "\"signed_at\":\"2026-09-29T12:52:51.123456789Z\"");
+        assertNoMatch(PiiEntityType.SSN, "pi is 3.141592653");
+        assertNoMatch(PiiEntityType.SSN, "order 12345678901234");
+        assertMatches(PiiEntityType.SSN, "123456789");
+        assertMatches(PiiEntityType.SSN, "SSN: 123-45-6789.");
+        assertMatches(PiiEntityType.SSN, "ssn=123456789Z");
+    }
+
+    @Test
     void ssn_rejectsInvalidPrefixes() {
         assertNoMatch(PiiEntityType.SSN, "000-12-3456");
         assertNoMatch(PiiEntityType.SSN, "666-12-3456");
