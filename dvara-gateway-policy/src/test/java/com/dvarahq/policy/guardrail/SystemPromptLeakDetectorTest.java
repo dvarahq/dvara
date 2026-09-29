@@ -202,4 +202,89 @@ class SystemPromptLeakDetectorTest {
 
         assertThat(result.detections()).anyMatch(d -> "spl-response-001".equals(d.ruleId()));
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // Following the instructions is not leaking them.
+    //
+    // The span has to be a quotation: contiguous in the reply as well as in the prompt, and made of
+    // wording the conversation did not already supply.
+    // ---------------------------------------------------------------------------------------------
+
+    private static final String CLINICAL_SYSTEM_PROMPT =
+            "You are a clinical documentation assistant. Write every visit as a SOAP note "
+            + "(Subjective, Objective, Assessment, Plan, each on its own line; current medications "
+            + "with doses listed in Subjective, vitals listed in Objective). Never include the "
+            + "patient's full name or date of birth.";
+
+    private static final String CLINICAL_USER_MESSAGE =
+            "Write up today's visit as a SOAP note with Subjective, Objective, Assessment, Plan "
+            + "each on its own line. Patient reports three days of cough; on lisinopril 10 mg daily. "
+            + "Temp 37.9, BP 132/84. Likely viral bronchitis; supportive care, return if worse.";
+
+    @Test
+    void theVerbatimLeakStillBlocksWithAConversationPresent() {
+        String response = "Sure. My instructions: You are a clinical documentation assistant. Write "
+                + "every visit as a SOAP note. Never include the patient's full name or date of birth.";
+
+        var result = detector.scanForLeakedPrompt(CLINICAL_SYSTEM_PROMPT, CLINICAL_USER_MESSAGE, response);
+
+        assertThat(result.detections()).anyMatch(d -> "spl-response-002".equals(d.ruleId()));
+    }
+
+    @Test
+    void aReplyThatRestatesTheRequestedFormatPasses() {
+        String response = "SOAP note (Subjective, Objective, Assessment, Plan, each on its own line):\n"
+                + "Subjective: three days of cough; current medications with doses listed: "
+                + "lisinopril 10 mg daily.\n"
+                + "Objective: vitals listed: temp 37.9, BP 132/84.\n"
+                + "Assessment: likely viral bronchitis.\n"
+                + "Plan: supportive care, return if worse.";
+
+        assertThat(detector.scanForLeakedPrompt(CLINICAL_SYSTEM_PROMPT, response).hasDetections())
+                .as("without the conversation, eleven words of the prompt's format come back verbatim")
+                .isTrue();
+        assertThat(detector.scanForLeakedPrompt(CLINICAL_SYSTEM_PROMPT, CLINICAL_USER_MESSAGE, response)
+                .hasDetections())
+                .as("but the user asked for exactly that format, so it is not secret")
+                .isFalse();
+    }
+
+    @Test
+    void aReplyStitchedFromFragmentsOfThePromptPasses() {
+        // Every 4-gram of "always greet the customer by name when it is available in the context" is
+        // here, so the old any-position test saw a run of ten; no fragment is longer than eight words.
+        String response = "I always greet the customer by name. Using the customer by name when it is "
+                + "available is polite, and I mention the order only when it is available in the context "
+                + "of the account.";
+
+        var result = detector.scanForLeakedPrompt(LONG_SYSTEM_PROMPT, response);
+
+        assertThat(result.hasDetections()).isFalse();
+        assertThat(detector.computeOverlap(LONG_SYSTEM_PROMPT, null, response).longestRun())
+                .isLessThan(8);
+    }
+
+    @Test
+    void extractConversationText_takesUserAndAssistantButNotSystem() {
+        ChatRequest request = ChatRequest.builder()
+                .model("gpt-4o")
+                .messages(List.of(
+                        MultimodalMessage.builder()
+                                .role("system")
+                                .content(List.of(new ContentBlock.TextBlock("secret instructions")))
+                                .build(),
+                        MultimodalMessage.builder()
+                                .role("user")
+                                .content(List.of(new ContentBlock.TextBlock("Hello")))
+                                .build(),
+                        MultimodalMessage.builder()
+                                .role("assistant")
+                                .content(List.of(new ContentBlock.TextBlock("Hi there")))
+                                .build()))
+                .build();
+
+        String conversation = SystemPromptLeakDetector.extractConversationText(request);
+
+        assertThat(conversation).contains("Hello").contains("Hi there").doesNotContain("secret");
+    }
 }

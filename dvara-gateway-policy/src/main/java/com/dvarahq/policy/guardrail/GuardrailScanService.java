@@ -183,13 +183,14 @@ public class GuardrailScanService implements GuardrailEnforcer {
         // System prompt leak detection (OWASP LLM07)
         if (originalRequest != null) {
             String systemPrompt = SystemPromptLeakDetector.extractSystemPrompt(originalRequest);
+            String conversationText = SystemPromptLeakDetector.extractConversationText(originalRequest);
             if (systemPrompt != null && response.getChoices() != null) {
                 for (var choice : response.getChoices()) {
                     if (choice.getMessage() != null && choice.getMessage().getContent() != null) {
                         for (ContentBlock block : choice.getMessage().getContent()) {
                             if (block instanceof ContentBlock.TextBlock tb) {
                                 GuardrailScanResult leakResult = leakDetector.scanForLeakedPrompt(
-                                        systemPrompt, tb.text());
+                                        systemPrompt, conversationText, tb.text());
                                 if (leakResult.hasDetections()) {
                                     results.add(leakResult);
                                 }
