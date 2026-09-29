@@ -140,7 +140,8 @@ public class ProviderDispatcher {
 
     public ChatResponse chat(ChatRequest request) {
         RequestContext routingCtx = RequestContext.builder().build();
-        LlmProvider primary = selectChat(request, routingCtx);
+        Selection selection = selectChat(request, routingCtx);
+        LlmProvider primary = selection.provider();
         final ChatRequest req = applyResolvedModel(request, routingCtx);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
@@ -154,7 +155,20 @@ public class ProviderDispatcher {
         try {
             ChatResponse response;
             long startNanos = System.nanoTime();
+            ProviderCall<ChatResponse> fallbackCall = (p, r) -> {
+                long fbStart = System.nanoTime();
+                ChatResponse fbResponse = p.chat(r);
+                long fbLatencyMs = (System.nanoTime() - fbStart) / 1_000_000;
+                if (latencyTracker != null) {
+                    latencyTracker.record(p.name(), r.getModel(), fbLatencyMs);
+                }
+                return fbResponse;
+            };
             try {
+                if (selection.unavailable() != null) {
+                    // The route's provider is paused: nothing is sent to it, and the route's chain takes the call.
+                    throw selection.unavailable();
+                }
                 response = primary.chat(req);
                 long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
                 if (latencyTracker != null) {
@@ -162,18 +176,12 @@ public class ProviderDispatcher {
                 }
                 recordCanaryMetrics(primary.name(), req, response, latencyMs, false, routingCtx);
             } catch (GatewayException e) {
-                if (isFallbackEligible(e)) {
+                if (e == selection.unavailable()) {
+                    response = attemptFallback(req, primary, e, routingCtx, startNanos, fallbackCall);
+                } else if (isFallbackEligible(e)) {
                     long errorLatencyMs = (System.nanoTime() - startNanos) / 1_000_000;
                     recordCanaryMetrics(primary.name(), req, null, errorLatencyMs, true, routingCtx);
-                    response = attemptFallback(req, primary, e, routingCtx, startNanos, (p, r) -> {
-                        long fbStart = System.nanoTime();
-                        ChatResponse fbResponse = p.chat(r);
-                        long fbLatencyMs = (System.nanoTime() - fbStart) / 1_000_000;
-                        if (latencyTracker != null) {
-                            latencyTracker.record(p.name(), r.getModel(), fbLatencyMs);
-                        }
-                        return fbResponse;
-                    });
+                    response = attemptFallback(req, primary, e, routingCtx, startNanos, fallbackCall);
                 } else {
                     long errorLatencyMs = (System.nanoTime() - startNanos) / 1_000_000;
                     recordCanaryMetrics(primary.name(), req, null, errorLatencyMs, true, routingCtx);
@@ -200,7 +208,8 @@ public class ProviderDispatcher {
 
     public Iterator<SseChunk> streamChat(ChatRequest request) {
         RequestContext routingCtx = RequestContext.builder().build();
-        LlmProvider primary = selectChat(request, routingCtx);
+        Selection selection = selectChat(request, routingCtx);
+        LlmProvider primary = selection.provider();
         final ChatRequest req = applyResolvedModel(request, routingCtx);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
@@ -212,6 +221,11 @@ public class ProviderDispatcher {
         addSessionId(obs);
         long startNanos = System.nanoTime();
         return obs.observe(() -> {
+            if (selection.unavailable() != null) {
+                // The route's provider is paused: nothing is opened on it, and the route's chain takes the call.
+                return attemptFallback(req, primary, selection.unavailable(), routingCtx, startNanos,
+                        (p, r) -> p.streamChat(r));
+            }
             try {
                 return primary.streamChat(req);
             } catch (GatewayException e) {
@@ -307,7 +321,15 @@ public class ProviderDispatcher {
         return request.toBuilder().model(model).build();
     }
 
-    private LlmProvider selectChat(ChatRequest request, RequestContext ctx) {
+    /**
+     * The provider a request goes to. {@code unavailable} is set when the route's own choice is paused (its
+     * circuit breaker is open, or it is unhealthy) and the route has a fallback chain: the call then goes
+     * straight to that chain, and {@code unavailable} is what the caller is told if no target serves it,
+     * the same answer a route without a chain gives.
+     */
+    private record Selection(LlmProvider provider, GatewayException unavailable) {}
+
+    private Selection selectChat(ChatRequest request, RequestContext ctx) {
         List<LlmProvider> capable = capabilityFilter(providers, request);
         if (capable.isEmpty() && hasResponseFormatRequirement(request)) {
             String formatType = responseFormatTypeName(request.getResponseFormat());
@@ -342,8 +364,19 @@ public class ProviderDispatcher {
                     + capable.stream().map(LlmProvider::name).toList()
                     + " paused after too many recent failures. Retry shortly; each is tried again after a"
                     + " short cooldown.");
-        } else {
+        }
+        GatewayException unavailable = null;
+        try {
             selected = routeExplainingAbsence(request, healthy, capable, ctx);
+        } catch (GatewayException e) {
+            // Leaving paused providers out of the pool is an optimisation, not a verdict: when it leaves a
+            // matched route with nothing to pick, the route's chain still gets the call, as it would had the
+            // paused provider been called and answered PROVIDER_CIRCUIT_OPEN.
+            selected = pausedRouteChoice(request, healthy, capable, ctx);
+            if (selected == null) {
+                throw e;
+            }
+            unavailable = e;
         }
 
         // Expose the matched route id so post-dispatch filters can scope on
@@ -352,7 +385,26 @@ public class ProviderDispatcher {
         if (ctx.getMatchedRoute() != null) {
             setRouteIdAttribute(ctx.getMatchedRoute().getId());
         }
-        return selected;
+        return new Selection(selected, unavailable);
+    }
+
+    /**
+     * The provider a matched route with a fallback chain would have picked had paused providers been left in
+     * its pool, when that pick is a paused one; otherwise null.
+     */
+    private LlmProvider pausedRouteChoice(ChatRequest request, List<LlmProvider> healthy,
+                                          List<LlmProvider> capable, RequestContext ctx) {
+        RouteConfig route = ctx.getMatchedRoute();
+        if (!fallbackEnabled || route == null || route.getFallbacks() == null || route.getFallbacks().isEmpty()
+                || healthy.size() == capable.size()) {
+            return null;
+        }
+        try {
+            LlmProvider choice = routingStrategy.route(request, capable, ctx);
+            return choice != null && !healthRegistry.isAvailable(choice.name()) ? choice : null;
+        } catch (GatewayException notRoutable) {
+            return null;
+        }
     }
 
     private void setRouteIdAttribute(String routeId) {
