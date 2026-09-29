@@ -35,6 +35,7 @@ import com.dvarahq.core.routing.LatencyTracker;
 import com.dvarahq.core.routing.ModelPrefixRoutingStrategy;
 import com.dvarahq.core.routing.RouteConfig;
 import com.dvarahq.core.routing.RoutingEngine;
+import com.dvarahq.core.routing.WeightedRoutingStrategy;
 import com.dvarahq.server.TestProviders;
 import com.dvarahq.server.metrics.GatewayMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -42,6 +43,9 @@ import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.time.Duration;
 import java.util.Iterator;
@@ -376,6 +380,139 @@ class RouteFallbackChainTest {
         assertThat(billed.getMessages()).isEqualTo(caller.getMessages());
         assertThat(caller.getModel()).isEqualTo("gpt-4o");
         assertThat(new ChatExecutionService.Attribution("key-1", "ws-1", "openai", null).billed(caller)).isSameAs(caller);
+    }
+
+    // ── a primary that is unavailable before the call: circuit open ─────────────────────────
+
+    /** Every provider is available except {@code openai}, whose circuit breaker is open. */
+    private static final ProviderHealthRegistry OPENAI_OPEN =
+            name -> "openai".equals(name) ? ProviderHealthStatus.UNHEALTHY : ProviderHealthStatus.HEALTHY;
+
+    /** A weighted route whose pool is openai alone, for requests to {@code modelPattern}. */
+    private static RoutingEngine weightedRoute(String modelPattern, RouteConfig.FallbackTarget... chain) {
+        List<RouteConfig.ProviderWeight> pool = List.of(RouteConfig.ProviderWeight.builder().provider("openai").weight(100).build());
+        RouteConfig route = RouteConfig.builder().id("support-assistant").modelPattern(modelPattern)
+                .strategy(RouteConfig.Strategy.WEIGHTED).providers(pool).fallbacks(List.of(chain)).build();
+        return new RoutingEngine(new ModelPrefixRoutingStrategy(),
+                List.of(new RoutingEngine.ResolvedRoute(route, new WeightedRoutingStrategy(pool))));
+    }
+
+    private static ProviderDispatcher dispatcher(List<LlmProvider> providers, RoutingEngine routes,
+                                                 ProviderHealthRegistry health) {
+        return new ProviderDispatcher(providers, routes, health, SAME_MODEL,
+                new GatewayMetrics(new SimpleMeterRegistry(), REGION), REGION, new PassthroughDataResidencyPolicy(),
+                ObservationRegistry.NOOP, mock(LatencyTracker.class), mock(CanaryMetricsCollector.class),
+                TestProviders.of(mock(CostEstimator.class)), (req, resp, latency, route) -> { });
+    }
+
+    private static MockHttpServletRequest bindHttpRequest() {
+        MockHttpServletRequest http = new MockHttpServletRequest();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(http));
+        return http;
+    }
+
+    @Test
+    void thePrimarysCircuitIsOpen_theChainServesIt_andIsBilledAsTheBackupsModel() {
+        MockHttpServletRequest http = bindHttpRequest();
+        try {
+            LlmProvider openai = provider("openai", "gpt");
+            LlmProvider anthropic = provider("anthropic", "claude");
+            when(anthropic.chat(any())).thenReturn(response("r-11", "claude-test-backup"));
+            ChatRequest caller = request("support-chat");
+
+            ChatResponse served = dispatcher(List.of(openai, anthropic),
+                    weightedRoute("support-*", new RouteConfig.FallbackTarget("anthropic", "claude-test-backup")),
+                    OPENAI_OPEN).chat(caller);
+
+            assertThat(served.getModel()).isEqualTo("claude-test-backup");
+            ArgumentCaptor<ChatRequest> sent = ArgumentCaptor.forClass(ChatRequest.class);
+            verify(anthropic).chat(sent.capture());
+            assertThat(sent.getValue().getModel()).isEqualTo("claude-test-backup");
+            verify(openai, never()).chat(any());   // a paused provider is not called
+            assertThat(http.getAttribute("gateway.provider")).isEqualTo("anthropic");
+            assertThat(http.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR)).isEqualTo("claude-test-backup");
+            assertThat(ChatExecutionService.Attribution.capture(http).billed(caller).getModel())
+                    .isEqualTo("claude-test-backup");
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    @Test
+    void thePrimarysCircuitIsOpen_forAModelItServes_theChainServesIt() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider anthropic = provider("anthropic", "claude");
+        when(anthropic.chat(any())).thenReturn(response("r-12", "claude-test-backup"));
+
+        ChatResponse served = dispatcher(List.of(openai, anthropic),
+                weightedRoute("gpt-4o", new RouteConfig.FallbackTarget("anthropic", "claude-test-backup")),
+                OPENAI_OPEN).chat(request("gpt-4o"));
+
+        assertThat(served.getModel()).isEqualTo("claude-test-backup");
+        verify(openai, never()).chat(any());
+    }
+
+    @Test
+    void thePrimarysCircuitIsOpen_aStreamIsServedByTheChain_andIsBilledAsTheBackupsModel() {
+        MockHttpServletRequest http = bindHttpRequest();
+        try {
+            LlmProvider openai = provider("openai", "gpt");
+            LlmProvider anthropic = provider("anthropic", "claude");
+            Iterator<SseChunk> backup = List.of(SseChunk.builder().model("claude-test-backup").delta("ready").build()).iterator();
+            when(anthropic.streamChat(any())).thenReturn(backup);
+            ChatRequest caller = request("support-chat").toBuilder().stream(true).build();
+
+            Iterator<SseChunk> served = dispatcher(List.of(openai, anthropic),
+                    weightedRoute("support-*", new RouteConfig.FallbackTarget("anthropic", "claude-test-backup")),
+                    OPENAI_OPEN).streamChat(caller);
+
+            assertThat(served).isSameAs(backup);
+            ArgumentCaptor<ChatRequest> sent = ArgumentCaptor.forClass(ChatRequest.class);
+            verify(anthropic).streamChat(sent.capture());
+            assertThat(sent.getValue().getModel()).isEqualTo("claude-test-backup");
+            assertThat(served.next().getModel()).isEqualTo("claude-test-backup");
+            verify(openai, never()).streamChat(any());
+            assertThat(http.getAttribute("gateway.provider")).isEqualTo("anthropic");
+            assertThat(http.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR)).isEqualTo("claude-test-backup");
+            assertThat(ChatExecutionService.Attribution.capture(http).billed(caller).getModel())
+                    .isEqualTo("claude-test-backup");
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    @Test
+    void thePrimarysCircuitIsOpen_andTheRouteHasNoChain_theAnswerIsUnchanged() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider anthropic = provider("anthropic", "claude");
+
+        assertThatThrownBy(() -> dispatcher(List.of(openai, anthropic), weightedRoute("support-*"), OPENAI_OPEN)
+                .chat(request("support-chat")))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("NO_PROVIDER"));
+        assertThatThrownBy(() -> dispatcher(List.of(openai, anthropic), weightedRoute("gpt-4o"), OPENAI_OPEN)
+                .chat(request("gpt-4o")))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("PROVIDER_CIRCUIT_OPEN"));
+        verify(openai, never()).chat(any());
+        verify(anthropic, never()).chat(any());
+    }
+
+    @Test
+    void thePrimarysCircuitIsOpen_andEveryTargetIsPausedToo_theAnswerIsUnchanged() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider anthropic = provider("anthropic", "claude");
+        LlmProvider mistral = provider("mistral", "mistral");
+        ProviderHealthRegistry onlyMistral = name -> "mistral".equals(name)
+                ? ProviderHealthStatus.HEALTHY : ProviderHealthStatus.UNHEALTHY;
+
+        assertThatThrownBy(() -> dispatcher(List.of(openai, anthropic, mistral),
+                weightedRoute("support-*", new RouteConfig.FallbackTarget("anthropic", "claude-test-backup")), onlyMistral)
+                .chat(request("support-chat")))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("NO_PROVIDER"));
+        verify(anthropic, never()).chat(any());
+        verify(mistral, never()).chat(any());
     }
 
     // ── AC-CPF-03: validation ───────────────────────────────────────────────────────────────
