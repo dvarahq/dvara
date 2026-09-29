@@ -604,6 +604,20 @@ public class ProviderDispatcher {
             if (!"NO_PROVIDER".equals(e.getCode())) {
                 throw e;
             }
+            // The only providers for this model are paused, while others are healthy: that is a temporary
+            // outage, answered as one (503, retryable), not "not configured" (400, which a client doesn't
+            // retry and which is untrue). The all-paused case is answered before the strategy runs.
+            List<String> pausedForModel = capable.stream()
+                    .filter(p -> !candidates.contains(p))
+                    .filter(p -> p.supports(request))
+                    .map(LlmProvider::name)
+                    .toList();
+            if (!pausedForModel.isEmpty()) {
+                throw new GatewayException("PROVIDER_CIRCUIT_OPEN",
+                        "No provider for model " + request.getModel() + " is available right now: "
+                        + pausedForModel + " paused after too many recent failures. Retry shortly; each is"
+                        + " tried again after a short cooldown.");
+            }
             List<String> servesModel = providers.stream()
                     .filter(p -> !capable.contains(p))
                     .filter(p -> p.supports(request))

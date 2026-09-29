@@ -293,6 +293,9 @@ public class GlobalExceptionHandler {
             // gateway, so it is reported as one: a 502 told clients to treat it as a failure.
             status = HttpStatus.TOO_MANY_REQUESTS;
             type = "provider_rate_limited";
+            // One name for it throughout: the code said provider_error while status and type said a rate
+            // limit, and a client switching on the code missed it.
+            code = "PROVIDER_RATE_LIMITED";
         } else if ("PROVIDER_RATE_LIMITED".equals(code)) {
             // the upstream credential's quota is near exhaustion and no fallback provider covered
             // the call. Surface a 429 with the provider's advertised Retry-After (added on the builder).
