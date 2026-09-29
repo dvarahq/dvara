@@ -361,6 +361,98 @@ class OllamaProviderTest {
     }
 
     // -------------------------------------------------------------------------
+    // Per-workspace endpoints (#30, UC-105 A6/A7: DVARA Cloud)
+    // -------------------------------------------------------------------------
+
+    /** A provider whose platform client is {@link #server} and whose workspace client is {@code tenants}. */
+    private OllamaProvider perWorkspace(MockRestServiceServer[] tenants, OllamaEndpointResolver resolver) {
+        RestClient.Builder tenantBuilder = RestClient.builder();
+        tenants[0] = MockRestServiceServer.bindTo(tenantBuilder).build();
+        provider.usePerWorkspaceEndpoints(resolver, tenantBuilder.build());
+        return provider;
+    }
+
+    private static final OllamaEndpointResolver ACME_ONLY = ws -> "acme".equals(ws)
+            ? java.util.Optional.of(new OllamaEndpointResolver.Endpoint("https://ollama.acme.test/v1/", "acme-key"))
+            : java.util.Optional.empty();
+
+    /** Runs {@code body} as a call from {@code workspaceId}. */
+    private static <T> T as(String workspaceId, java.util.function.Supplier<T> body) {
+        java.util.concurrent.atomic.AtomicReference<T> out = new java.util.concurrent.atomic.AtomicReference<>();
+        com.dvarahq.providers.support.WorkspaceScope.runWith(workspaceId, () -> out.set(body.get()));
+        return out.get();
+    }
+
+    private static ChatRequest hi() {
+        return ChatRequest.builder().model("ollama/qwen3:4b-instruct").messages(List.of(MultimodalMessage.user("hi"))).build();
+    }
+
+    @Test
+    void perWorkspace_aCallGoesToTheWorkspacesOwnEndpoint_withItsKey() {
+        MockRestServiceServer[] tenant = new MockRestServiceServer[1];
+        perWorkspace(tenant, ACME_ONLY);
+        tenant[0].expect(requestTo("https://ollama.acme.test/v1/chat/completions"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.header("Authorization", "Bearer acme-key"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.model").value("qwen3:4b-instruct"))
+                .andRespond(withSuccess(ollamaSuccessBody("o-1", "qwen3:4b-instruct", "hello", 3, 1), MediaType.APPLICATION_JSON));
+
+        ChatResponse response = as("acme", () -> provider.chat(hi()));
+
+        tenant[0].verify();
+        server.verify();   // the platform-wide Ollama was never called
+        assertThat(response.getChoices().get(0).getMessage().getContent().get(0))
+                .isEqualTo(new com.dvarahq.core.model.ContentBlock.TextBlock("hello"));
+    }
+
+    @Test
+    void perWorkspace_aWorkspaceWithNoEndpoint_isRefused_andNeverReachesAnotherOrThePlatform() {
+        MockRestServiceServer[] tenant = new MockRestServiceServer[1];
+        perWorkspace(tenant, ACME_ONLY);
+
+        assertThatThrownBy(() -> as("globex", () -> provider.chat(hi())))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("NO_PROVIDER"))
+                .hasMessageContaining("No Ollama endpoint is registered for this workspace");
+        assertThatThrownBy(() -> provider.chat(hi()))   // no workspace at all
+                .isInstanceOf(GatewayException.class).hasMessageContaining("No Ollama endpoint");
+        tenant[0].verify();
+        server.verify();
+    }
+
+    @Test
+    void perWorkspace_withoutAResolver_everyCallIsRefused() {
+        MockRestServiceServer[] tenant = new MockRestServiceServer[1];
+        perWorkspace(tenant, null);
+        assertThatThrownBy(() -> as("acme", () -> provider.chat(hi())))
+                .isInstanceOf(GatewayException.class).hasMessageContaining("No Ollama endpoint");
+        server.verify();
+    }
+
+    @Test
+    void perWorkspace_aRedirectIsRefused_notFollowed() {
+        MockRestServiceServer[] tenant = new MockRestServiceServer[1];
+        perWorkspace(tenant, ACME_ONLY);
+        tenant[0].expect(requestTo("https://ollama.acme.test/v1/chat/completions"))
+                .andRespond(withStatus(HttpStatus.FOUND).header("Location", "http://169.254.169.254/latest/meta-data/"));
+
+        assertThatThrownBy(() -> as("acme", () -> provider.chat(hi())))
+                .isInstanceOf(GatewayException.class).hasMessageContaining("redirect");
+        tenant[0].verify();
+    }
+
+    @Test
+    void perWorkspace_listsNoPlatformModels() {
+        perWorkspace(new MockRestServiceServer[1], ACME_ONLY);
+        assertThat(provider.listModels()).isEmpty();
+        server.verify();
+    }
+
+    @Test
+    void anEndpointNeverPrintsItsCredential() {
+        assertThat(new OllamaEndpointResolver.Endpoint("https://x", "secret").toString()).doesNotContain("secret");
+    }
+
+    // -------------------------------------------------------------------------
     // capabilities()
     // -------------------------------------------------------------------------
 

@@ -15,6 +15,7 @@
  */
 package com.dvarahq.providers.ollama;
 
+import com.dvarahq.providers.support.CredentialInterceptor;
 import com.dvarahq.providers.support.ProviderErrors;
 
 import com.dvarahq.core.exception.GatewayException;
@@ -72,16 +73,78 @@ public class OllamaProvider extends AbstractLlmProvider {
         this.restClient = restClient;
     }
 
+    // -------------------------------------------------------------------------
+    // Per-workspace endpoints (#30, UC-105 A6/A7)
+    // -------------------------------------------------------------------------
+
+    /** Each workspace's own Ollama, or null to call the platform-wide one as before. */
+    private OllamaEndpointResolver workspaceEndpoints;
+    /** The client for workspace endpoints: absolute URLs, no redirects followed. */
+    private RestClient workspaceClient;
+
+    /**
+     * Sends every call to the calling workspace's own Ollama (DVARA Cloud) and never to the platform-wide
+     * one (BR-105-4). A workspace with none is refused (A7). {@code resolver} may be null, which refuses
+     * every call: a Cloud gateway without the resolver must not fall back to DVARA's own Ollama.
+     *
+     * @param client a client that follows no redirects: a tenant's endpoint passed egress validation, and
+     *               a redirect to somewhere that did not must not be followed
+     */
+    public void usePerWorkspaceEndpoints(OllamaEndpointResolver resolver, RestClient client) {
+        this.workspaceEndpoints = resolver != null ? resolver : workspaceId -> java.util.Optional.empty();
+        this.workspaceClient = client;
+    }
+
+    /** Where a call goes: the platform client and a relative path, or a workspace's endpoint. */
+    private record Target(RestClient client, String base, String credential) {
+        RestClient.RequestBodySpec post(String path) {
+            RestClient.RequestBodySpec spec = client.post().uri(base + path);
+            if (credential != null) {
+                spec = spec.header(org.springframework.http.HttpHeaders.AUTHORIZATION, "Bearer " + credential);
+            }
+            return spec;
+        }
+    }
+
+    private Target target() {
+        if (workspaceEndpoints == null) {
+            return new Target(restClient, "", null);
+        }
+        String workspaceId = com.dvarahq.providers.support.CredentialInterceptor.resolveWorkspaceId();
+        OllamaEndpointResolver.Endpoint endpoint = workspaceId == null ? null
+                : workspaceEndpoints.resolve(workspaceId).orElse(null);
+        if (endpoint == null) {
+            // A7: never the platform-wide Ollama, which on DVARA Cloud is DVARA's machine, not the tenant's.
+            throw new GatewayException("NO_PROVIDER", "No Ollama endpoint is registered for this workspace. "
+                    + "Add one under Credentials: provider Ollama, with its HTTPS base URL and the key your "
+                    + "endpoint expects.");
+        }
+        String base = endpoint.baseUrl().replaceAll("/+$", "");
+        if (base.endsWith("/v1")) {
+            base = base.substring(0, base.length() - 3);
+        }
+        CredentialInterceptor.recordFingerprint(endpoint.credential());
+        return new Target(workspaceClient, base, endpoint.credential());
+    }
+
+    /** A workspace endpoint's redirect is refused, not followed (BR-105-5). */
+    private static boolean refusedRedirect(org.springframework.http.HttpStatusCode status) {
+        return status.is3xxRedirection();
+    }
+
     @Override
     public ChatResponse chat(ChatRequest request) {
         rejectUnsupportedResponseFormat(request.getResponseFormat());
         Map<String, Object> body = buildChatBody(request);
 
-        OllamaResponse resp = restClient.post()
-                .uri("/v1/chat/completions")
+        OllamaResponse resp = target().post("/v1/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body)
                 .retrieve()
+                .onStatus(OllamaProvider::refusedRedirect, (req, res) -> {
+                    throw new GatewayException("PROVIDER_ERROR",
+                            "The Ollama endpoint answered with a redirect, which is not followed");
+                })
                 .onStatus(status -> status.isError(), (req, res) -> {
                     ProviderErrors.logRefusal("Ollama", res);
                     // Named with the model: "does not support tools" is a property of the model (#30 A1).
@@ -105,11 +168,14 @@ public class OllamaProvider extends AbstractLlmProvider {
         Map<String, Object> body = buildChatBody(request);
         body.put("stream", true);
 
-        return restClient.post()
-                .uri("/v1/chat/completions")
+        return target().post("/v1/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body)
                 .exchange((req, res) -> {
+                    if (refusedRedirect(res.getStatusCode())) {
+                        throw new GatewayException("PROVIDER_ERROR",
+                                "The Ollama endpoint answered with a redirect, which is not followed");
+                    }
                     if (res.getStatusCode().isError()) {
                         throw GatewayException.upstream(res.getStatusCode().value(),
                                 "Ollama streaming error " + res.getStatusCode().value()
@@ -293,6 +359,10 @@ public class OllamaProvider extends AbstractLlmProvider {
 
     @Override
     public java.util.List<com.dvarahq.core.provider.ModelInfo> listModels() {
+        if (workspaceEndpoints != null) {
+            // Per-workspace: there is no one Ollama whose models are the platform's to list.
+            return List.of();
+        }
         OllamaModelList response = restClient.get()
                 .uri("/api/tags")
                 .retrieve()
