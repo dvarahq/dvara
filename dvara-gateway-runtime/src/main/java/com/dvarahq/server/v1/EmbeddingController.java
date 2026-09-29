@@ -120,10 +120,12 @@ public class EmbeddingController {
 
             int totalTokens = resp.getUsage() != null ? resp.getUsage().getTotalTokens() : 0;
             if (totalTokens > 0) {
-                String apiKey = ApiKeyAuthFilter.requiredLimiterKey(httpRequest);
-                // Reserved 0: token estimation runs for chat only, so this path admits without
-                // charging and settles the whole actual.
-                rateLimiter.reconcileTokens(apiKey, 0, totalTokens);
+                // The rate-limit filter reserved an estimate for this call, as it does for chat and
+                // Responses, so the actual is settled against that reservation. Settling against 0 added
+                // the whole actual on top of the estimate and charged the call about twice.
+                var settlement = com.dvarahq.server.service.ChatExecutionService.TokenSettlement.capture(httpRequest);
+                rateLimiter.reconcileTokens(settlement.limiterKey(), settlement.reserved(), totalTokens,
+                        settlement.reservationId());
             }
             // On the ledger, not just in the rate-limit window.
             chatExecutionService.persistEmbeddingUsage(httpRequest, prep.request(),
