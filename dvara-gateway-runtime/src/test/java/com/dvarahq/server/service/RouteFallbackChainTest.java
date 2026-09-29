@@ -335,6 +335,49 @@ class RouteFallbackChainTest {
         verify(anthropic, never()).streamChat(any());
     }
 
+    // ── billing: the model that served the call (#74) ────────────────────────────────────────
+
+    @Test
+    void aCallTheBackupServed_isStampedWithTheBackupsModel_andTheCallersWhenThePrimaryServes() {
+        org.springframework.mock.web.MockHttpServletRequest http = new org.springframework.mock.web.MockHttpServletRequest();
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(http));
+        try {
+            LlmProvider openai = provider("openai", "gpt");
+            LlmProvider anthropic = provider("anthropic", "claude");
+            when(openai.chat(any())).thenThrow(OUTAGE);
+            when(anthropic.chat(any())).thenReturn(response("r-9", "claude-test-backup"));
+
+            dispatcher(List.of(openai, anthropic), routes(new RouteConfig.FallbackTarget("anthropic", "claude-test-backup")))
+                    .chat(request("gpt-4o"));
+            assertThat(http.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR)).isEqualTo("claude-test-backup");
+            assertThat(http.getAttribute("gateway.provider")).isEqualTo("anthropic");
+
+            org.springframework.mock.web.MockHttpServletRequest second = new org.springframework.mock.web.MockHttpServletRequest();
+            org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                    new org.springframework.web.context.request.ServletRequestAttributes(second));
+            LlmProvider healthy = provider("openai", "gpt");
+            when(healthy.chat(any())).thenReturn(response("r-10", "gpt-4o"));
+            dispatcher(List.of(healthy), routes()).chat(request("gpt-4o"));
+            assertThat(second.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR)).isEqualTo("gpt-4o");
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    @Test
+    void theRecordedRequestCarriesTheServedModel_andOnlyItsModelChanges() {
+        ChatRequest caller = request("gpt-4o");
+        var who = new ChatExecutionService.Attribution("key-1", "ws-1", "anthropic", null, "claude-test-backup");
+
+        ChatRequest billed = who.billed(caller);
+
+        assertThat(billed.getModel()).isEqualTo("claude-test-backup");
+        assertThat(billed.getMessages()).isEqualTo(caller.getMessages());
+        assertThat(caller.getModel()).isEqualTo("gpt-4o");
+        assertThat(new ChatExecutionService.Attribution("key-1", "ws-1", "openai", null).billed(caller)).isSameAs(caller);
+    }
+
     // ── AC-CPF-03: validation ───────────────────────────────────────────────────────────────
 
     @Test
