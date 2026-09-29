@@ -327,6 +327,7 @@ class GlobalExceptionHandlerTest {
 
         assertThat(result.getStatusCode().value()).isEqualTo(429);
         assertThat(result.getBody().getError().getType()).isEqualTo("provider_rate_limited");
+        assertThat(result.getBody().getError().getCode()).isEqualTo("provider_rate_limited");
     }
 
     /** #53: a request the provider rejected is the caller's to fix: a 400, not a bad gateway. */

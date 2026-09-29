@@ -1114,6 +1114,33 @@ class ProviderDispatcherTest {
         verify(mockTracker, never()).record(any(), any(), org.mockito.ArgumentMatchers.anyLong());
     }
 
+    /** A model's only provider is paused while another provider is healthy: 503, not "not configured". */
+    @Test
+    void chat_theOnlyProviderForTheModelIsPaused_whileAnotherIsHealthy_is503() {
+        LlmProvider deepseek = mock(LlmProvider.class);
+        when(deepseek.name()).thenReturn("deepseek");
+        when(deepseek.supports(any())).thenAnswer(inv -> ((ChatRequest) inv.getArgument(0)).getModel().startsWith("deepseek"));
+        when(deepseek.capabilities()).thenReturn(fullCaps());
+        LlmProvider openai = mock(LlmProvider.class);
+        when(openai.name()).thenReturn("openai");
+        when(openai.supports(any())).thenAnswer(inv -> ((ChatRequest) inv.getArgument(0)).getModel().startsWith("gpt"));
+        when(openai.capabilities()).thenReturn(fullCaps());
+        ProviderHealthRegistry deepseekPaused = name -> "deepseek".equals(name)
+                ? ProviderHealthStatus.UNHEALTHY : ProviderHealthStatus.HEALTHY;
+        ProviderDispatcher dispatcher = new ProviderDispatcher(List.of(deepseek, openai), DEFAULT_STRATEGY, deepseekPaused,
+                DEFAULT_FALLBACK, TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
+
+        assertThatThrownBy(() -> dispatcher.chat(chatRequest("deepseek-chat")))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("PROVIDER_CIRCUIT_OPEN"))
+                .hasMessageContaining("deepseek");
+        // A model nobody serves is still "not configured".
+        assertThatThrownBy(() -> dispatcher.chat(chatRequest("mistral-large")))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("NO_PROVIDER"));
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
