@@ -82,5 +82,43 @@ public class ResponseResult {
         private int outputTokens;
         @JsonProperty("total_tokens")
         private int totalTokens;
+        /** Present only when the upstream reported cached input; a part of {@code input_tokens}. */
+        @JsonProperty("input_tokens_details")
+        private InputTokensDetails inputTokensDetails;
+        /** Present only when the upstream reported reasoning; a part of {@code output_tokens}. */
+        @JsonProperty("output_tokens_details")
+        private OutputTokensDetails outputTokensDetails;
+
+        /** The Responses-shaped block for an internal one; null for null. */
+        public static Usage from(com.dvarahq.core.model.ChatResponse.Usage u) {
+            if (u == null) {
+                return null;
+            }
+            return Usage.builder()
+                    .inputTokens(u.getPromptTokens())
+                    .outputTokens(u.getCompletionTokens())
+                    .totalTokens(u.getTotalTokens())
+                    .inputTokensDetails(u.getCachedInputTokens() > 0
+                            ? new InputTokensDetails(u.getCachedInputTokens()) : null)
+                    .outputTokensDetails(u.getReasoningTokens() > 0
+                            ? new OutputTokensDetails(u.getReasoningTokens()) : null)
+                    .build();
+        }
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class InputTokensDetails {
+        @JsonProperty("cached_tokens")
+        private int cachedTokens;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class OutputTokensDetails {
+        @JsonProperty("reasoning_tokens")
+        private int reasoningTokens;
     }
 }

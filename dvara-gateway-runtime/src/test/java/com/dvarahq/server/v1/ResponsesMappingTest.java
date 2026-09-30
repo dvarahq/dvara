@@ -219,6 +219,36 @@ class ResponsesMappingTest {
         assertThat(result.getUsage().getTotalTokens()).isEqualTo(6);
     }
 
+    @Test
+    void chatResponse_cachedAndReasoningTokens_mapToResponsesDetails() throws Exception {
+        ChatResponse resp = ChatResponse.builder()
+                .id("chatcmpl-1").model("o3").created(1234)
+                .choices(List.of(ChatResponse.Choice.builder().index(0)
+                        .message(MultimodalMessage.assistant("Four")).finishReason("stop").build()))
+                .usage(ChatResponse.Usage.builder().promptTokens(1200).completionTokens(500).totalTokens(1700)
+                        .cachedInputTokens(1024).reasoningTokens(448).build())
+                .build();
+
+        String json = com.dvarahq.core.util.JsonMapper.instance().writeValueAsString(controller.toResponseResult(resp));
+
+        assertThat(json).contains("\"input_tokens_details\":{\"cached_tokens\":1024}")
+                .contains("\"output_tokens_details\":{\"reasoning_tokens\":448}");
+    }
+
+    @Test
+    void chatResponse_withoutBreakdown_hasNoDetails() throws Exception {
+        ChatResponse resp = ChatResponse.builder()
+                .id("chatcmpl-1").model("gpt-4o").created(1234)
+                .choices(List.of(ChatResponse.Choice.builder().index(0)
+                        .message(MultimodalMessage.assistant("Four")).finishReason("stop").build()))
+                .usage(ChatResponse.Usage.builder().promptTokens(5).completionTokens(1).totalTokens(6).build())
+                .build();
+
+        String json = com.dvarahq.core.util.JsonMapper.instance().writeValueAsString(controller.toResponseResult(resp));
+
+        assertThat(json).doesNotContain("tokens_details");
+    }
+
     // -------- reject unsupported --------
 
     @Test

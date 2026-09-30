@@ -288,11 +288,7 @@ public class ChatCompletionController {
                             .created(Instant.now().getEpochSecond())
                             .model(streamRequest.getModel())
                             .choices(List.of())
-                            .usage(ChatCompletionResponse.Usage.builder()
-                                    .promptTokens(u.getPromptTokens())
-                                    .completionTokens(u.getCompletionTokens())
-                                    .totalTokens(u.getTotalTokens())
-                                    .build())
+                            .usage(ChatCompletionResponse.Usage.from(u))
                             .build();
                     emitter.send(SseEmitter.event().data(
                             JsonMapper.instance().writeValueAsString(usageChunk), MediaType.APPLICATION_JSON));
@@ -589,12 +585,7 @@ public class ChatCompletionController {
                         .build())
                 .toList();
 
-        ChatCompletionResponse.Usage usage = resp.getUsage() == null ? null
-                : ChatCompletionResponse.Usage.builder()
-                        .promptTokens(resp.getUsage().getPromptTokens())
-                        .completionTokens(resp.getUsage().getCompletionTokens())
-                        .totalTokens(resp.getUsage().getTotalTokens())
-                        .build();
+        ChatCompletionResponse.Usage usage = ChatCompletionResponse.Usage.from(resp.getUsage());
 
         return ChatCompletionResponse.builder()
                 .id(resp.getId())

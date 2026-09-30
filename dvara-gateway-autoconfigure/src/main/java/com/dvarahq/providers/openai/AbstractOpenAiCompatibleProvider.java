@@ -420,13 +420,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
 
         // Null where the upstream reported nothing: a zeroed block would claim the call consumed
         // nothing, which the metering path cannot tell from a real zero.
-        ChatResponse.Usage usage = oai.getUsage() == null
-                ? null
-                : ChatResponse.Usage.builder()
-                        .promptTokens(oai.getUsage().getPromptTokens())
-                        .completionTokens(oai.getUsage().getCompletionTokens())
-                        .totalTokens(oai.getUsage().getTotalTokens())
-                        .build();
+        ChatResponse.Usage usage = oai.getUsage() == null ? null : oai.getUsage().toUsage();
 
         return ChatResponse.builder()
                 .id(oai.getId())
@@ -469,7 +463,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         private long created;
         private String model;
         private List<OaiChoice> choices;
-        private OaiUsage usage;
+        private com.dvarahq.providers.support.OpenAiUsage usage;
 
         @Data @JsonIgnoreProperties(ignoreUnknown = true)
         static class OaiChoice {
@@ -496,13 +490,6 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 private String name;
                 private String arguments;
             }
-        }
-
-        @Data @JsonIgnoreProperties(ignoreUnknown = true)
-        static class OaiUsage {
-            @JsonProperty("prompt_tokens")     private int promptTokens;
-            @JsonProperty("completion_tokens") private int completionTokens;
-            @JsonProperty("total_tokens")      private int totalTokens;
         }
     }
 

@@ -200,13 +200,9 @@ public final class OpenAiCompatibleStreamDecoder implements Iterator<SseChunk>, 
         }
         // The usage-bearing chunk arrives after the one carrying finish_reason and has an empty choices
         // array, so it is a normal chunk with a null delta. Groq reports usage under x_groq.
-        StreamChunk.Usage reported = chunk.getUsage() != null ? chunk.getUsage()
+        OpenAiUsage reported = chunk.getUsage() != null ? chunk.getUsage()
                 : chunk.getXGroq() != null ? chunk.getXGroq().getUsage() : null;
-        ChatResponse.Usage usage = reported == null ? null : ChatResponse.Usage.builder()
-                .promptTokens(reported.getPromptTokens())
-                .completionTokens(reported.getCompletionTokens())
-                .totalTokens(reported.getTotalTokens())
-                .build();
+        ChatResponse.Usage usage = reported == null ? null : reported.toUsage();
         return SseChunk.builder()
                 .id(chunk.getId())
                 .model(chunk.getModel() != null ? chunk.getModel() : model)
@@ -286,7 +282,7 @@ public final class OpenAiCompatibleStreamDecoder implements Iterator<SseChunk>, 
         private String model;
         private List<Choice> choices;
         /** Present only on the final chunk, and only when asked for with {@code stream_options}. */
-        private Usage usage;
+        private OpenAiUsage usage;
         /** Groq reports streamed usage here instead. */
         @JsonProperty("x_groq") private XGroq xGroq;
         /** An upstream that fails part-way sends {@code {"error": {...}}} as a data payload. */
@@ -294,14 +290,7 @@ public final class OpenAiCompatibleStreamDecoder implements Iterator<SseChunk>, 
 
         @Data @JsonIgnoreProperties(ignoreUnknown = true)
         static class XGroq {
-            private Usage usage;
-        }
-
-        @Data @JsonIgnoreProperties(ignoreUnknown = true)
-        static class Usage {
-            @JsonProperty("prompt_tokens")     private int promptTokens;
-            @JsonProperty("completion_tokens") private int completionTokens;
-            @JsonProperty("total_tokens")      private int totalTokens;
+            private OpenAiUsage usage;
         }
 
         @Data @JsonIgnoreProperties(ignoreUnknown = true)

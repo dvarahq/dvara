@@ -243,13 +243,7 @@ public class MistralProvider extends AbstractLlmProvider {
 
         // The upstream reported nothing; null says that, and a zeroed block would say it
         // consumed nothing — which the metering path cannot tell from a real zero.
-        ChatResponse.Usage usage = mistral.getUsage() == null
-                ? null
-                : ChatResponse.Usage.builder()
-                        .promptTokens(mistral.getUsage().getPromptTokens())
-                        .completionTokens(mistral.getUsage().getCompletionTokens())
-                        .totalTokens(mistral.getUsage().getTotalTokens())
-                        .build();
+        ChatResponse.Usage usage = mistral.getUsage() == null ? null : mistral.getUsage().toUsage();
 
         return ChatResponse.builder()
                 .id(mistral.getId())
@@ -317,7 +311,7 @@ public class MistralProvider extends AbstractLlmProvider {
         private long created;
         private String model;
         private List<MistralChoice> choices;
-        private MistralUsage usage;
+        private com.dvarahq.providers.support.OpenAiUsage usage;
 
         @Data @JsonIgnoreProperties(ignoreUnknown = true)
         static class MistralChoice {
@@ -346,12 +340,6 @@ public class MistralProvider extends AbstractLlmProvider {
             }
         }
 
-        @Data @JsonIgnoreProperties(ignoreUnknown = true)
-        static class MistralUsage {
-            @JsonProperty("prompt_tokens")     private int promptTokens;
-            @JsonProperty("completion_tokens") private int completionTokens;
-            @JsonProperty("total_tokens")      private int totalTokens;
-        }
     }
 
     @Data

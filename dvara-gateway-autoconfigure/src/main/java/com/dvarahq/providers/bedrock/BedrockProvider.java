@@ -362,6 +362,22 @@ public class BedrockProvider extends AbstractLlmProvider {
         return mediaType.startsWith("image/") ? mediaType.substring(6) : mediaType;
     }
 
+    /**
+     * Converse reports the tokens read from and written to the prompt cache outside
+     * {@code inputTokens}. They are input all the same, so the gateway's input count adds them back
+     * and reports them as the breakdown of that count.
+     */
+    static ChatResponse.Usage usage(int input, int cacheRead, int cacheWrite, int output) {
+        int prompt = input + cacheRead + cacheWrite;
+        return ChatResponse.Usage.builder()
+                .promptTokens(prompt)
+                .completionTokens(output)
+                .totalTokens(prompt + output)
+                .cachedInputTokens(cacheRead)
+                .cacheWriteTokens(cacheWrite)
+                .build();
+    }
+
     private ChatResponse mapToInternal(ConverseResponse resp, String model, ResponseFormat format) {
         String text = "";
         String finishReason;
@@ -414,16 +430,9 @@ public class BedrockProvider extends AbstractLlmProvider {
 
         // Null, not a zeroed block: a zeroed one cannot be told apart from a call that really cost
         // nothing, and the metering path drops a response whose total is not positive.
-        ChatResponse.Usage usage = null;
-        if (resp.getUsage() != null) {
-            int input = resp.getUsage().getInputTokens();
-            int output = resp.getUsage().getOutputTokens();
-            usage = ChatResponse.Usage.builder()
-                    .promptTokens(input)
-                    .completionTokens(output)
-                    .totalTokens(input + output)
-                    .build();
-        }
+        ChatResponse.Usage usage = resp.getUsage() == null ? null
+                : usage(resp.getUsage().getInputTokens(), resp.getUsage().getCacheReadInputTokens(),
+                        resp.getUsage().getCacheWriteInputTokens(), resp.getUsage().getOutputTokens());
 
         return ChatResponse.builder()
                 .id("bedrock-" + Instant.now().toEpochMilli())
@@ -584,11 +593,9 @@ public class BedrockProvider extends AbstractLlmProvider {
                                 throw providerError("Bedrock stream sent metadata before messageStop");
                             }
                             JsonNode usage = JsonMapper.instance().readTree(frame.payload()).path("usage");
-                            return finalChunk(usage.isMissingNode() ? null : ChatResponse.Usage.builder()
-                                    .promptTokens(usage.path("inputTokens").asInt())
-                                    .completionTokens(usage.path("outputTokens").asInt())
-                                    .totalTokens(usage.path("totalTokens").asInt())
-                                    .build());
+                            return finalChunk(usage.isMissingNode() ? null : usage(usage.path("inputTokens").asInt(),
+                                    usage.path("cacheReadInputTokens").asInt(), usage.path("cacheWriteInputTokens").asInt(),
+                                    usage.path("outputTokens").asInt()));
                         }
                         default -> { }   // messageStart, contentBlockStop: nothing to emit
                     }
@@ -811,6 +818,8 @@ public class BedrockProvider extends AbstractLlmProvider {
             private int inputTokens;
             private int outputTokens;
             private int totalTokens;
+            private int cacheReadInputTokens;
+            private int cacheWriteInputTokens;
         }
     }
 }

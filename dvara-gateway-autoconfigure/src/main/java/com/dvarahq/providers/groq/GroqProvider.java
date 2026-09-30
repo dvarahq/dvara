@@ -206,13 +206,7 @@ public class GroqProvider extends AbstractLlmProvider {
 
         // The upstream reported nothing; null says that, and a zeroed block would say it
         // consumed nothing — which the metering path cannot tell from a real zero.
-        ChatResponse.Usage usage = groq.getUsage() == null
-                ? null
-                : ChatResponse.Usage.builder()
-                        .promptTokens(groq.getUsage().getPromptTokens())
-                        .completionTokens(groq.getUsage().getCompletionTokens())
-                        .totalTokens(groq.getUsage().getTotalTokens())
-                        .build();
+        ChatResponse.Usage usage = groq.getUsage() == null ? null : groq.getUsage().toUsage();
 
         return ChatResponse.builder()
                 .id(groq.getId())
@@ -263,7 +257,7 @@ public class GroqProvider extends AbstractLlmProvider {
         private long created;
         private String model;
         private List<GroqChoice> choices;
-        private GroqUsage usage;
+        private com.dvarahq.providers.support.OpenAiUsage usage;
 
         @Data @JsonIgnoreProperties(ignoreUnknown = true)
         static class GroqChoice {
@@ -278,12 +272,6 @@ public class GroqProvider extends AbstractLlmProvider {
             private String content;
         }
 
-        @Data @JsonIgnoreProperties(ignoreUnknown = true)
-        static class GroqUsage {
-            @JsonProperty("prompt_tokens")     private int promptTokens;
-            @JsonProperty("completion_tokens") private int completionTokens;
-            @JsonProperty("total_tokens")      private int totalTokens;
-        }
     }
 
     @Data

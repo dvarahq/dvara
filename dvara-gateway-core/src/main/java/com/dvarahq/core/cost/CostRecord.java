@@ -53,4 +53,23 @@ public class CostRecord {
     private String pricingId;
     private Map<String, String> tags;
     private Instant timestamp;
+
+    /**
+     * The part of {@code inputTokens} read from the provider's prompt cache. Part of the input
+     * count, never added to it; zero when the upstream reported none.
+     */
+    private int cachedInputTokens;
+    /** The part of {@code inputTokens} written to the provider's prompt cache. */
+    private int cacheWriteTokens;
+    /** The part of {@code outputTokens} the model spent reasoning. */
+    private int reasoningTokens;
+
+    /** A record with no cache or reasoning breakdown. */
+    public CostRecord(String id, String workspaceId, String apiKey, String model, String provider,
+                      int inputTokens, int outputTokens, BigDecimal inputCost, BigDecimal outputCost,
+                      BigDecimal totalCost, String currency, String pricingId, Map<String, String> tags,
+                      Instant timestamp) {
+        this(id, workspaceId, apiKey, model, provider, inputTokens, outputTokens, inputCost, outputCost,
+                totalCost, currency, pricingId, tags, timestamp, 0, 0, 0);
+    }
 }

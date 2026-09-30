@@ -60,6 +60,14 @@ public class ChatResponse {
      * there is no such fallback: a null and a zeroed block are both dropped, with no usage row and no
      * cost row. Null is still the right thing to write when the upstream said nothing: it is the
      * truth, and it is what a non-streamed fallback would key on if one is ever added.
+     *
+     * <p><b>The breakdown is part of the counts, never added to them.</b> {@code cachedInputTokens}
+     * and {@code cacheWriteTokens} are parts of {@code promptTokens}; {@code reasoningTokens} is part
+     * of {@code completionTokens}; {@code totalTokens} stays {@code promptTokens + completionTokens}.
+     * A provider that reports its cache counts outside its input count has them added into
+     * {@code promptTokens} by its mapper, so the relation holds for every provider. Adding a
+     * breakdown field to a total would count the same tokens twice. Zero means the upstream reported
+     * none, which is also what every provider that does not report them gives.
      */
     @Data
     @Builder
@@ -69,5 +77,16 @@ public class ChatResponse {
         private int promptTokens;
         private int completionTokens;
         private int totalTokens;
+        /** The part of {@code promptTokens} read from the provider's prompt cache. */
+        private int cachedInputTokens;
+        /** The part of {@code promptTokens} written to the provider's prompt cache. */
+        private int cacheWriteTokens;
+        /** The part of {@code completionTokens} the model spent reasoning, which the caller does not see as text. */
+        private int reasoningTokens;
+
+        /** The three counts alone, with no breakdown. */
+        public Usage(int promptTokens, int completionTokens, int totalTokens) {
+            this(promptTokens, completionTokens, totalTokens, 0, 0, 0);
+        }
     }
 }

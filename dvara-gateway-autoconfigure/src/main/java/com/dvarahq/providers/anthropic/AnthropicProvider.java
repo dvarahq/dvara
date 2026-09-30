@@ -369,11 +369,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
                 // Null where the upstream reported nothing: a zeroed block would claim the call
                 // consumed nothing, which the metering path cannot tell from a real zero.
                 .usage(ar.getUsage() == null ? null
-                        : ChatResponse.Usage.builder()
-                                .promptTokens(ar.getUsage().getInputTokens())
-                                .completionTokens(ar.getUsage().getOutputTokens())
-                                .totalTokens(ar.getUsage().getInputTokens() + ar.getUsage().getOutputTokens())
-                                .build())
+                        : usage(ar.getUsage().getInputTokens(), ar.getUsage().getCacheReadInputTokens(),
+                                ar.getUsage().getCacheCreationInputTokens(), ar.getUsage().getOutputTokens()))
                 .gatewayHeaders(gatewayHeaders)
                 .build();
     }
@@ -403,6 +400,44 @@ public class AnthropicProvider extends AbstractLlmProvider {
     }
 
     // -------------------------------------------------------------------------
+    // Usage
+    // -------------------------------------------------------------------------
+
+    /**
+     * Anthropic's {@code input_tokens} leaves out the tokens read from and written to the prompt
+     * cache. They are input all the same, so the gateway's input count adds them back, and they are
+     * reported as the breakdown of that count.
+     */
+    static ChatResponse.Usage usage(int input, int cacheRead, int cacheWrite, int output) {
+        int prompt = input + cacheRead + cacheWrite;
+        return ChatResponse.Usage.builder()
+                .promptTokens(prompt)
+                .completionTokens(output)
+                .totalTokens(prompt + output)
+                .cachedInputTokens(cacheRead)
+                .cacheWriteTokens(cacheWrite)
+                .build();
+    }
+
+    /**
+     * A stream's usage: the input side from message_start, the output count from message_delta,
+     * whose {@code output_tokens} is the running total. Null when neither event carried usage, so
+     * the call is metered on an estimate and says so.
+     */
+    static ChatResponse.Usage streamedUsage(JsonNode start, JsonNode delta) {
+        boolean hasStart = start != null && start.isObject();
+        boolean hasDelta = delta != null && delta.isObject();
+        if (!hasStart && !hasDelta) {
+            return null;
+        }
+        JsonNode in = hasStart ? start : delta;
+        int output = hasDelta && delta.has("output_tokens")
+                ? delta.path("output_tokens").asInt() : (hasStart ? start.path("output_tokens").asInt() : 0);
+        return usage(in.path("input_tokens").asInt(), in.path("cache_read_input_tokens").asInt(),
+                in.path("cache_creation_input_tokens").asInt(), output);
+    }
+
+    // -------------------------------------------------------------------------
     // SSE stream iterator
     // -------------------------------------------------------------------------
 
@@ -418,6 +453,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
         private String messageId;
         /** A stop reason arrived (message_delta); the stream may end after it, never before. */
         private boolean finished;
+        /** The usage message_start reported: the input side, final from the first event. */
+        private JsonNode startUsage;
         /**
          * Content-block index → tool-call index. Anthropic numbers every block, text ones
          * included, so the first tool_use block of a reply may be block 1; a consumer sees tool calls
@@ -472,6 +509,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
                             if (node.has("message") && node.get("message").has("id")) {
                                 messageId = node.get("message").get("id").asText();
                             }
+                            // The input side is final here; the output count arrives on message_delta.
+                            startUsage = node.path("message").path("usage");
                             currentEvent = null;
                             continue;
 
@@ -537,6 +576,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
                                     .model(model)
                                     .delta(null)
                                     .finishReason(finishReason)
+                                    .usage(streamedUsage(startUsage, node.path("usage")))
                                     .done(true)
                                     .build();
 
@@ -646,6 +686,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
         static class Usage {
             @JsonProperty("input_tokens")  private int inputTokens;
             @JsonProperty("output_tokens") private int outputTokens;
+            @JsonProperty("cache_read_input_tokens")     private int cacheReadInputTokens;
+            @JsonProperty("cache_creation_input_tokens") private int cacheCreationInputTokens;
         }
     }
 
