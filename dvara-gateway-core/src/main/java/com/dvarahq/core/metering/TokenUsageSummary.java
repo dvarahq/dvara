@@ -22,6 +22,10 @@ import lombok.NoArgsConstructor;
 
 /**
  * Aggregated token usage summary for a given filter criteria.
+ *
+ * <p>The cached-input, cache-write and reasoning sums are parts of the input and output totals,
+ * never additions to them. A row stored before those counts were recorded adds zero to each, so for
+ * a window that starts earlier the parts cover only the calls recorded since.</p>
  */
 @Data
 @Builder
@@ -35,4 +39,16 @@ public class TokenUsageSummary {
     private long totalOutputTokens;
     private long totalTokens;
     private long requestCount;
+    /** The part of {@code totalInputTokens} read from a provider's prompt cache. */
+    private long totalCachedInputTokens;
+    /** The part of {@code totalInputTokens} written to a provider's prompt cache. */
+    private long totalCacheWriteTokens;
+    /** The part of {@code totalOutputTokens} the model spent reasoning. */
+    private long totalReasoningTokens;
+
+    /** A summary with no cache or reasoning breakdown. */
+    public TokenUsageSummary(String workspaceId, String model, long totalInputTokens, long totalOutputTokens,
+                             long totalTokens, long requestCount) {
+        this(workspaceId, model, totalInputTokens, totalOutputTokens, totalTokens, requestCount, 0, 0, 0);
+    }
 }

@@ -68,4 +68,29 @@ class InMemoryTokenUsageRepositoryTest {
         assertThat(repository.findByModel("gpt-4o")).extracting(TokenUsageRecord::getModel)
                 .containsExactly("gpt-4o");
     }
+
+    @Test
+    void summarizeSumsTheCacheAndReasoningBreakdown() {
+        var repository = new InMemoryTokenUsageRepository();
+        java.time.Instant at = java.time.Instant.parse("2026-09-01T10:00:00Z");
+        repository.save(TokenUsageRecord.builder().workspaceId("acme").model("gpt-4o")
+                .inputTokens(100).outputTokens(40).totalTokens(140)
+                .cachedInputTokens(80).cacheWriteTokens(10).reasoningTokens(30).timestamp(at).build());
+        repository.save(TokenUsageRecord.builder().workspaceId("acme").model("gpt-4o")
+                .inputTokens(50).outputTokens(20).totalTokens(70)
+                .cachedInputTokens(5).cacheWriteTokens(1).reasoningTokens(2).timestamp(at).build());
+        // A row stored before the breakdown existed reads as zero for each part.
+        repository.save(new TokenUsageRecord("r3", "acme", "key", "gpt-4o", "openai",
+                10, 10, 20, false, null, "MISS", at));
+
+        var summary = repository.summarize("acme", null, null, null);
+
+        assertThat(summary.getTotalCachedInputTokens()).isEqualTo(85);
+        assertThat(summary.getTotalCacheWriteTokens()).isEqualTo(11);
+        assertThat(summary.getTotalReasoningTokens()).isEqualTo(32);
+        // The breakdown is part of the totals, never added to them.
+        assertThat(summary.getTotalInputTokens()).isEqualTo(160);
+        assertThat(summary.getTotalOutputTokens()).isEqualTo(70);
+        assertThat(summary.getTotalTokens()).isEqualTo(230);
+    }
 }
