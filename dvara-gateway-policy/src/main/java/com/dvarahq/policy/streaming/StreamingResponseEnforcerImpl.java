@@ -25,6 +25,7 @@ import com.dvarahq.core.model.SseChunk;
 import com.dvarahq.core.pii.PiiDetector;
 import com.dvarahq.core.workspace.WorkspaceRepository;
 import com.dvarahq.policy.guardrail.GuardrailProperties;
+import com.dvarahq.policy.guardrail.SystemPromptLeakDetector;
 import com.dvarahq.pii.PiiProperties;
 
 import java.util.Iterator;
@@ -32,7 +33,8 @@ import java.util.Iterator;
 /**
  * The scanning implementation of {@link StreamingResponseEnforcer}.
  * Resolves per-workspace configuration and creates a {@link GuardedSseIterator}
- * that buffers and scans SSE chunks for PII and guardrail violations.
+ * that buffers and scans SSE chunks for PII and guardrail violations, including a leak of the
+ * request's system prompt.
  */
 public class StreamingResponseEnforcerImpl implements StreamingResponseEnforcer {
 
@@ -128,7 +130,8 @@ public class StreamingResponseEnforcerImpl implements StreamingResponseEnforcer 
     @Override
     public Iterator<SseChunk> wrap(Iterator<SseChunk> upstream, String workspaceId, ChatRequest request) {
         java.util.List<String> sourceDocuments = extractSourceDocuments(request);
-        var posture = postureProvider.resolve(workspaceId, sourceDocuments);
+        var posture = withPromptLeakReference(postureProvider.resolve(workspaceId, sourceDocuments),
+                request);
         StreamingEnforcementConfig config = configFor(posture);
 
         if (!config.piiEnabled() && !config.guardrailEnabled() && !config.groundingEnabled()) {
@@ -137,6 +140,24 @@ public class StreamingResponseEnforcerImpl implements StreamingResponseEnforcer 
 
         return new GuardedSseIterator(upstream, engine, auditWriter, workspaceId, config, posture,
                 telemetry);
+    }
+
+    /**
+     * Gives the engine the request's system prompt and conversation, read the way the non-streamed
+     * check reads them, so a streamed reply is judged for a leak by the same rules.
+     */
+    private static com.dvarahq.core.enforcement.StreamingPosture withPromptLeakReference(
+            com.dvarahq.core.enforcement.StreamingPosture posture, ChatRequest request) {
+        if (!posture.guardrailEnabled() || request == null) {
+            return posture;
+        }
+        String systemPrompt = SystemPromptLeakDetector.extractSystemPrompt(request);
+        if (systemPrompt == null) {
+            return posture;
+        }
+        return posture.withPromptLeakReference(
+                new com.dvarahq.core.enforcement.StreamingPosture.PromptLeakReference(systemPrompt,
+                        SystemPromptLeakDetector.extractConversationText(request)));
     }
 
     @SuppressWarnings("unchecked")

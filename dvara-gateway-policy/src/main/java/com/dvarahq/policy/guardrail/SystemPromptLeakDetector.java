@@ -48,8 +48,9 @@ import java.util.Set;
  *
  * <p>It needs nothing external: it compares the response against the system prompt the caller
  * already sent. Despite implementing the interface it is not a pluggable detector:
- * {@code GuardrailScanService} holds one as a field, constructs it by default, and calls
- * {@link #extractSystemPrompt} from the request path.</p>
+ * {@code GuardrailScanService} (a whole reply) and {@code DefaultStreamingEnforcementEngine} (a streamed
+ * reply, once its text is complete) each hold one and call {@link #scanForLeakedPrompt} with what
+ * {@link #extractSystemPrompt} and {@link #extractConversationText} read from the request.</p>
  */
 public class SystemPromptLeakDetector implements GuardrailDetector {
 
