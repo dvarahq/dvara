@@ -32,6 +32,7 @@ public class GatewayProperties {
     private Resilience resilience = new Resilience();
     private RateLimitConfig rateLimit = new RateLimitConfig();
     private ImageFetchConfig imageFetch = new ImageFetchConfig();
+    private ResponseLimitsConfig responseLimits = new ResponseLimitsConfig();
     // Encryption (dvara.encryption.*) and region (dvara.region.*) live in their own
     // @ConfigurationProperties classes, GatewayEncryptionProperties and GatewayRegionProperties,
     // so their prefixes stay outside the LLM-gateway-only dvara.llm-gateway namespace.
@@ -76,6 +77,27 @@ public class GatewayProperties {
         /** For the whole fetch, redirects included. */
         private java.time.Duration timeout = java.time.Duration.ofSeconds(5);
         private List<String> contentTypes = new ArrayList<>(List.of("image/png", "image/jpeg", "image/gif", "image/webp"));
+    }
+
+    /**
+     * {@code dvara.llm-gateway.response-limits}: how many bytes of a provider's response the gateway
+     * reads before refusing it with {@code PROVIDER_RESPONSE_TOO_LARGE}. The limits on a request do
+     * nothing about a provider that answers with a pathological body, which would otherwise be read
+     * and parsed whole. Zero or less turns a limit off.
+     */
+    @Data
+    public static class ResponseLimitsConfig {
+        /**
+         * A whole response body, such as a chat completion or an embeddings result. A long chat
+         * answer is well under a megabyte; the default leaves room for large embedding batches.
+         */
+        private long maxBodyBytes = 64L * 1024 * 1024;
+        /**
+         * A streamed response or a file download (a batch's results), counted from its first byte to
+         * its last. Streaming wraps every token in its own event, so the same answer is several times
+         * larger streamed than whole.
+         */
+        private long maxStreamBytes = 128L * 1024 * 1024;
     }
 
     @Data

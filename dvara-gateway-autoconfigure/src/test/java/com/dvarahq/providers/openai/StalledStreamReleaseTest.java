@@ -83,12 +83,19 @@ class StalledStreamReleaseTest {
         server.stop(0);
     }
 
+    /** Whether the provider's client counts the response against a size limit, as a configured gateway's does. */
+    private boolean sizeLimited;
+
     private Iterator<SseChunk> openStream(org.springframework.http.client.ClientHttpRequestFactory factory, boolean gzip) {
         RestClient.Builder builder = RestClient.builder()
                 .baseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1")
                 .defaultHeader("X-Test-Encoding", gzip ? "gzip" : "identity");
         if (factory != null) {
             builder.requestFactory(factory);
+        }
+        if (sizeLimited) {
+            builder.requestInterceptor(new com.dvarahq.providers.support.ResponseSizeLimitInterceptor(
+                    "openai", 1 << 20, 1 << 20));
         }
         RestClient client = builder.build();
         OpenAiProvider provider = new OpenAiProvider(client);
@@ -117,6 +124,25 @@ class StalledStreamReleaseTest {
      */
     @Test
     void apacheClient_gzipEncoded_releasingTheTransportReturnsAReadParkedOnAStalledUpstream() throws Exception {
+        assertRelease(new org.springframework.http.client.HttpComponentsClientHttpRequestFactory(), true);
+    }
+
+    /** The size limit wraps the body stream; the release has to reach the transport through it. */
+    @Test
+    void jdkClient_throughTheSizeLimit_releasingTheTransportReturnsAParkedRead() throws Exception {
+        sizeLimited = true;
+        assertRelease(new org.springframework.http.client.JdkClientHttpRequestFactory());
+    }
+
+    @Test
+    void apacheClient_throughTheSizeLimit_releasingTheTransportReturnsAParkedRead() throws Exception {
+        sizeLimited = true;
+        assertRelease(new org.springframework.http.client.HttpComponentsClientHttpRequestFactory());
+    }
+
+    @Test
+    void apacheClient_gzipEncoded_throughTheSizeLimit_releasingTheTransportReturnsAParkedRead() throws Exception {
+        sizeLimited = true;
         assertRelease(new org.springframework.http.client.HttpComponentsClientHttpRequestFactory(), true);
     }
 
