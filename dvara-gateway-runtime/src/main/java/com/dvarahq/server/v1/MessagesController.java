@@ -30,6 +30,7 @@ import com.dvarahq.core.metering.WorkspaceUsageListener;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.SseChunk;
+import com.dvarahq.core.model.ThinkingDelta;
 import com.dvarahq.core.model.ToolCallDelta;
 import com.dvarahq.core.pii.PiiEnforcer;
 import com.dvarahq.core.ratelimit.RateLimiter;
@@ -41,6 +42,7 @@ import com.dvarahq.server.service.ProviderDispatcher;
 import com.dvarahq.server.v1.dto.ErrorResponse;
 import com.dvarahq.server.v1.dto.MessagesRequest;
 import com.dvarahq.server.web.AccessLogFilter;
+import com.dvarahq.core.exception.ErrorEnvelope;
 import com.dvarahq.server.web.GlobalExceptionHandler;
 import com.dvarahq.server.web.TraceIdFilter;
 import io.swagger.v3.oas.annotations.Operation;
@@ -82,9 +84,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@code /v1/chat/completions}: policy, PII, guardrails, budget, rate limits, streaming enforcement,
  * metering and audit, on whichever provider routing picks.</p>
  *
- * <p>The {@code anthropic-version} header is required and must be the version this doorway speaks.
- * Errors come back in Anthropic's envelope ({@code {"type":"error","error":{...}}}) with the status
- * and code the gateway would give on any other doorway.</p>
+ * <p>The {@code anthropic-version} header is required and must be the version this doorway speaks. The
+ * {@code anthropic-beta} header is sent on to an Anthropic provider as it came. Errors come back in
+ * Anthropic's envelope ({@code {"type":"error","error":{...}}}) with the status and code the gateway would
+ * give on any other doorway; the filters that refuse before a controller runs write the same envelope
+ * ({@link ErrorEnvelope}).</p>
+ *
+ * <p>{@code POST /v1/messages/count_tokens} counts a request's input tokens without calling a model.</p>
  */
 @RestController
 @RequestMapping("/v1")
@@ -133,16 +139,20 @@ public class MessagesController {
     @ApiResponse(responseCode = "400", description = "Invalid request, unsupported field or API version")
     @ApiResponse(responseCode = "502", description = "Upstream provider error")
     public Object messages(@RequestHeader(value = "anthropic-version", required = false) String version,
+                           @RequestHeader(value = "anthropic-beta", required = false) String beta,
                            @Valid @RequestBody MessagesRequest request,
                            HttpServletRequest httpRequest,
                            HttpServletResponse httpResponse) {
         AnthropicMessages.checkVersion(version);
+        if (request.getMaxTokens() == null) {
+            throw new GatewayException("INVALID_REQUEST", "max_tokens is required");
+        }
         String traceId = (String) httpRequest.getAttribute(TraceIdFilter.ATTR);
         boolean stream = Boolean.TRUE.equals(request.getStream());
         httpRequest.setAttribute(AccessLogFilter.ATTR_MODEL, request.getModel());
         httpRequest.setAttribute(AccessLogFilter.ATTR_STREAM, String.valueOf(stream));
 
-        ChatRequest internal = AnthropicMessages.toInternal(request);
+        ChatRequest internal = AnthropicMessages.toInternal(request, beta);
         if (stream) {
             return handleStreaming(internal, traceId, httpRequest, httpResponse);
         }
@@ -163,6 +173,35 @@ public class MessagesController {
         } finally {
             executionService.releasePriority(ctx);
         }
+    }
+
+    /**
+     * Anthropic's token count: {@code {"input_tokens": N}} for the request as {@code /v1/messages} would send
+     * it. On a route to Anthropic, Anthropic counts; on any other, the gateway estimates. The request checks
+     * that govern what it says still run, since its text may go to a provider to be counted, but no model is
+     * called and nothing is billed or counted as a call.
+     */
+    @PostMapping("/messages/count_tokens")
+    @Operation(summary = "Count a message's input tokens",
+            description = "Anthropic Messages API token count. Counted by Anthropic on an Anthropic route, "
+                    + "estimated by the gateway otherwise. No model is called and nothing is billed.")
+    @ApiResponse(responseCode = "200", description = "The input token count")
+    @ApiResponse(responseCode = "400", description = "Invalid request, unsupported field or API version")
+    public Map<String, Object> countTokens(@RequestHeader(value = "anthropic-version", required = false) String version,
+                                           @RequestHeader(value = "anthropic-beta", required = false) String beta,
+                                           @RequestBody MessagesRequest request,
+                                           HttpServletRequest httpRequest) {
+        AnthropicMessages.checkVersion(version);
+        if (request.getModel() == null || request.getModel().isBlank()) {
+            throw new GatewayException("INVALID_REQUEST", "model is required");
+        }
+        if (request.getMessages() == null || request.getMessages().isEmpty()) {
+            throw new GatewayException("INVALID_REQUEST", "messages is required");
+        }
+        String traceId = (String) httpRequest.getAttribute(TraceIdFilter.ATTR);
+        httpRequest.setAttribute(AccessLogFilter.ATTR_MODEL, request.getModel());
+        int tokens = executionService.countInputTokens(AnthropicMessages.toInternal(request, beta), httpRequest, traceId);
+        return AnthropicMessages.map("input_tokens", tokens);
     }
 
     // -------------------------------------------------------------------------
@@ -213,6 +252,12 @@ public class MessagesController {
                     SseChunk chunk = chunks.next();
                     if (chunk.getUsage() != null) {
                         reportedUsage.set(chunk.getUsage());
+                    }
+                    if (chunk.getThinking() != null) {
+                        if (chunk.getThinking().text() != null) {
+                            output.append(chunk.getThinking().text());
+                        }
+                        events.thinking(chunk.getThinking());
                     }
                     if (chunk.getDelta() != null && !chunk.getDelta().isEmpty()) {
                         output.append(chunk.getDelta());
@@ -298,15 +343,18 @@ public class MessagesController {
      *
      * <p>Anthropic streams one block at a time. A tool call's fragments that come back after another
      * block has started cannot be put back into their own block, so that stream is failed rather than
-     * delivered with a call split in two.</p>
+     * delivered with a call split in two. Thinking blocks are written as Anthropic sent them:
+     * {@code thinking_delta}s, then the {@code signature_delta}; a redacted block whole in its start.</p>
      */
     static final class EventWriter {
 
         private final SseEmitter emitter;
         private int nextIndex;
         private Integer openIndex;
-        /** The tool call the open block carries, or -1 when the open block is text. */
+        /** The tool call the open block carries, or -1 when the open block is text or thinking. */
         private int openTool = -1;
+        /** The thinking block the open block carries, or -1 when it is text or a tool call. */
+        private int openThinking = -1;
         private final Set<Integer> closedTools = new HashSet<>();
 
         EventWriter(SseEmitter emitter) {
@@ -322,8 +370,27 @@ public class MessagesController {
             send("ping", AnthropicMessages.map("type", "ping"));
         }
 
+        void thinking(ThinkingDelta fragment) throws Exception {
+            if (openIndex == null || openThinking != fragment.index()) {
+                close();
+                Map<String, Object> block = fragment.redactedBlock()
+                        ? AnthropicMessages.map("type", "redacted_thinking", "data", fragment.redacted())
+                        : AnthropicMessages.map("type", "thinking", "thinking", "");
+                open(block, -1);
+                openThinking = fragment.index();
+            }
+            if (fragment.text() != null && !fragment.text().isEmpty()) {
+                send("content_block_delta", AnthropicMessages.map("type", "content_block_delta", "index", openIndex,
+                        "delta", AnthropicMessages.map("type", "thinking_delta", "thinking", fragment.text())));
+            }
+            if (fragment.signature() != null && !fragment.signature().isEmpty()) {
+                send("content_block_delta", AnthropicMessages.map("type", "content_block_delta", "index", openIndex,
+                        "delta", AnthropicMessages.map("type", "signature_delta", "signature", fragment.signature())));
+            }
+        }
+
         void text(String delta) throws Exception {
-            if (openIndex == null || openTool != -1) {
+            if (openIndex == null || openTool != -1 || openThinking != -1) {
                 close();
                 open(AnthropicMessages.map("type", "text", "text", ""), -1);
             }
@@ -362,7 +429,7 @@ public class MessagesController {
             String code = failure instanceof GatewayException ge ? ge.getCode() : "PROVIDER_ERROR";
             send("error", AnthropicMessages.map("type", "error", "error", AnthropicMessages.map(
                     "type", "PROVIDER_RESPONSE_TOO_LARGE".equals(code) ? "request_too_large" : "api_error",
-                    "message", failure.getMessage())));
+                    "message", failure.getMessage(), "code", code.toLowerCase(java.util.Locale.ROOT))));
         }
 
         private void open(Map<String, Object> block, int tool) throws Exception {
@@ -382,6 +449,7 @@ public class MessagesController {
             }
             openIndex = null;
             openTool = -1;
+            openThinking = -1;
         }
 
         private void send(String name, Map<String, Object> data) throws Exception {
@@ -411,20 +479,19 @@ public class MessagesController {
         return anthropicError(HttpStatusCode.valueOf(400), null, ERRORS.handleUnreadable(ex, response));
     }
 
+    /** Anything else that escapes: a 500, in Anthropic's envelope rather than the container's. */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Map<String, Object>> unexpected(Exception ex, HttpServletResponse response) {
+        return anthropicError(HttpStatusCode.valueOf(500), null, ERRORS.handleGeneric(ex, response));
+    }
+
     private static ResponseEntity<Map<String, Object>> anthropicError(HttpStatusCode status,
                                                                       org.springframework.http.HttpHeaders headers,
                                                                       ErrorResponse body) {
         ErrorResponse.ErrorDetail detail = body == null ? null : body.getError();
-        Map<String, Object> error = AnthropicMessages.map(
-                "type", errorType(status.value()),
-                "message", detail == null ? "" : detail.getMessage());
-        if (detail != null && detail.getCode() != null) {
-            error.put("code", detail.getCode());
-        }
-        Map<String, Object> out = AnthropicMessages.map("type", "error", "error", error);
-        if (detail != null && detail.getTraceId() != null) {
-            out.put("request_id", detail.getTraceId());
-        }
+        Map<String, Object> out = ErrorEnvelope.body("/v1/messages", status.value(),
+                detail == null ? "" : detail.getMessage(), detail == null ? null : detail.getCode(),
+                detail == null ? null : detail.getType(), detail == null ? null : detail.getTraceId(), null);
         ResponseEntity.BodyBuilder builder = ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON);
         if (headers != null) {
             headers.forEach((name, values) -> {
@@ -438,15 +505,6 @@ public class MessagesController {
 
     /** Anthropic's error types, by the status the gateway answers with. */
     static String errorType(int status) {
-        return switch (status) {
-            case 400, 422 -> "invalid_request_error";
-            case 401 -> "authentication_error";
-            case 402, 403 -> "permission_error";
-            case 404 -> "not_found_error";
-            case 413 -> "request_too_large";
-            case 429 -> "rate_limit_error";
-            case 503, 529 -> "overloaded_error";
-            default -> "api_error";
-        };
+        return ErrorEnvelope.anthropicType(status);
     }
 }

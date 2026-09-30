@@ -188,6 +188,26 @@ public class ChatExecutionService {
     }
 
     /**
+     * A request's input tokens, with no model called: the count of the provider routing picks when it can
+     * count, else the gateway's estimate. Only the filters that govern what the request says run
+     * ({@link com.dvarahq.core.filter.ChatFilter#appliesToTokenCount()}), because the text still goes to a
+     * provider; nothing is admitted, counted as a call, metered or billed.
+     */
+    public int countInputTokens(ChatRequest internal, HttpServletRequest httpRequest, String traceId) {
+        String workspaceId = (String) httpRequest.getAttribute("workspaceId");
+        String apiKeyId = (String) httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR);
+        injectResolvedWorkspace(internal, workspaceId);
+        FilterContext ctx = FilterContext.builder()
+                .workspaceId(workspaceId).apiKey(apiKeyId).traceId(traceId).build();
+        ChatRequest governed = requestPipeline.preDispatchTokenCount(internal, ctx);
+        java.util.OptionalInt counted;
+        try (WorkspaceScope.Scope ignored = WorkspaceScope.open(workspaceId)) {
+            counted = dispatcher.countInputTokens(governed);
+        }
+        return counted.isPresent() ? counted.getAsInt() : tokenEstimator.estimateTokens(governed);
+    }
+
+    /**
      * Non-streaming execution: PII-keyed cache lookup, dispatch, post-dispatch pipeline, cache
      * store, and metering (tokens / usage row / cost / threshold cascade). Returns the response
      * and whether it was a cache hit; the caller maps it to its wire DTO and sets headers.
@@ -196,7 +216,11 @@ public class ChatExecutionService {
      */
     public SyncResult executeSync(ChatRequest internalRequest, FilterContext ctx, HttpServletRequest httpRequest) {
         String workspaceId = (String) httpRequest.getAttribute("workspaceId");
-        boolean bypassCache = "no-cache".equalsIgnoreCase(httpRequest.getHeader("X-Cache-Control"));
+        // What a Messages API caller sent for Anthropic alone (thinking, fields the gateway does not model,
+        // beta features) changes the answer but is not part of what the cache keys on, so such a request
+        // neither reads nor fills it.
+        boolean uncacheable = internalRequest.getAnthropic() != null && !internalRequest.getAnthropic().carriesNothing();
+        boolean bypassCache = uncacheable || "no-cache".equalsIgnoreCase(httpRequest.getHeader("X-Cache-Control"));
 
         // PII-stripped form used as the cache key on BOTH get and put so lookup and store hash
         // to the same key. The dispatcher below still calls upstream with the original request.
@@ -276,7 +300,7 @@ public class ChatExecutionService {
                     response == null, false);
         }
 
-        if (responseCache != null) {
+        if (responseCache != null && !uncacheable) {
             responseCache.put(cacheRequest, response);
         }
         // restore PII tokens for the client ONLY after the cache write, so the

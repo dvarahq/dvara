@@ -387,6 +387,10 @@ public class OllamaProvider extends AbstractLlmProvider {
                 .map(b -> switch (b) {
                     case ContentBlock.TextBlock tb -> (Object) Map.of("type", "text", "text", tb.text());
                     case ContentBlock.ImageBlock ib -> Map.of("type", "image_url", "image_url", Map.of("url", dataUrl(ib)));
+                    // Only an Anthropic provider takes thinking; the dispatcher never sends it here.
+                    case ContentBlock.ThinkingBlock _, ContentBlock.RedactedThinkingBlock _ ->
+                            throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                                    "Ollama cannot take extended thinking; only an Anthropic provider can.");
                 })
                 .collect(Collectors.toList());
     }

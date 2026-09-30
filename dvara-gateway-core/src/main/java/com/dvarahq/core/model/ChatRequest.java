@@ -77,4 +77,25 @@ public class ChatRequest {
      * so the gateway passes it through without imposing a shape.
      */
     private Object toolChoice;
+
+    /**
+     * What a caller of the Anthropic Messages API sent that only an Anthropic provider can take: extended
+     * thinking, request fields the gateway does not model, and the {@code anthropic-beta} header. Null for
+     * every other doorway. The dispatcher refuses a request that asks for thinking on any other provider.
+     */
+    private AnthropicPassthrough anthropic;
+
+    /**
+     * Whether only an Anthropic provider can serve this request: it turns extended thinking on, or its
+     * history carries thinking blocks, which only Anthropic can read back.
+     */
+    public boolean needsAnthropic() {
+        if (anthropic != null && anthropic.asksForThinking()) {
+            return true;
+        }
+        return messages != null && messages.stream()
+                .filter(m -> m != null && m.getContent() != null)
+                .flatMap(m -> m.getContent().stream())
+                .anyMatch(b -> b instanceof ContentBlock.ThinkingBlock || b instanceof ContentBlock.RedactedThinkingBlock);
+    }
 }

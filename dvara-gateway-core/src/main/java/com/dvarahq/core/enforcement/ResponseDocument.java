@@ -49,7 +49,7 @@ public record ResponseDocument(List<ContinuationGroup> groups) {
     }
 
     /**
-     * The prose a reader sees: every group except tool-call arguments.
+     * The prose a reader sees: every group except tool-call arguments and thinking.
      *
      * <p>Grounding judges an answer against its sources, and a function's arguments are not part of
      * the answer — a model calling {@code lookup_order(id: 4471)} has asserted nothing to a reader. Run
@@ -60,7 +60,8 @@ public record ResponseDocument(List<ContinuationGroup> groups) {
     public String assistantText() {
         StringBuilder sb = new StringBuilder();
         for (ContinuationGroup g : groups) {
-            if (g.id().kind() != ContinuationGroupId.Kind.TOOL_ARGUMENT) {
+            if (g.id().kind() != ContinuationGroupId.Kind.TOOL_ARGUMENT
+                    && g.id().kind() != ContinuationGroupId.Kind.THINKING) {
                 sb.append(g.text());
             }
         }

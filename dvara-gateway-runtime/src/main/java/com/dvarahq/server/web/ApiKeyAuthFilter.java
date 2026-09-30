@@ -21,7 +21,6 @@ import com.dvarahq.core.apikey.ApiKeyGenerator;
 import com.dvarahq.core.apikey.ApiKeyScope;
 import com.dvarahq.core.apikey.ApiKeyRepository;
 import com.dvarahq.core.apikey.ApiKeyStatus;
-import com.dvarahq.core.util.JsonMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -29,7 +28,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.UriUtils;
@@ -40,8 +38,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -348,19 +344,6 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
     private void reject(HttpServletResponse response, HttpServletRequest request,
                         HttpStatus status, String message, String code, String type) throws IOException {
-        response.setStatus(status.value());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        // what the access log, metrics and audit event record for this refusal
-        request.setAttribute(AccessLogFilter.ATTR_ERROR_CODE, code);
-
-        String traceId = response.getHeader(TraceIdFilter.HEADER);
-        Map<String, Object> errorObj = new LinkedHashMap<>();
-        errorObj.put("message", message);
-        errorObj.put("type", type);
-        errorObj.put("code", code);
-        errorObj.put("trace_id", traceId != null ? traceId : "");
-
-        Map<String, Object> body = Map.of("error", errorObj);
-        response.getWriter().write(JsonMapper.instance().writeValueAsString(body));
+        Refusals.write(request, response, status.value(), message, code, type, null);
     }
 }

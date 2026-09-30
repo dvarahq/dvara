@@ -16,6 +16,7 @@
 package com.dvarahq.server.v1;
 
 import com.dvarahq.core.exception.GatewayException;
+import com.dvarahq.core.model.AnthropicPassthrough;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
@@ -36,9 +37,12 @@ import java.util.UUID;
  * Translation between the Anthropic Messages API and the gateway's own request and response.
  *
  * <p>Only translation: the request that comes out runs the same governance line as every other
- * doorway. Everything that has a place in the gateway's model is carried across; everything that has
- * none is refused with {@code UNSUPPORTED_CAPABILITY}, because serving the request without it would
- * serve a different request than the one sent.</p>
+ * doorway. Everything that has a place in the gateway's model is carried across. What only Anthropic's API
+ * has — extended thinking and its blocks, top-level fields the gateway does not model, the
+ * {@code anthropic-beta} header — travels as an {@link AnthropicPassthrough}: an Anthropic provider sends it
+ * on unchanged, and the dispatcher refuses thinking on any other provider. A field the gateway knows it
+ * cannot govern, because the provider would act on it outside the gateway, is refused with
+ * {@code UNSUPPORTED_CAPABILITY}.</p>
  *
  * <ul>
  *   <li>{@code system} becomes a system message, never user content.</li>
@@ -55,7 +59,14 @@ final class AnthropicMessages {
     static final String VERSION = "2023-06-01";
 
     /** Blocks that may appear in a message's content. */
-    private static final Set<String> BLOCK_TYPES = Set.of("text", "image", "tool_use", "tool_result");
+    private static final Set<String> BLOCK_TYPES =
+            Set.of("text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking");
+
+    /**
+     * Top-level fields the gateway cannot govern: with them the provider itself would call MCP servers or run
+     * code in a container, and nothing it sent or got back there would pass the gateway's checks.
+     */
+    private static final Set<String> UNGOVERNABLE = Set.of("mcp_servers", "container");
 
     private AnthropicMessages() {
     }
@@ -79,7 +90,7 @@ final class AnthropicMessages {
     // Request
     // -------------------------------------------------------------------------
 
-    static ChatRequest toInternal(MessagesRequest r) {
+    static ChatRequest toInternal(MessagesRequest r, String beta) {
         rejectUnsupported(r);
         List<MultimodalMessage> messages = new ArrayList<>();
         String system = systemText(r.getSystem());
@@ -101,19 +112,15 @@ final class AnthropicMessages {
                 .tools(tools(r.getTools()))
                 .toolChoice(toolChoice(r.getToolChoice()))
                 .user(endUser(r.getMetadata()))
+                .anthropic(new AnthropicPassthrough(r.getThinking(), r.getOther(), beta))
                 .build();
     }
 
     private static void rejectUnsupported(MessagesRequest r) {
-        if (!r.getUnsupported().isEmpty()) {
-            throw unsupported("these fields are not supported on /v1/messages: "
-                    + String.join(", ", r.getUnsupported().keySet()) + ".");
-        }
-        if (r.getTopK() != null) {
-            throw unsupported("top_k is not supported on /v1/messages.");
-        }
-        if (r.getThinking() != null && !"disabled".equals(String.valueOf(r.getThinking().get("type")))) {
-            throw unsupported("extended thinking is not supported on /v1/messages.");
+        List<String> ungovernable = r.getOther().keySet().stream().filter(UNGOVERNABLE::contains).toList();
+        if (!ungovernable.isEmpty()) {
+            throw unsupported("these fields are not supported on /v1/messages, because the provider would act on "
+                    + "them outside the gateway: " + String.join(", ", ungovernable) + ".");
         }
         if (r.getMetadata() != null) {
             for (String key : r.getMetadata().keySet()) {
@@ -174,7 +181,11 @@ final class AnthropicMessages {
                         .name(string(block.get("name")))
                         .arguments(json(block.get("input") == null ? Map.of() : block.get("input")))
                         .build());
-                default -> throw unsupported("an assistant message may carry text and tool_use blocks on "
+                // Signed by Anthropic, so carried exactly as they came.
+                case "thinking" -> content.add(new ContentBlock.ThinkingBlock(
+                        string(block.get("thinking")), block.get("signature") == null ? null : string(block.get("signature"))));
+                case "redacted_thinking" -> content.add(new ContentBlock.RedactedThinkingBlock(string(block.get("data"))));
+                default -> throw unsupported("an assistant message may carry text, thinking and tool_use blocks on "
                         + "/v1/messages, not " + block.get("type") + ".");
             }
         }
@@ -310,7 +321,15 @@ final class AnthropicMessages {
             MultimodalMessage msg = choice.getMessage();
             if (msg != null && msg.getContent() != null) {
                 for (ContentBlock b : msg.getContent()) {
-                    if (b instanceof ContentBlock.TextBlock t && t.text() != null && !t.text().isEmpty()) {
+                    if (b instanceof ContentBlock.ThinkingBlock t) {
+                        Map<String, Object> thinking = map("type", "thinking", "thinking", t.thinking() == null ? "" : t.thinking());
+                        if (t.signature() != null) {
+                            thinking.put("signature", t.signature());
+                        }
+                        content.add(thinking);
+                    } else if (b instanceof ContentBlock.RedactedThinkingBlock r) {
+                        content.add(map("type", "redacted_thinking", "data", r.data()));
+                    } else if (b instanceof ContentBlock.TextBlock t && t.text() != null && !t.text().isEmpty()) {
                         content.add(map("type", "text", "text", t.text()));
                     }
                 }

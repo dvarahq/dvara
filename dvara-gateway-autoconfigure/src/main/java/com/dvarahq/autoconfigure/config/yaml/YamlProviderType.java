@@ -29,8 +29,8 @@ import java.util.stream.Collectors;
  *
  * <p>Each type is switched on the way its bean condition reads it: most register when their
  * {@code api-key} property is set; Ollama, Bedrock and Mock have no key and register on
- * {@code enabled}. Whether a type reads a {@code base-url} is recorded too, because Anthropic,
- * Bedrock and Mock do not, and a {@code base_url} for one of those would map to a property nothing
+ * {@code enabled}. Whether a type reads a {@code base-url} is recorded too, because Bedrock and
+ * Mock do not, and a {@code base_url} for one of those would map to a property nothing
  * reads, so it is refused instead. Azure OpenAI also needs a {@code base-url} to register, since no
  * default can name the resource; the post-processor checks that against the effective environment
  * rather than the file, because the URL may come from {@code AZURE_OPENAI_BASE_URL} while the key
@@ -39,7 +39,7 @@ import java.util.stream.Collectors;
  */
 public enum YamlProviderType {
     OPENAI("openai", Switch.API_KEY, true, false),
-    ANTHROPIC("anthropic", Switch.API_KEY, false, false),
+    ANTHROPIC("anthropic", Switch.API_KEY, true, false),
     GEMINI("gemini", Switch.API_KEY, true, false),
     AZURE_OPENAI("azure-openai", Switch.API_KEY, true, true),
     MISTRAL("mistral", Switch.API_KEY, true, false),

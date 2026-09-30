@@ -18,6 +18,7 @@ package com.dvarahq.server.web;
 import com.dvarahq.core.plane.GatewayPlane;
 import com.dvarahq.core.audit.AuditEvent;
 import com.dvarahq.core.audit.AuditWriter;
+import com.dvarahq.core.exception.ErrorEnvelope;
 import com.dvarahq.core.id.Ids;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -89,6 +90,10 @@ public class AuditResponseFilter extends OncePerRequestFilter {
             putIfPresent(payload, "policy_decision", request.getAttribute("policy.decision"));
             putIfPresent(payload, "policy_id", request.getAttribute("policy.policyId"));
             putIfPresent(payload, "policy_rule_id", request.getAttribute("policy.ruleId"));
+            // Which Anthropic beta features the caller asked for: they change what the provider does.
+            if (ErrorEnvelope.anthropic(request.getRequestURI())) {
+                putIfPresent(payload, "anthropic_beta", request.getHeader("anthropic-beta"));
+            }
 
             String workspaceId = (String) request.getAttribute("workspaceId");
 

@@ -20,7 +20,6 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
-import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -32,9 +31,10 @@ import java.util.Map;
  * The body of an Anthropic Messages API request ({@code POST /v1/messages}).
  *
  * <p>Content arrives as the loosely typed maps the Messages API allows — a string or a list of typed
- * blocks — and is translated by {@code AnthropicMessages}. A field this gateway does not carry is
- * collected in {@link #getUnsupported()} and refused there, never dropped: dropping one would serve a
- * different request than the one sent.</p>
+ * blocks — and is translated by {@code AnthropicMessages}. A top-level field this class does not name is
+ * collected in {@link #getOther()}: an Anthropic provider is sent it unchanged, and any other provider
+ * leaves it out. {@code max_tokens} is required here and checked by the controller, because a token count
+ * ({@code /v1/messages/count_tokens}) takes the same body without it.</p>
  */
 @Data
 @NoArgsConstructor
@@ -49,7 +49,6 @@ public class MessagesRequest {
     /** A string, or a list of text blocks. */
     private Object system;
 
-    @NotNull(message = "max_tokens is required")
     @JsonProperty("max_tokens")
     private Integer maxTokens;
 
@@ -59,9 +58,6 @@ public class MessagesRequest {
 
     @JsonProperty("top_p")
     private Double topP;
-
-    @JsonProperty("top_k")
-    private Integer topK;
 
     @JsonProperty("stop_sequences")
     private List<String> stopSequences;
@@ -73,15 +69,15 @@ public class MessagesRequest {
 
     private Map<String, Object> metadata;
 
-    /** Extended thinking. Its blocks have no form in this gateway's model, so it is refused. */
+    /** Extended thinking: sent on to an Anthropic provider, refused on any other. */
     private Map<String, Object> thinking;
 
-    /** Every other field, refused by name. */
+    /** Every other top-level field, by name, in the order it came. */
     @JsonIgnore
-    private final Map<String, Object> unsupported = new LinkedHashMap<>();
+    private final Map<String, Object> other = new LinkedHashMap<>();
 
     @JsonAnySetter
     public void other(String name, Object value) {
-        unsupported.put(name, value);
+        other.put(name, value);
     }
 }

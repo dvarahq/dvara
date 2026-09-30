@@ -224,6 +224,10 @@ public class MistralProvider extends AbstractLlmProvider {
                     case ContentBlock.ImageBlock ib -> throw new GatewayException("UNSUPPORTED_CAPABILITY",
                             "Mistral does not support image input through this gateway. Send text only, "
                             + "or route the request to a vision-capable provider.");
+                    // Only an Anthropic provider takes thinking; the dispatcher never sends it here.
+                    case ContentBlock.ThinkingBlock _, ContentBlock.RedactedThinkingBlock _ ->
+                            throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                                    "Mistral cannot take extended thinking; only an Anthropic provider can.");
                 })
                 .collect(Collectors.toList());
     }

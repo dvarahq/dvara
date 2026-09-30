@@ -517,13 +517,39 @@ public class PiiScanService implements PiiEnforcer {
         return block;
     }
 
+    /**
+     * The model's thinking, redacted like its answer. Only on the way out: the value would otherwise reach
+     * the caller. Its signature is kept, so a block that was changed here is one Anthropic will refuse if it is
+     * sent back; that is the price of not handing the caller the value.
+     */
+    private MultimodalMessage redactThinking(MultimodalMessage message, String workspaceId,
+                                             Map<String, String> customPatterns, Replacement replace) {
+        if (message.getContent() == null
+                || message.getContent().stream().noneMatch(b -> b instanceof ContentBlock.ThinkingBlock)) {
+            return message;
+        }
+        List<ContentBlock> blocks = new ArrayList<>();
+        for (ContentBlock block : message.getContent()) {
+            if (block instanceof ContentBlock.ThinkingBlock tb && tb.thinking() != null) {
+                PiiScanResult result = detector.scan(tb.thinking(), customPatterns);
+                if (result.hasPii()) {
+                    block = new ContentBlock.ThinkingBlock(
+                            replace.apply(tb.thinking(), result.entities(), workspaceId), tb.signature());
+                }
+            }
+            blocks.add(block);
+        }
+        return message.toBuilder().content(blocks).build();
+    }
+
     private ChatResponse redactResponse(ChatResponse response, String workspaceId,
                                          Map<String, String> customPatterns, Replacement replace) {
         List<ChatResponse.Choice> redactedChoices = new ArrayList<>();
         for (var choice : response.getChoices()) {
             if (choice.getMessage() != null) {
-                MultimodalMessage redactedMsg =
-                        redactMessage(choice.getMessage(), workspaceId, customPatterns, replace);
+                MultimodalMessage redactedMsg = redactThinking(
+                        redactMessage(choice.getMessage(), workspaceId, customPatterns, replace),
+                        workspaceId, customPatterns, replace);
                 redactedChoices.add(ChatResponse.Choice.builder()
                         .index(choice.getIndex())
                         .message(redactedMsg)

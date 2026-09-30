@@ -22,7 +22,6 @@ import com.dvarahq.core.ratelimit.RateLimitErrorDetail;
 import com.dvarahq.core.ratelimit.RateLimitResult;
 import com.dvarahq.core.ratelimit.RateLimiter;
 import com.dvarahq.core.ratelimit.WorkspaceRateLimitResolver;
-import com.dvarahq.core.util.JsonMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -31,7 +30,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -139,18 +137,10 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
         request.setAttribute(RESERVATION_ID_ATTR, result.reservationId());
 
         if (!result.allowed()) {
-            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-            request.setAttribute(AccessLogFilter.ATTR_ERROR_CODE, "rate_limit_exceeded");
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.setHeader("Retry-After", String.valueOf(result.retryAfterSeconds()));
             response.setHeader("X-RateLimit-Retry-After-Seconds", String.valueOf(result.retryAfterSeconds()));
 
-            String traceId = response.getHeader(TraceIdFilter.HEADER);
             Map<String, Object> errorObj = new LinkedHashMap<>();
-            errorObj.put("message", result.reason());
-            errorObj.put("type", "rate_limit_error");
-            errorObj.put("code", "rate_limit_exceeded");
-            errorObj.put("trace_id", traceId != null ? traceId : "");
 
             // Add token-specific headers when token limiting is active
             RateLimitErrorDetail detail = result.detail();
@@ -176,8 +166,8 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
                 errorObj.put("rate_limit", rateLimitInfo);
             }
 
-            Map<String, Object> body = Map.of("error", errorObj);
-            response.getWriter().write(JsonMapper.instance().writeValueAsString(body));
+            Refusals.write(request, response, HttpStatus.TOO_MANY_REQUESTS.value(), result.reason(),
+                    "rate_limit_exceeded", "rate_limit_error", errorObj);
             return;
         }
 

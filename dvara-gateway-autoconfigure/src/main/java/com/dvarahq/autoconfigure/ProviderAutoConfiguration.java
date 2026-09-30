@@ -169,10 +169,10 @@ public class ProviderAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(AnthropicProvider.class)
     @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.anthropic.api-key:}')")
-    public AnthropicProvider anthropicProvider(SecretProvider secretProvider,
+    public AnthropicProvider anthropicProvider(GatewayProperties props, SecretProvider secretProvider,
                                                RestClient.Builder restClientBuilder) {
         RestClient.Builder builder = clientFor("anthropic", restClientBuilder, secretProvider);
-        return new AnthropicProvider(secretProvider, builder);
+        return new AnthropicProvider(secretProvider, props.getProviders().getAnthropic().getBaseUrl(), builder);
     }
 
     @Bean

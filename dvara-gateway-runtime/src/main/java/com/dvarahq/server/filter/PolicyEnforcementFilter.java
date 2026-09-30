@@ -63,6 +63,9 @@ public class PolicyEnforcementFilter implements ChatFilter {
 
     @Override public int order() { return FilterOrder.POLICY_ENFORCEMENT; }
 
+    /** A request the policy denies is not sent to a provider, even to be counted. */
+    @Override public boolean appliesToTokenCount() { return true; }
+
     @Override
     public ChatRequest preDispatch(ChatRequest request, FilterContext ctx) {
         var attributes = new HashMap<String, Object>();

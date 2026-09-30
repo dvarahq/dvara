@@ -34,6 +34,9 @@ public class PiiEnforcementFilter implements ChatFilter {
 
     @Override public int order() { return FilterOrder.PII_ENFORCEMENT; }
 
+    /** Counting still sends the text to a provider, so the PII action applies to it. */
+    @Override public boolean appliesToTokenCount() { return true; }
+
     @Override
     public ChatRequest preDispatch(ChatRequest request, FilterContext ctx) {
         return piiEnforcer.enforceRequest(request, ctx.getWorkspaceId());

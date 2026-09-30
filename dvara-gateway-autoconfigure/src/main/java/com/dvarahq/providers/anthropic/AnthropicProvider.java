@@ -27,6 +27,7 @@ import com.dvarahq.core.model.ResponseFormat;
 import com.dvarahq.core.model.ReleasableUpstream;
 import com.dvarahq.providers.support.StreamTransport;
 import com.dvarahq.core.model.SseChunk;
+import com.dvarahq.core.model.ThinkingDelta;
 import com.dvarahq.core.model.ToolCallDelta;
 import com.dvarahq.core.provider.AbstractLlmProvider;
 import com.dvarahq.core.provider.ProviderCapabilities;
@@ -37,6 +38,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.dvarahq.core.util.JsonMapper;
 import lombok.Data;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.RestClient;
 
@@ -51,6 +53,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.OptionalInt;
 import java.util.stream.Collectors;
 
 public class AnthropicProvider extends AbstractLlmProvider {
@@ -59,13 +62,22 @@ public class AnthropicProvider extends AbstractLlmProvider {
     private static final int    DEFAULT_MAX_TOKENS = 1024;
     private static final String JSON_SYSTEM_SUFFIX = "\n\nRespond with valid JSON only. Do not include any text outside the JSON object.";
     private static final String STRUCTURED_OUTPUT_TOOL = "structured_output";
+    static final String DEFAULT_BASE_URL = "https://api.anthropic.com";
+    /** The fields Anthropic's token count takes; it refuses the others a message request carries. */
+    private static final List<String> COUNT_FIELDS =
+            List.of("model", "messages", "system", "tools", "tool_choice", "thinking", "mcp_servers");
 
     private final RestClient restClient;
 
     public AnthropicProvider(SecretProvider secretProvider, RestClient.Builder builder) {
+        this(secretProvider, DEFAULT_BASE_URL, builder);
+    }
+
+    /** @param baseUrl Anthropic's API, or another endpoint that speaks it; null or blank for Anthropic's own. */
+    public AnthropicProvider(SecretProvider secretProvider, String baseUrl, RestClient.Builder builder) {
         super("anthropic");
         this.restClient = builder
-                .baseUrl("https://api.anthropic.com")
+                .baseUrl(baseUrl == null || baseUrl.isBlank() ? DEFAULT_BASE_URL : baseUrl)
                 .defaultHeader("anthropic-version", ANTHROPIC_VERSION)
                 .requestInterceptor(new CredentialInterceptor(
                         secretProvider, "provider.anthropic.api-key",
@@ -90,6 +102,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
         AnthropicResponse ar = restClient.post()
                 .uri("/v1/messages")
                 .contentType(MediaType.APPLICATION_JSON)
+                .headers(h -> beta(h, request))
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
@@ -117,6 +130,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
         return restClient.post()
                 .uri("/v1/messages")
                 .contentType(MediaType.APPLICATION_JSON)
+                .headers(h -> beta(h, request))
                 .body(body)
                 .exchange((req, res) -> {
                     if (res.getStatusCode().isError()) {
@@ -131,6 +145,50 @@ public class AnthropicProvider extends AbstractLlmProvider {
                     BufferedReader reader = new BufferedReader(new InputStreamReader(responseBody, StandardCharsets.UTF_8));
                     return new AnthropicSseIterator(() -> StreamTransport.release(res, responseBody), reader, request.getModel(), jsonSchemaMode);
                 }, false);
+    }
+
+    @Override
+    public boolean speaksAnthropicMessages() {
+        return true;
+    }
+
+    /**
+     * Anthropic's own count of the request's input tokens ({@code POST /v1/messages/count_tokens}). No model
+     * runs and nothing is billed. The body is the message request's, less the fields the count refuses.
+     */
+    @Override
+    public OptionalInt countInputTokens(ChatRequest request) {
+        Map<String, Object> full = buildBody(request);
+        Map<String, Object> body = new LinkedHashMap<>();
+        for (String field : COUNT_FIELDS) {
+            if (full.containsKey(field)) {
+                body.put(field, full.get(field));
+            }
+        }
+        Map<?, ?> answer = restClient.post()
+                .uri("/v1/messages/count_tokens")
+                .contentType(MediaType.APPLICATION_JSON)
+                .headers(h -> beta(h, request))
+                .body(body)
+                .retrieve()
+                .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal("Anthropic", res);
+                    throw GatewayException.upstream(res.getStatusCode().value(),
+                            "Anthropic token count error " + res.getStatusCode().value()
+                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                })
+                .body(Map.class);
+        if (answer == null || !(answer.get("input_tokens") instanceof Number tokens)) {
+            return OptionalInt.empty();
+        }
+        return OptionalInt.of(tokens.intValue());
+    }
+
+    /** The caller's {@code anthropic-beta} header, sent on as it came. */
+    private static void beta(HttpHeaders headers, ChatRequest request) {
+        if (request.getAnthropic() != null && request.getAnthropic().beta() != null) {
+            headers.set("anthropic-beta", request.getAnthropic().beta());
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -200,6 +258,15 @@ public class AnthropicProvider extends AbstractLlmProvider {
 
         if (!tools.isEmpty()) body.put("tools", tools);
 
+        // What a Messages API caller sent that the gateway does not model goes on as it came. The fields
+        // set above are the gateway's, so none of these can replace one.
+        if (request.getAnthropic() != null) {
+            if (request.getAnthropic().thinking() != null) {
+                body.put("thinking", request.getAnthropic().thinking());
+            }
+            request.getAnthropic().fields().forEach(body::putIfAbsent);
+        }
+
         return body;
     }
 
@@ -220,6 +287,28 @@ public class AnthropicProvider extends AbstractLlmProvider {
             }
             return Map.of("role", "user", "content", List.of(result));
         }
+        if ("assistant".equals(msg.getRole()) && carriesThinking(msg)) {
+            // Thinking first, as Anthropic wrote it and in its order, then the text and the tool calls. The
+            // blocks are signed, so they go back exactly as they came.
+            List<Object> blocks = new ArrayList<>();
+            for (ContentBlock b : msg.getContent()) {
+                if (b instanceof ContentBlock.ThinkingBlock || b instanceof ContentBlock.RedactedThinkingBlock) {
+                    blocks.add(thinkingBlock(b));
+                }
+            }
+            String text = extractText(msg);
+            if (!text.isEmpty()) blocks.add(Map.of("type", "text", "text", text));
+            if (msg.getToolCalls() != null) {
+                for (com.dvarahq.core.model.ToolCall tc : msg.getToolCalls()) {
+                    blocks.add(Map.of(
+                            "type", "tool_use",
+                            "id", tc.getId() == null ? "" : tc.getId(),
+                            "name", tc.getName() == null ? "" : tc.getName(),
+                            "input", parseToolArguments(tc.getArguments())));
+                }
+            }
+            return Map.of("role", msg.getRole(), "content", blocks);
+        }
         if (msg.getToolCalls() != null && !msg.getToolCalls().isEmpty()) {
             List<Object> blocks = new ArrayList<>();
             String text = extractText(msg);
@@ -234,6 +323,28 @@ public class AnthropicProvider extends AbstractLlmProvider {
             return Map.of("role", msg.getRole(), "content", blocks);
         }
         return Map.of("role", msg.getRole(), "content", buildContent(msg));
+    }
+
+    private static boolean carriesThinking(MultimodalMessage msg) {
+        return msg.getContent() != null && msg.getContent().stream().anyMatch(
+                b -> b instanceof ContentBlock.ThinkingBlock || b instanceof ContentBlock.RedactedThinkingBlock);
+    }
+
+    /** A thinking or redacted-thinking block in Anthropic's shape. */
+    private static Map<String, Object> thinkingBlock(ContentBlock block) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (block instanceof ContentBlock.RedactedThinkingBlock r) {
+            out.put("type", "redacted_thinking");
+            out.put("data", r.data());
+            return out;
+        }
+        ContentBlock.ThinkingBlock t = (ContentBlock.ThinkingBlock) block;
+        out.put("type", "thinking");
+        out.put("thinking", t.thinking() == null ? "" : t.thinking());
+        if (t.signature() != null) {
+            out.put("signature", t.signature());
+        }
+        return out;
     }
 
     /** Anthropic {@code tool_use.input} is a JSON object; the internal args are a
@@ -303,6 +414,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
                                             "type", "base64",
                                             "media_type", ib.mediaType(),
                                             "data", ib.data()));
+                    case ContentBlock.ThinkingBlock tb -> thinkingBlock(tb);
+                    case ContentBlock.RedactedThinkingBlock rb -> thinkingBlock(rb);
                     // No default: the switch is exhaustive over ContentBlock's permitted kinds, so a
                     // new kind is a compile error here rather than a block silently relayed as text.
                 })
@@ -313,6 +426,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
         String text;
         String finishReason;
         List<com.dvarahq.core.model.ToolCall> toolCalls = null;
+        List<ContentBlock> content = new ArrayList<>();
 
         if (format instanceof ResponseFormat.JsonSchema) {
             // Extract tool_use input as JSON text
@@ -330,6 +444,14 @@ public class AnthropicProvider extends AbstractLlmProvider {
             // Map tool_use stop reason to stop
             finishReason = "stop";
         } else {
+            // Thinking comes back as it came, signature and all, ahead of the answer.
+            for (AnthropicResponse.ContentItem c : ar.getContent()) {
+                if ("thinking".equals(c.getType())) {
+                    content.add(new ContentBlock.ThinkingBlock(c.getThinking(), c.getSignature()));
+                } else if ("redacted_thinking".equals(c.getType())) {
+                    content.add(new ContentBlock.RedactedThinkingBlock(c.getData()));
+                }
+            }
             text = ar.getContent().stream()
                     .filter(c -> "text".equals(c.getType()))
                     .map(AnthropicResponse.ContentItem::getText)
@@ -349,6 +471,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
                     : ("end_turn".equals(ar.getStopReason()) ? "stop" : ar.getStopReason());
         }
 
+        content.add(new ContentBlock.TextBlock(text));
+
         Map<String, String> gatewayHeaders = null;
         if (format instanceof ResponseFormat.JsonSchema js && js.strict()) {
             gatewayHeaders = Map.of("X-Gateway-Strict-Downgraded", "true");
@@ -364,7 +488,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
                                 .index(0)
                                 .message(MultimodalMessage.builder()
                                         .role("assistant")
-                                        .content(List.of(new ContentBlock.TextBlock(text)))
+                                        .content(content)
                                         .toolCalls(toolCalls)
                                         .build())
                                 .finishReason(finishReason)
@@ -465,6 +589,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
          * numbered from zero in order of appearance, whatever their block numbers.
          */
         private final Map<Integer, Integer> toolIndexes = new LinkedHashMap<>();
+        /** Content-block index → thinking-block index, numbered the same way. */
+        private final Map<Integer, Integer> thinkingIndexes = new LinkedHashMap<>();
 
         AnthropicSseIterator(BufferedReader reader, String model, boolean jsonSchemaMode) {
             this(() -> { }, reader, model, jsonSchemaMode);
@@ -524,7 +650,17 @@ public class AnthropicProvider extends AbstractLlmProvider {
                             // In JSON-schema mode the block is the structured output itself and stays text.
                             JsonNode block = node.path("content_block");
                             currentEvent = null;
-                            if (jsonSchemaMode || !"tool_use".equals(block.path("type").asText(null))) {
+                            String blockType = block.path("type").asText(null);
+                            if ("thinking".equals(blockType) || "redacted_thinking".equals(blockType)) {
+                                int thought = openedThinkingIndex(node);
+                                ThinkingDelta opened = "redacted_thinking".equals(blockType)
+                                        ? ThinkingDelta.redacted(thought, block.path("data").asText(""))
+                                        : new ThinkingDelta(thought, block.path("thinking").asText(""),
+                                                block.hasNonNull("signature") && !block.path("signature").asText().isEmpty()
+                                                        ? block.path("signature").asText() : null, null);
+                                return SseChunk.builder().id(messageId).model(model).thinking(opened).done(false).build();
+                            }
+                            if (jsonSchemaMode || !"tool_use".equals(blockType)) {
                                 continue;
                             }
                             int opened = openedToolIndex(node);
@@ -541,6 +677,13 @@ public class AnthropicProvider extends AbstractLlmProvider {
                             String deltaType = delta.path("type").asText(null);
                             currentEvent = null;
 
+                            if ("thinking_delta".equals(deltaType) || "signature_delta".equals(deltaType)) {
+                                int thought = continuedThinkingIndex(node);
+                                ThinkingDelta fragment = "thinking_delta".equals(deltaType)
+                                        ? ThinkingDelta.text(thought, delta.path("thinking").asText(""))
+                                        : ThinkingDelta.signature(thought, delta.path("signature").asText(""));
+                                return SseChunk.builder().id(messageId).model(model).thinking(fragment).done(false).build();
+                            }
                             if ("input_json_delta".equals(deltaType) && !jsonSchemaMode) {
                                 String partial = delta.path("partial_json").asText(null);
                                 if (partial == null || partial.isEmpty()) {
@@ -645,6 +788,23 @@ public class AnthropicProvider extends AbstractLlmProvider {
             return toolIndexes.computeIfAbsent(event.get("index").asInt(), k -> toolIndexes.size());
         }
 
+        /** The thinking-block index for a thinking or redacted-thinking opener, in order of appearance. */
+        private int openedThinkingIndex(JsonNode event) {
+            if (!event.hasNonNull("index")) {
+                throw fail("Anthropic stream opened a thinking block without an index");
+            }
+            return thinkingIndexes.computeIfAbsent(event.get("index").asInt(), k -> thinkingIndexes.size());
+        }
+
+        /** The thinking-block index a fragment continues; it must continue a block that was opened. */
+        private int continuedThinkingIndex(JsonNode event) {
+            Integer index = event.hasNonNull("index") ? thinkingIndexes.get(event.get("index").asInt()) : null;
+            if (index == null) {
+                throw fail("Anthropic stream sent thinking for a block that was never opened");
+            }
+            return index;
+        }
+
         /** The tool-call index a fragment continues; it must continue a block that was opened. */
         private int continuedToolIndex(JsonNode event) {
             Integer index = event.hasNonNull("index") ? toolIndexes.get(event.get("index").asInt()) : null;
@@ -684,6 +844,10 @@ public class AnthropicProvider extends AbstractLlmProvider {
             private String id;
             private String name;
             private Object input;
+            private String thinking;
+            private String signature;
+            /** A redacted_thinking block's encrypted content. */
+            private String data;
         }
 
         @Data @JsonIgnoreProperties(ignoreUnknown = true)

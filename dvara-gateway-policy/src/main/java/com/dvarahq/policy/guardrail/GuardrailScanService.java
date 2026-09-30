@@ -168,6 +168,36 @@ public class GuardrailScanService implements GuardrailEnforcer {
         return doEnforceResponse(response, workspaceId, originalRequest);
     }
 
+    /**
+     * The response as the detectors read it: each thinking block's text as a text block of its own. Only
+     * for scanning; a guardrail refuses or records, it does not rewrite, so the response itself is unchanged.
+     */
+    static ChatResponse withThinkingAsText(ChatResponse response) {
+        if (response == null || response.getChoices() == null || response.getChoices().stream().noneMatch(c ->
+                c.getMessage() != null && c.getMessage().getContent() != null
+                        && c.getMessage().getContent().stream().anyMatch(b -> b instanceof ContentBlock.ThinkingBlock))) {
+            return response;
+        }
+        List<ChatResponse.Choice> choices = new ArrayList<>();
+        for (var choice : response.getChoices()) {
+            if (choice.getMessage() == null || choice.getMessage().getContent() == null) {
+                choices.add(choice);
+                continue;
+            }
+            List<ContentBlock> blocks = new ArrayList<>();
+            for (ContentBlock block : choice.getMessage().getContent()) {
+                blocks.add(block instanceof ContentBlock.ThinkingBlock tb && tb.thinking() != null
+                        ? new ContentBlock.TextBlock(tb.thinking()) : block);
+            }
+            choices.add(ChatResponse.Choice.builder()
+                    .index(choice.getIndex())
+                    .message(choice.getMessage().toBuilder().content(blocks).build())
+                    .finishReason(choice.getFinishReason())
+                    .build());
+        }
+        return response.toBuilder().choices(choices).build();
+    }
+
     private ChatResponse doEnforceResponse(ChatResponse response, String workspaceId, ChatRequest originalRequest) {
         if (!properties.isEnabled() || !properties.isScanResponses()) {
             return response;
@@ -178,14 +208,16 @@ public class GuardrailScanService implements GuardrailEnforcer {
             return response;
         }
 
-        List<GuardrailScanResult> results = new ArrayList<>(detector.scanResponse(response, workspaceId));
+        // The detectors read text blocks. The model's thinking reaches the caller too, so they read it as text.
+        ChatResponse scanned = withThinkingAsText(response);
+        List<GuardrailScanResult> results = new ArrayList<>(detector.scanResponse(scanned, workspaceId));
 
         // System prompt leak detection (OWASP LLM07)
         if (originalRequest != null) {
             String systemPrompt = SystemPromptLeakDetector.extractSystemPrompt(originalRequest);
             String conversationText = SystemPromptLeakDetector.extractConversationText(originalRequest);
-            if (systemPrompt != null && response.getChoices() != null) {
-                for (var choice : response.getChoices()) {
+            if (systemPrompt != null && scanned.getChoices() != null) {
+                for (var choice : scanned.getChoices()) {
                     if (choice.getMessage() != null && choice.getMessage().getContent() != null) {
                         for (ContentBlock block : choice.getMessage().getContent()) {
                             if (block instanceof ContentBlock.TextBlock tb) {
