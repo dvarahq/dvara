@@ -467,7 +467,7 @@ class OllamaProviderTest {
         assertThat(caps.supportsStreaming()).isTrue();
         assertThat(caps.supportsVision()).isTrue();
         assertThat(caps.supportsToolCalls()).isTrue();
-        assertThat(caps.supportsStreamingToolCalls()).isFalse();
+        assertThat(caps.supportsStreamingToolCalls()).isTrue();
         assertThat(caps.supportsStructuredOutputs()).isTrue();
         assertThat(caps.supportsJsonMode()).isTrue();
         assertThat(caps.maxContextTokens()).isEqualTo(32_000);
@@ -864,5 +864,33 @@ class OllamaProviderTest {
         assertThatThrownBy(() -> as("acme", () -> provider.embed(embedding(null))))
                 .isInstanceOf(GatewayException.class).hasMessageContaining("redirect");
         tenant[0].verify();
+    }
+
+    /** A streamed call sends its tools, and the model's tool call comes back on the stream. */
+    @Test
+    void streamChat_toolsTravel_andTheCallComesBackOnTheStream() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.stream").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.tools[0].function.name").value("get_rate"))
+              .andRespond(withSuccess("""
+                      data: {"id":"s","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","index":0,"type":"function","function":{"name":"get_rate","arguments":"{}"}}]},"finish_reason":null}]}
+
+                      data: {"id":"s","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+                      data: [DONE]
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        List<com.dvarahq.core.model.SseChunk> chunks = new java.util.ArrayList<>();
+        provider.streamChat(ChatRequest.builder()
+                .model("ollama/qwen3:4b-instruct")
+                .messages(List.of(MultimodalMessage.user("Rate for Chicago to Dallas?")))
+                .tools(List.of(com.dvarahq.core.model.ToolDefinition.builder().name("get_rate").build()))
+                .build()).forEachRemaining(chunks::add);
+
+        server.verify();
+        assertThat(chunks.get(0).getToolCalls()).containsExactly(
+                new com.dvarahq.core.model.ToolCallDelta(0, "call_1", "get_rate", "{}"));
+        assertThat(chunks.get(1).getFinishReason()).isEqualTo("tool_calls");
     }
 }

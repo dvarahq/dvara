@@ -30,6 +30,7 @@ import com.dvarahq.core.model.ResponseFormat;
 import com.dvarahq.core.model.ReleasableUpstream;
 import com.dvarahq.providers.support.StreamTransport;
 import com.dvarahq.core.model.SseChunk;
+import com.dvarahq.core.model.ToolCallDelta;
 import com.dvarahq.core.provider.AbstractLlmProvider;
 import com.dvarahq.core.provider.ProviderCapabilities;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -44,6 +45,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -457,13 +459,13 @@ public class OllamaProvider extends AbstractLlmProvider {
 
     /**
      * Vision is declared: a model without it makes Ollama refuse the image, and that refusal is returned.
-     * Tool calls are supported on the plain path (#30). Streamed tool calls are not declared: that path is
-     * not verified against Ollama end to end (BR-105-3), so the dispatcher keeps refusing it.
+     * Tool calls are supported on the plain path and on a stream: the stream decoder puts every
+     * tool-call fragment on the chunk, which was checked against a live Ollama.
      */
     @Override
     public ProviderCapabilities capabilities() {
-        // streaming, vision, toolCalls, structuredOutputs, jsonMode, maxContextTokens
-        return new ProviderCapabilities(true, true, true, structuredOutputs, true, 32_000);
+        // streaming, vision, toolCalls, structuredOutputs, jsonMode, batch, streamingToolCalls, maxContextTokens
+        return new ProviderCapabilities(true, true, true, structuredOutputs, true, false, true, 32_000);
     }
 
     @Override
@@ -501,6 +503,10 @@ public class OllamaProvider extends AbstractLlmProvider {
         private SseChunk next;
         private boolean done;
         private boolean finished;   // a chunk carrying a finish reason has been returned
+        /** Ollama's tool-call key (its index, or its id when it sends none) to a zero-based index. */
+        private final Map<String, Integer> toolCallIndexes = new LinkedHashMap<>();
+        /** Fragments with neither index nor id: each is its own call. */
+        private int anonymousCalls;
 
         OllamaSseIterator(BufferedReader reader, String model) {
             this(() -> { }, reader, model);
@@ -543,7 +549,13 @@ public class OllamaProvider extends AbstractLlmProvider {
                         throw incomplete();   // the chunk carrying a finish reason ends the stream first
                     }
                     OllamaStreamChunk chunk = JsonMapper.instance().readValue(data, OllamaStreamChunk.class);
-                    return mapStreamChunk(chunk);
+                    try {
+                        return mapStreamChunk(chunk);
+                    } catch (GatewayException e) {
+                        done = true;
+                        closeReader();
+                        throw e;
+                    }
                 }
                 done = true;
                 closeReader();
@@ -566,10 +578,12 @@ public class OllamaProvider extends AbstractLlmProvider {
         private SseChunk mapStreamChunk(OllamaStreamChunk chunk) {
             String delta = null;
             String finishReason = null;
+            List<ToolCallDelta> toolCalls = null;
             if (chunk.getChoices() != null && !chunk.getChoices().isEmpty()) {
                 OllamaStreamChunk.StreamChoice choice = chunk.getChoices().get(0);
                 if (choice.getDelta() != null) {
                     delta = choice.getDelta().getContent();
+                    toolCalls = toolCalls(choice.getDelta().getToolCalls());
                 }
                 finishReason = choice.getFinishReason();
             }
@@ -579,9 +593,35 @@ public class OllamaProvider extends AbstractLlmProvider {
                     .id(chunk.getId())
                     .model(chunk.getModel() != null ? chunk.getModel() : model)
                     .delta(delta)
+                    .toolCalls(toolCalls)
                     .finishReason(finishReason)
                     .done(isDone)
                     .build();
+        }
+
+        /**
+         * The tool-call fragments on one delta, null when there are none. Ollama's position becomes a
+         * consecutive zero-based index in order of first appearance; a fragment without one is keyed by its
+         * id, and one with neither is a call of its own. Empty argument text is null.
+         */
+        private List<ToolCallDelta> toolCalls(List<OllamaStreamChunk.StreamToolCall> raw) {
+            if (raw == null || raw.isEmpty()) return null;
+            List<ToolCallDelta> out = new ArrayList<>(raw.size());
+            for (OllamaStreamChunk.StreamToolCall call : raw) {
+                if (call.getType() != null && !"function".equals(call.getType())) {
+                    throw new GatewayException("PROVIDER_ERROR", "Ollama streamed a tool call of type '"
+                            + call.getType() + "', which this gateway cannot relay");
+                }
+                String key = call.getIndex() != null ? "i:" + call.getIndex()
+                        : call.getId() != null ? "id:" + call.getId()
+                        : "anonymous:" + anonymousCalls++;
+                int index = toolCallIndexes.computeIfAbsent(key, k -> toolCallIndexes.size());
+                String name = call.getFunction() != null ? call.getFunction().getName() : null;
+                String arguments = call.getFunction() != null ? call.getFunction().getArguments() : null;
+                out.add(new ToolCallDelta(index, call.getId(), name,
+                        arguments == null || arguments.isEmpty() ? null : arguments));
+            }
+            return out;
         }
 
         /** Close the body stream, not the reader: a read parked in readLine() holds the reader's lock. */
@@ -665,6 +705,21 @@ public class OllamaProvider extends AbstractLlmProvider {
         static class StreamDelta {
             private String role;
             private String content;
+            @JsonProperty("tool_calls") private List<StreamToolCall> toolCalls;
+        }
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class StreamToolCall {
+            private Integer index;
+            private String id;
+            private String type;
+            private StreamFunction function;
+        }
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class StreamFunction {
+            private String name;
+            private String arguments;
         }
     }
 
