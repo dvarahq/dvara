@@ -87,6 +87,11 @@ public class GatewayProperties {
          * calling workspace registered, never to {@code base-url}. A workspace with none is refused.
          */
         private boolean perWorkspace = false;
+        /**
+         * Send {@code response_format} {@code json_schema} to Ollama and declare structured outputs. Ollama
+         * follows a schema from 0.5; turn this off for an older one.
+         */
+        private boolean structuredOutputs = true;
     }
 
     @Data

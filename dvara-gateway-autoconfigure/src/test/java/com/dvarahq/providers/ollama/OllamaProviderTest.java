@@ -82,10 +82,14 @@ class OllamaProviderTest {
         assertThat(provider.supports(request)).isFalse();
     }
 
+    /** Ollama decides which of its models can embed, so every ollama/ model is offered; no other is. */
     @Test
-    void supportsEmbedding_alwaysReturnsFalse() {
-        assertThat(provider.supportsEmbedding("ollama/llama3.2")).isFalse();
-        assertThat(provider.supportsEmbedding("any-model")).isFalse();
+    void supportsEmbedding_everyOllamaModel_andNoOther() {
+        assertThat(provider.supportsEmbedding("ollama/nomic-embed-text")).isTrue();
+        assertThat(provider.supportsEmbedding("ollama/mxbai-embed-large")).isTrue();
+        assertThat(provider.supportsEmbedding("ollama/all-minilm:l6-v2")).isTrue();
+        assertThat(provider.supportsEmbedding("text-embedding-3-small")).isFalse();
+        assertThat(provider.supportsEmbedding(null)).isFalse();
     }
 
     @Test
@@ -461,11 +465,11 @@ class OllamaProviderTest {
         ProviderCapabilities caps = provider.capabilities();
 
         assertThat(caps.supportsStreaming()).isTrue();
-        assertThat(caps.supportsVision()).isFalse();
+        assertThat(caps.supportsVision()).isTrue();
         assertThat(caps.supportsToolCalls()).isTrue();
-        assertThat(caps.supportsStreamingToolCalls()).isFalse();
-        assertThat(caps.supportsStructuredOutputs()).isFalse();
-        assertThat(caps.supportsJsonMode()).isFalse();
+        assertThat(caps.supportsStreamingToolCalls()).isTrue();
+        assertThat(caps.supportsStructuredOutputs()).isTrue();
+        assertThat(caps.supportsJsonMode()).isTrue();
         assertThat(caps.maxContextTokens()).isEqualTo(32_000);
     }
 
@@ -473,17 +477,124 @@ class OllamaProviderTest {
     // response_format
     // -------------------------------------------------------------------------
 
+    /**
+     * JSON mode travels as OpenAI's response_format. Ollama's /v1 endpoint honours that field and ignores
+     * its native top-level "format", so "format" would ask for nothing.
+     */
     @Test
-    void chat_jsonObjectFormat_throwsUnsupportedResponseFormat() {
-        ChatRequest request = ChatRequest.builder()
+    void chat_jsonObjectFormat_travelsAsResponseFormat() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.type").value("json_object"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.format").doesNotExist())
+              .andRespond(withSuccess(ollamaSuccessBody("o-j", "llama3.2", "{\\\"ok\\\":true}", 5, 3), MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(ChatRequest.builder()
                 .model("ollama/llama3.2")
                 .messages(List.of(MultimodalMessage.user("Return JSON")))
                 .responseFormat(new ResponseFormat.JsonObject())
-                .build();
+                .build());
 
-        assertThatThrownBy(() -> provider.chat(request))
+        server.verify();
+        assertThat(response.getChoices().get(0).getMessage().getContent().get(0))
+                .isEqualTo(new com.dvarahq.core.model.ContentBlock.TextBlock("{\"ok\":true}"));
+    }
+
+    /** A streamed call asks for JSON the same way. */
+    @Test
+    void streamChat_jsonObjectFormat_travelsAsResponseFormat() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.stream").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.type").value("json_object"))
+              .andRespond(withSuccess("""
+                      data: {"id":"s","model":"llama3.2","choices":[{"index":0,"delta":{"content":"{}"},"finish_reason":null}]}
+
+                      data: {"id":"s","model":"llama3.2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+                      data: [DONE]
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        var it = provider.streamChat(ChatRequest.builder()
+                .model("ollama/llama3.2")
+                .messages(List.of(MultimodalMessage.user("Return JSON")))
+                .responseFormat(new ResponseFormat.JsonObject())
+                .build());
+        it.forEachRemaining(c -> { });
+        server.verify();
+    }
+
+    /** No response_format, or text, sends none. */
+    @Test
+    void chat_noResponseFormat_sendsNone() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format").doesNotExist())
+              .andRespond(withSuccess(ollamaSuccessBody("o-n", "llama3.2", "hi", 1, 1), MediaType.APPLICATION_JSON));
+        provider.chat(chatRequest("ollama/llama3.2", "Hi"));
+        server.verify();
+    }
+
+    private static ChatRequest schemaRequest(boolean strict) {
+        return ChatRequest.builder()
+                .model("ollama/qwen3:4b-instruct")
+                .messages(List.of(MultimodalMessage.user("Largest city in France, as JSON")))
+                .responseFormat(new ResponseFormat.JsonSchema("city", Map.of(
+                        "type", "object",
+                        "properties", Map.of("city", Map.of("type", "string"), "pop", Map.of("type", "integer")),
+                        "required", List.of("city", "pop")), strict))
+                .build();
+    }
+
+    /**
+     * A JSON schema travels as OpenAI's response_format. Ollama's /v1 endpoint follows it there and ignores
+     * a top-level "format" schema, so "format" would constrain nothing.
+     */
+    @Test
+    void chat_jsonSchemaFormat_travelsAsResponseFormat() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.type").value("json_schema"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.name").value("city"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.schema.type").value("object"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.schema.required[1]").value("pop"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.strict").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.format").doesNotExist())
+              .andRespond(withSuccess(ollamaSuccessBody("o-s", "qwen3:4b-instruct", "{\\\"city\\\":\\\"Paris\\\",\\\"pop\\\":2161000}", 20, 9), MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(schemaRequest(true));
+
+        server.verify();
+        assertThat(response.getChoices().get(0).getMessage().getContent().get(0))
+                .isEqualTo(new com.dvarahq.core.model.ContentBlock.TextBlock("{\"city\":\"Paris\",\"pop\":2161000}"));
+    }
+
+    /** A streamed call carries the schema the same way. */
+    @Test
+    void streamChat_jsonSchemaFormat_travelsAsResponseFormat() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.stream").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.name").value("city"))
+              .andRespond(withSuccess("""
+                      data: {"id":"s","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{"content":"{}"},"finish_reason":null}]}
+
+                      data: {"id":"s","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+                      data: [DONE]
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        provider.streamChat(schemaRequest(false)).forEachRemaining(c -> { });
+        server.verify();
+    }
+
+    /** Off (an Ollama older than 0.5): not declared, and a schema that still reaches the provider is refused. */
+    @Test
+    void structuredOutputsOff_isNotDeclared_andASchemaIsRefused() {
+        provider.setStructuredOutputs(false);
+
+        assertThat(provider.capabilities().supportsStructuredOutputs()).isFalse();
+        assertThatThrownBy(() -> provider.chat(schemaRequest(false)))
                 .isInstanceOf(GatewayException.class)
                 .satisfies(ex -> assertThat(((GatewayException) ex).getCode()).isEqualTo("UNSUPPORTED_RESPONSE_FORMAT"));
+        server.verify();
     }
 
     @Test
@@ -542,25 +653,244 @@ class OllamaProviderTest {
     }
 
     // -------------------------------------------------------------------------
-    // Unsupported content-block rejection
+    // Vision
     // -------------------------------------------------------------------------
 
-    @Test
-    void chat_rejectsImageBlockWithUnsupportedCapability() {
-        ChatRequest request = ChatRequest.builder()
-                .model("ollama/llama3.2")
+    private static ChatRequest imageRequest(com.dvarahq.core.model.ContentBlock.ImageBlock image) {
+        return ChatRequest.builder()
+                .model("ollama/qwen3.5:4b")
                 .messages(List.of(MultimodalMessage.builder()
                         .role("user")
                         .content(List.of(
                                 new com.dvarahq.core.model.ContentBlock.TextBlock("Describe this image."),
-                                new com.dvarahq.core.model.ContentBlock.ImageBlock("image/png", "BASE64DATA")))
+                                image))
                         .build()))
                 .build();
-
-        assertThatThrownBy(() -> provider.chat(request))
-                .isInstanceOf(GatewayException.class)
-                .hasMessageContaining("vision")
-                .extracting("code").isEqualTo("UNSUPPORTED_CAPABILITY");
     }
 
+    /** An image travels as a content array, the base64 back in a data: URL, the shape Ollama's /v1 reads. */
+    @Test
+    void chat_imageBlock_travelsAsAContentArrayWithADataUrl() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[0].type").value("text"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[0].text").value("Describe this image."))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[1].type").value("image_url"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[1].image_url.url").value("data:image/png;base64,BASE64DATA"))
+              .andRespond(withSuccess(ollamaSuccessBody("o-v", "qwen3.5:4b", "A red square.", 40, 4), MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(imageRequest(
+                new com.dvarahq.core.model.ContentBlock.ImageBlock("image/png", "BASE64DATA")));
+
+        server.verify();
+        assertThat(response.getChoices().get(0).getMessage().getContent().get(0))
+                .isEqualTo(new com.dvarahq.core.model.ContentBlock.TextBlock("A red square."));
+    }
+
+    /** A message with text only stays a plain string, as before. */
+    @Test
+    void chat_textOnlyMessage_staysAPlainString() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content").value("Hi"))
+              .andRespond(withSuccess(ollamaSuccessBody("o-t", "llama3.2", "Hello", 1, 1), MediaType.APPLICATION_JSON));
+
+        provider.chat(chatRequest("ollama/llama3.2", "Hi"));
+        server.verify();
+    }
+
+    /**
+     * Ollama refuses an https image URL ("please use base64 encoded data instead"). So with fetching off the
+     * gateway refuses it before the call, naming the fix; with fetching on it fetches the image and sends
+     * the bytes.
+     */
+    @Test
+    void chat_imageUrl_isRefusedWhenFetchingIsOff_andInlinedWhenOn() {
+        ChatRequest request = imageRequest(new com.dvarahq.core.model.ContentBlock.ImageBlock(
+                com.dvarahq.core.model.ContentBlock.ImageBlock.URL_MEDIA_TYPE, "https://example.com/cat.png"));
+        assertThatThrownBy(() -> provider.chat(request))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("base64")
+                .extracting("code").isEqualTo("UNSUPPORTED_CAPABILITY");
+
+        List<String> fetched = new java.util.ArrayList<>();
+        provider.setImageFetcher(stubFetcher(fetched));
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[1].image_url.url").value("data:image/png;base64,iVBORw0KGgo="))
+              .andRespond(withSuccess(ollamaSuccessBody("o-u", "qwen3.5:4b", "A cat.", 40, 3), MediaType.APPLICATION_JSON));
+
+        provider.chat(request);
+
+        server.verify();
+        assertThat(fetched).containsExactly("https://example.com/cat.png");
+    }
+
+    /** A streamed call carries the image the same way. */
+    @Test
+    void streamChat_imageBlock_travelsAsAContentArray() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.stream").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[1].image_url.url").value("data:image/jpeg;base64,JPEGDATA"))
+              .andRespond(withSuccess("""
+                      data: {"id":"s","model":"qwen3.5:4b","choices":[{"index":0,"delta":{"content":"Red"},"finish_reason":null}]}
+
+                      data: {"id":"s","model":"qwen3.5:4b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+                      data: [DONE]
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        var it = provider.streamChat(imageRequest(
+                new com.dvarahq.core.model.ContentBlock.ImageBlock("image/jpeg", "JPEGDATA")));
+        StringBuilder text = new StringBuilder();
+        it.forEachRemaining(c -> { if (c.getDelta() != null) text.append(c.getDelta()); });
+
+        server.verify();
+        assertThat(text.toString()).isEqualTo("Red");
+    }
+
+    /** A fetcher that answers every URL with one PNG, standing in for the real fetch. */
+    private static com.dvarahq.providers.support.ImageFetcher stubFetcher(List<String> fetched) {
+        return new com.dvarahq.providers.support.ImageFetcher(true, 1024, java.time.Duration.ofSeconds(1),
+                java.util.Set.of("image/png")) {
+            @Override
+            public FetchedImage fetch(String url) {
+                fetched.add(url);
+                return new FetchedImage("image/png", "iVBORw0KGgo=");
+            }
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // Embeddings
+    // -------------------------------------------------------------------------
+
+    private static final String EMBEDDING_REPLY = """
+            {"object":"list","model":"nomic-embed-text",
+             "data":[{"object":"embedding","index":0,"embedding":[0.1,-0.2,0.3]},
+                     {"object":"embedding","index":1,"embedding":[0.4,0.5,-0.6]}],
+             "usage":{"prompt_tokens":4,"total_tokens":4}}
+            """;
+
+    private static com.dvarahq.core.model.EmbeddingRequest embedding(Integer dimensions) {
+        return com.dvarahq.core.model.EmbeddingRequest.builder()
+                .model("ollama/nomic-embed-text")
+                .input(List.of("hello", "world"))
+                .dimensions(dimensions)
+                .build();
+    }
+
+    /** The call goes to /v1/embeddings without the prefix, and the vectors come back in the OpenAI shape. */
+    @Test
+    void embed_postsToV1Embeddings_andMapsTheVectors() {
+        server.expect(requestTo("http://localhost:11434/v1/embeddings"))
+              .andExpect(method(HttpMethod.POST))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.model").value("nomic-embed-text"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.input[1]").value("world"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.dimensions").doesNotExist())
+              .andRespond(withSuccess(EMBEDDING_REPLY, MediaType.APPLICATION_JSON));
+
+        var response = provider.embed(embedding(null));
+
+        server.verify();
+        assertThat(response.getObject()).isEqualTo("list");
+        assertThat(response.getModel()).isEqualTo("ollama/nomic-embed-text");
+        assertThat(response.getData()).hasSize(2);
+        assertThat(response.getData().get(1).getIndex()).isEqualTo(1);
+        assertThat(response.getData().get(1).getObject()).isEqualTo("embedding");
+        assertThat(response.getData().get(1).getEmbedding()).containsExactly(0.4, 0.5, -0.6);
+        assertThat(response.getUsage().getPromptTokens()).isEqualTo(4);
+        assertThat(response.getUsage().getTotalTokens()).isEqualTo(4);
+    }
+
+    /** dimensions travels only when the caller set it. */
+    @Test
+    void embed_dimensionsTravelWhenSet() {
+        server.expect(requestTo(containsString("/v1/embeddings")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.dimensions").value(64))
+              .andRespond(withSuccess(EMBEDDING_REPLY, MediaType.APPLICATION_JSON));
+        provider.embed(embedding(64));
+        server.verify();
+    }
+
+    /** A model that cannot embed is Ollama's refusal, returned with its status and naming the model. */
+    @Test
+    void embed_upstreamRefusal_namesTheModel() {
+        server.expect(requestTo(containsString("/v1/embeddings")))
+              .andRespond(withServerError().contentType(MediaType.APPLICATION_JSON)
+                      .body("{\"error\":{\"message\":\"This server does not support embeddings\"}}"));
+
+        assertThatThrownBy(() -> provider.embed(embedding(null)))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("nomic-embed-text")
+                .satisfies(e -> assertThat(((GatewayException) e).getUpstreamStatus()).isEqualTo(500));
+        server.verify();
+    }
+
+    /** An empty reply is the upstream's failure, not a null pointer. */
+    @Test
+    void embed_emptyReply_isAProviderError() {
+        server.expect(requestTo(containsString("/v1/embeddings")))
+              .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        assertThatThrownBy(() -> provider.embed(embedding(null)))
+                .isInstanceOf(GatewayException.class)
+                .extracting("code").isEqualTo("PROVIDER_ERROR");
+    }
+
+    /** Per-workspace: embeddings go to the workspace's own endpoint with its key, never the platform one. */
+    @Test
+    void perWorkspace_embeddingsGoToTheWorkspacesOwnEndpoint() {
+        MockRestServiceServer[] tenant = new MockRestServiceServer[1];
+        perWorkspace(tenant, ACME_ONLY);
+        tenant[0].expect(requestTo("https://ollama.acme.test/v1/embeddings"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.header("Authorization", "Bearer acme-key"))
+                .andRespond(withSuccess(EMBEDDING_REPLY, MediaType.APPLICATION_JSON));
+
+        var response = as("acme", () -> provider.embed(embedding(null)));
+
+        tenant[0].verify();
+        server.verify();
+        assertThat(response.getData()).hasSize(2);
+        assertThatThrownBy(() -> as("globex", () -> provider.embed(embedding(null))))
+                .isInstanceOf(GatewayException.class).hasMessageContaining("No Ollama endpoint");
+    }
+
+    /** Per-workspace: a redirect on the embeddings call is refused, not followed. */
+    @Test
+    void perWorkspace_anEmbeddingsRedirectIsRefused() {
+        MockRestServiceServer[] tenant = new MockRestServiceServer[1];
+        perWorkspace(tenant, ACME_ONLY);
+        tenant[0].expect(requestTo("https://ollama.acme.test/v1/embeddings"))
+                .andRespond(withStatus(HttpStatus.FOUND).header("Location", "http://169.254.169.254/latest/meta-data/"));
+
+        assertThatThrownBy(() -> as("acme", () -> provider.embed(embedding(null))))
+                .isInstanceOf(GatewayException.class).hasMessageContaining("redirect");
+        tenant[0].verify();
+    }
+
+    /** A streamed call sends its tools, and the model's tool call comes back on the stream. */
+    @Test
+    void streamChat_toolsTravel_andTheCallComesBackOnTheStream() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.stream").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.tools[0].function.name").value("get_rate"))
+              .andRespond(withSuccess("""
+                      data: {"id":"s","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","index":0,"type":"function","function":{"name":"get_rate","arguments":"{}"}}]},"finish_reason":null}]}
+
+                      data: {"id":"s","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+                      data: [DONE]
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        List<com.dvarahq.core.model.SseChunk> chunks = new java.util.ArrayList<>();
+        provider.streamChat(ChatRequest.builder()
+                .model("ollama/qwen3:4b-instruct")
+                .messages(List.of(MultimodalMessage.user("Rate for Chicago to Dallas?")))
+                .tools(List.of(com.dvarahq.core.model.ToolDefinition.builder().name("get_rate").build()))
+                .build()).forEachRemaining(chunks::add);
+
+        server.verify();
+        assertThat(chunks.get(0).getToolCalls()).containsExactly(
+                new com.dvarahq.core.model.ToolCallDelta(0, "call_1", "get_rate", "{}"));
+        assertThat(chunks.get(1).getFinishReason()).isEqualTo("tool_calls");
+    }
 }

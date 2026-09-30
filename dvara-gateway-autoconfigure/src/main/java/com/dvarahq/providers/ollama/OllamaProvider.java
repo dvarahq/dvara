@@ -16,17 +16,21 @@
 package com.dvarahq.providers.ollama;
 
 import com.dvarahq.providers.support.CredentialInterceptor;
+import com.dvarahq.providers.support.ImageFetcher;
 import com.dvarahq.providers.support.ProviderErrors;
 
 import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
+import com.dvarahq.core.model.EmbeddingRequest;
+import com.dvarahq.core.model.EmbeddingResponse;
 import com.dvarahq.core.model.MultimodalMessage;
 import com.dvarahq.core.model.ResponseFormat;
 import com.dvarahq.core.model.ReleasableUpstream;
 import com.dvarahq.providers.support.StreamTransport;
 import com.dvarahq.core.model.SseChunk;
+import com.dvarahq.core.model.ToolCallDelta;
 import com.dvarahq.core.provider.AbstractLlmProvider;
 import com.dvarahq.core.provider.ProviderCapabilities;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -41,6 +45,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -71,6 +76,25 @@ public class OllamaProvider extends AbstractLlmProvider {
     OllamaProvider(RestClient restClient) {
         super("ollama");
         this.restClient = restClient;
+    }
+
+    /** Fetches an https image URL to inline it; off unless the operator turned fetching on. */
+    private ImageFetcher imageFetcher = ImageFetcher.DISABLED;
+
+    /**
+     * Lets an https image URL be fetched and sent as base64, with the fetcher's own address and size checks.
+     * Ollama takes images as base64 only and refuses a URL.
+     */
+    public void setImageFetcher(ImageFetcher imageFetcher) {
+        this.imageFetcher = imageFetcher != null ? imageFetcher : ImageFetcher.DISABLED;
+    }
+
+    /** Whether a JSON schema is sent. Ollama follows one from 0.5; an operator on an older one turns this off. */
+    private boolean structuredOutputs = true;
+
+    /** Turns structured outputs ({@code response_format} {@code json_schema}) on or off, and its capability flag with it. */
+    public void setStructuredOutputs(boolean enabled) {
+        this.structuredOutputs = enabled;
     }
 
     // -------------------------------------------------------------------------
@@ -159,6 +183,64 @@ public class OllamaProvider extends AbstractLlmProvider {
     }
 
     // -------------------------------------------------------------------------
+    // Embeddings
+    // -------------------------------------------------------------------------
+
+    /**
+     * Every {@code ollama/} model is offered: Ollama decides which of its models can embed, and one that
+     * cannot is refused upstream with its name in the error.
+     */
+    @Override
+    public boolean supportsEmbedding(String model) {
+        return model != null && model.startsWith("ollama/");
+    }
+
+    /** Ollama's OpenAI-compatible {@code /v1/embeddings}, on the same endpoint a chat call would use. */
+    @Override
+    public EmbeddingResponse embed(EmbeddingRequest request) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", stripPrefix(request.getModel()));
+        body.put("input", request.getInput());
+        if (request.getDimensions() != null) body.put("dimensions", request.getDimensions());
+
+        OllamaEmbeddingResponse resp = target().post("/v1/embeddings")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .onStatus(OllamaProvider::refusedRedirect, (req, res) -> {
+                    throw new GatewayException("PROVIDER_ERROR",
+                            "The Ollama endpoint answered with a redirect, which is not followed");
+                })
+                .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal("Ollama", res);
+                    throw GatewayException.upstream(res.getStatusCode().value(),
+                            "Ollama embedding error " + res.getStatusCode().value() + " for model "
+                                + stripPrefix(request.getModel())
+                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                })
+                .body(OllamaEmbeddingResponse.class);
+
+        if (resp == null || resp.getData() == null) {
+            throw new GatewayException("PROVIDER_ERROR", "Ollama returned an empty embedding response");
+        }
+        return EmbeddingResponse.builder()
+                .object("list")
+                .model(request.getModel())
+                .data(resp.getData().stream()
+                        .map(d -> EmbeddingResponse.EmbeddingData.builder()
+                                .object("embedding")
+                                .index(d.getIndex())
+                                .embedding(d.getEmbedding())
+                                .build())
+                        .toList())
+                .usage(EmbeddingResponse.Usage.builder()
+                        .promptTokens(resp.getUsage() != null ? resp.getUsage().getPromptTokens() : 0)
+                        .totalTokens(resp.getUsage() != null ? resp.getUsage().getTotalTokens() : 0)
+                        .build())
+                .build();
+    }
+
+    // -------------------------------------------------------------------------
     // Streaming
     // -------------------------------------------------------------------------
 
@@ -195,14 +277,29 @@ public class OllamaProvider extends AbstractLlmProvider {
     // -------------------------------------------------------------------------
 
     private void rejectUnsupportedResponseFormat(ResponseFormat format) {
-        if (format != null && !(format instanceof ResponseFormat.Text)) {
+        if (format instanceof ResponseFormat.JsonSchema && !structuredOutputs) {
             throw new GatewayException("UNSUPPORTED_RESPONSE_FORMAT",
-                    "Ollama provider does not support response_format. Supported formats: [text]");
+                    "Ollama provider does not support response_format json_schema. Supported formats: [text, json_object]");
+        }
+    }
+
+    /**
+     * JSON mode and a JSON schema as OpenAI's {@code response_format}. Ollama's {@code /v1} endpoint follows
+     * that field and ignores its native top-level {@code format}, so {@code format} would ask for nothing.
+     */
+    private static void applyResponseFormat(Map<String, Object> body, ResponseFormat format) {
+        if (format instanceof ResponseFormat.JsonObject) {
+            body.put("response_format", Map.of("type", "json_object"));
+        } else if (format instanceof ResponseFormat.JsonSchema js) {
+            Map<String, Object> jsonSchema = new LinkedHashMap<>();
+            jsonSchema.put("name", js.name());
+            jsonSchema.put("schema", js.schema());
+            jsonSchema.put("strict", js.strict());
+            body.put("response_format", Map.of("type", "json_schema", "json_schema", jsonSchema));
         }
     }
 
     private Map<String, Object> buildChatBody(ChatRequest request) {
-        rejectUnsupportedContentBlocks(request);
         List<Map<String, Object>> messages = request.getMessages().stream()
                 .map(this::serializeMessage)
                 .collect(Collectors.toList());
@@ -215,6 +312,7 @@ public class OllamaProvider extends AbstractLlmProvider {
         if (request.getTopP()        != null) body.put("top_p",       request.getTopP());
         if (request.getStop() != null) body.put("stop", request.getStop());
         if (request.getSeed() != null) body.put("seed", request.getSeed());
+        applyResponseFormat(body, request.getResponseFormat());
         applyTools(body, request);
         return body;
     }
@@ -226,7 +324,7 @@ public class OllamaProvider extends AbstractLlmProvider {
     private Map<String, Object> serializeMessage(MultimodalMessage m) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("role", m.getRole());
-        out.put("content", extractText(m));
+        out.put("content", extractContent(m));
         if (m.getToolCalls() != null && !m.getToolCalls().isEmpty()) {
             out.put("tool_calls", m.getToolCalls().stream()
                     .map(tc -> Map.of(
@@ -266,32 +364,48 @@ public class OllamaProvider extends AbstractLlmProvider {
         }
     }
 
-    private void rejectUnsupportedContentBlocks(ChatRequest request) {
-        for (MultimodalMessage msg : request.getMessages()) {
-            if (msg.getContent() == null) continue;
-            for (ContentBlock block : msg.getContent()) {
-                if (block instanceof ContentBlock.ImageBlock) {
-                    throw new GatewayException("UNSUPPORTED_CAPABILITY",
-                            "Ollama vision is not yet implemented in DVARA. Use a vision-capable "
-                            + "provider (OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI) for now.");
-                }
-                // No tool-block branch: a tool call travels on the message's toolCalls, not as a
-                // content block, and serializeMessage carries it (#30).
-            }
-        }
-    }
-
     /** Strip the "ollama/" prefix that the routing key uses. */
     private String stripPrefix(String model) {
         return model != null && model.startsWith("ollama/") ? model.substring(7) : model;
     }
 
-    private String extractText(MultimodalMessage msg) {
-        if (msg.getContent() == null) return "";
+    /**
+     * A text-only message stays a plain string. A message with an image becomes the OpenAI content array
+     * Ollama's {@code /v1} endpoint reads, each image as a base64 {@code data:} URL.
+     */
+    private Object extractContent(MultimodalMessage msg) {
+        if (msg.getContent() == null || msg.getContent().isEmpty()) return "";
+        boolean allText = msg.getContent().stream().allMatch(b -> b instanceof ContentBlock.TextBlock);
+        if (allText) {
+            return msg.getContent().stream()
+                    .map(b -> ((ContentBlock.TextBlock) b).text())
+                    .collect(Collectors.joining("\n"));
+        }
         return msg.getContent().stream()
-                .filter(b -> b instanceof ContentBlock.TextBlock)
-                .map(b -> ((ContentBlock.TextBlock) b).text())
-                .collect(Collectors.joining("\n"));
+                // No default: ContentBlock is sealed, so a new kind is a compile error here rather than a
+                // block silently dropped.
+                .map(b -> switch (b) {
+                    case ContentBlock.TextBlock tb -> (Object) Map.of("type", "text", "text", tb.text());
+                    case ContentBlock.ImageBlock ib -> Map.of("type", "image_url", "image_url", Map.of("url", dataUrl(ib)));
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * An image as a {@code data:} URL. Ollama refuses an https URL ("please use base64 encoded data"), so a
+     * URL is fetched when the operator allowed fetching and refused before the call when not.
+     */
+    private String dataUrl(ContentBlock.ImageBlock ib) {
+        if (!ib.isUrl()) {
+            return "data:" + ib.mediaType() + ";base64," + ib.data();
+        }
+        if (!imageFetcher.enabled()) {
+            throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                    "Ollama takes images as base64 data: URLs, not https URLs. Send the image as base64, "
+                    + "or turn on image fetching (dvara.llm-gateway.image-fetch.enabled).");
+        }
+        ImageFetcher.FetchedImage image = imageFetcher.fetch(ib.data());
+        return "data:" + image.mediaType() + ";base64," + image.base64();
     }
 
     private ChatResponse mapToInternal(OllamaResponse resp, String model) {
@@ -344,12 +458,14 @@ public class OllamaProvider extends AbstractLlmProvider {
     }
 
     /**
-     * Tool calls are supported on the plain path (#30). Streamed tool calls are not declared: that path is
-     * not verified against Ollama end to end (BR-105-3), so the dispatcher keeps refusing it.
+     * Vision is declared: a model without it makes Ollama refuse the image, and that refusal is returned.
+     * Tool calls are supported on the plain path and on a stream: the stream decoder puts every
+     * tool-call fragment on the chunk, which was checked against a live Ollama.
      */
     @Override
     public ProviderCapabilities capabilities() {
-        return new ProviderCapabilities(true, false, true, false, false, 32_000);
+        // streaming, vision, toolCalls, structuredOutputs, jsonMode, batch, streamingToolCalls, maxContextTokens
+        return new ProviderCapabilities(true, true, true, structuredOutputs, true, false, true, 32_000);
     }
 
     @Override
@@ -387,6 +503,10 @@ public class OllamaProvider extends AbstractLlmProvider {
         private SseChunk next;
         private boolean done;
         private boolean finished;   // a chunk carrying a finish reason has been returned
+        /** Ollama's tool-call key (its index, or its id when it sends none) to a zero-based index. */
+        private final Map<String, Integer> toolCallIndexes = new LinkedHashMap<>();
+        /** Fragments with neither index nor id: each is its own call. */
+        private int anonymousCalls;
 
         OllamaSseIterator(BufferedReader reader, String model) {
             this(() -> { }, reader, model);
@@ -429,7 +549,13 @@ public class OllamaProvider extends AbstractLlmProvider {
                         throw incomplete();   // the chunk carrying a finish reason ends the stream first
                     }
                     OllamaStreamChunk chunk = JsonMapper.instance().readValue(data, OllamaStreamChunk.class);
-                    return mapStreamChunk(chunk);
+                    try {
+                        return mapStreamChunk(chunk);
+                    } catch (GatewayException e) {
+                        done = true;
+                        closeReader();
+                        throw e;
+                    }
                 }
                 done = true;
                 closeReader();
@@ -452,10 +578,12 @@ public class OllamaProvider extends AbstractLlmProvider {
         private SseChunk mapStreamChunk(OllamaStreamChunk chunk) {
             String delta = null;
             String finishReason = null;
+            List<ToolCallDelta> toolCalls = null;
             if (chunk.getChoices() != null && !chunk.getChoices().isEmpty()) {
                 OllamaStreamChunk.StreamChoice choice = chunk.getChoices().get(0);
                 if (choice.getDelta() != null) {
                     delta = choice.getDelta().getContent();
+                    toolCalls = toolCalls(choice.getDelta().getToolCalls());
                 }
                 finishReason = choice.getFinishReason();
             }
@@ -465,9 +593,35 @@ public class OllamaProvider extends AbstractLlmProvider {
                     .id(chunk.getId())
                     .model(chunk.getModel() != null ? chunk.getModel() : model)
                     .delta(delta)
+                    .toolCalls(toolCalls)
                     .finishReason(finishReason)
                     .done(isDone)
                     .build();
+        }
+
+        /**
+         * The tool-call fragments on one delta, null when there are none. Ollama's position becomes a
+         * consecutive zero-based index in order of first appearance; a fragment without one is keyed by its
+         * id, and one with neither is a call of its own. Empty argument text is null.
+         */
+        private List<ToolCallDelta> toolCalls(List<OllamaStreamChunk.StreamToolCall> raw) {
+            if (raw == null || raw.isEmpty()) return null;
+            List<ToolCallDelta> out = new ArrayList<>(raw.size());
+            for (OllamaStreamChunk.StreamToolCall call : raw) {
+                if (call.getType() != null && !"function".equals(call.getType())) {
+                    throw new GatewayException("PROVIDER_ERROR", "Ollama streamed a tool call of type '"
+                            + call.getType() + "', which this gateway cannot relay");
+                }
+                String key = call.getIndex() != null ? "i:" + call.getIndex()
+                        : call.getId() != null ? "id:" + call.getId()
+                        : "anonymous:" + anonymousCalls++;
+                int index = toolCallIndexes.computeIfAbsent(key, k -> toolCallIndexes.size());
+                String name = call.getFunction() != null ? call.getFunction().getName() : null;
+                String arguments = call.getFunction() != null ? call.getFunction().getArguments() : null;
+                out.add(new ToolCallDelta(index, call.getId(), name,
+                        arguments == null || arguments.isEmpty() ? null : arguments));
+            }
+            return out;
         }
 
         /** Close the body stream, not the reader: a read parked in readLine() holds the reader's lock. */
@@ -551,6 +705,40 @@ public class OllamaProvider extends AbstractLlmProvider {
         static class StreamDelta {
             private String role;
             private String content;
+            @JsonProperty("tool_calls") private List<StreamToolCall> toolCalls;
+        }
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class StreamToolCall {
+            private Integer index;
+            private String id;
+            private String type;
+            private StreamFunction function;
+        }
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class StreamFunction {
+            private String name;
+            private String arguments;
+        }
+    }
+
+    @Data @JsonIgnoreProperties(ignoreUnknown = true)
+    private static class OllamaEmbeddingResponse {
+        private String model;
+        private List<OllamaEmbedding> data;
+        private OllamaEmbeddingUsage usage;
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class OllamaEmbedding {
+            private int index;
+            private List<Double> embedding;
+        }
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class OllamaEmbeddingUsage {
+            @JsonProperty("prompt_tokens") private int promptTokens;
+            @JsonProperty("total_tokens")  private int totalTokens;
         }
     }
 

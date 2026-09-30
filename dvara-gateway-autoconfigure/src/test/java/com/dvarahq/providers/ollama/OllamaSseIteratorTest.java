@@ -179,4 +179,93 @@ class OllamaSseIteratorTest {
         assertThat(chunks.get(chunks.size() - 1).isDone()).isTrue();
         assertThat(chunks.get(chunks.size() - 1).getFinishReason()).isEqualTo("length");
     }
+
+    // -------------------------------------------------------------------------
+    // Tool calls on the stream
+    // -------------------------------------------------------------------------
+
+    /** The shape a live Ollama sends: both calls whole in one delta, then a tool_calls finish. */
+    @Test
+    void toolCallsInOneDelta_becomeToolCallDeltas() {
+        List<SseChunk> chunks = drain("""
+                data: {"id":"c1","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{"role":"assistant","content":"","tool_calls":[{"id":"call_a","index":0,"type":"function","function":{"name":"get_weather","arguments":"{\\"city\\":\\"Paris\\"}"}},{"id":"call_b","index":1,"type":"function","function":{"name":"get_weather","arguments":"{\\"city\\":\\"Rome\\"}"}}]},"finish_reason":null}]}
+
+                data: {"id":"c1","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+                data: [DONE]
+                """);
+
+        assertThat(chunks).hasSize(2);
+        var calls = chunks.get(0).getToolCalls();
+        assertThat(calls).containsExactly(
+                new com.dvarahq.core.model.ToolCallDelta(0, "call_a", "get_weather", "{\"city\":\"Paris\"}"),
+                new com.dvarahq.core.model.ToolCallDelta(1, "call_b", "get_weather", "{\"city\":\"Rome\"}"));
+        assertThat(chunks.get(1).getFinishReason()).isEqualTo("tool_calls");
+        assertThat(chunks.get(1).isDone()).isTrue();
+    }
+
+    /** A call split across deltas: the opener carries id and name, the rest carry argument text by index. */
+    @Test
+    void aCallSplitAcrossDeltas_keepsOneIndex() {
+        List<SseChunk> chunks = drain("""
+                data: {"id":"c1","choices":[{"delta":{"tool_calls":[{"id":"call_a","index":0,"type":"function","function":{"name":"get_rate","arguments":""}}]}}]}
+
+                data: {"id":"c1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"lane\\":"}}]}}]}
+
+                data: {"id":"c1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"CHI-DAL\\"}"}}]}}]}
+
+                data: {"id":"c1","choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+                data: [DONE]
+                """);
+
+        assertThat(chunks).hasSize(4);
+        assertThat(chunks.get(0).getToolCalls()).containsExactly(
+                new com.dvarahq.core.model.ToolCallDelta(0, "call_a", "get_rate", null));
+        assertThat(chunks.get(1).getToolCalls()).containsExactly(
+                new com.dvarahq.core.model.ToolCallDelta(0, null, null, "{\"lane\":"));
+        assertThat(chunks.get(2).getToolCalls()).containsExactly(
+                new com.dvarahq.core.model.ToolCallDelta(0, null, null, "\"CHI-DAL\"}"));
+    }
+
+    /** Upstream positions become consecutive and zero-based; a call with only an id is keyed by it. */
+    @Test
+    void toolCallIndexesAreNormalised_andAnIdOnlyCallIsKeyedById() {
+        List<SseChunk> chunks = drain("""
+                data: {"id":"c1","choices":[{"delta":{"tool_calls":[{"id":"x","index":3,"function":{"name":"a","arguments":"{}"}}]}}]}
+
+                data: {"id":"c1","choices":[{"delta":{"tool_calls":[{"id":"y","function":{"name":"b","arguments":"{"}}]}}]}
+
+                data: {"id":"c1","choices":[{"delta":{"tool_calls":[{"id":"y","function":{"arguments":"}"}}]}}]}
+
+                data: {"id":"c1","choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+                data: [DONE]
+                """);
+
+        assertThat(chunks.get(0).getToolCalls().get(0).index()).isZero();
+        assertThat(chunks.get(1).getToolCalls().get(0).index()).isEqualTo(1);
+        assertThat(chunks.get(2).getToolCalls().get(0).index()).isEqualTo(1);
+    }
+
+    /** A text delta carries no tool calls. */
+    @Test
+    void aTextDeltaCarriesNoToolCalls() {
+        assertThat(first("""
+                data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}
+                """).getToolCalls()).isNull();
+    }
+
+    /** A tool of any type but function cannot be relayed, so the stream ends with an error. */
+    @Test
+    void aNonFunctionToolCallIsAnError() {
+        assertThatThrownBy(() -> drain("""
+                data: {"id":"c1","choices":[{"delta":{"tool_calls":[{"id":"x","index":0,"type":"code_interpreter","function":{"name":"a"}}]}}]}
+
+                data: {"id":"c1","choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+                """))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("code_interpreter")
+                .extracting("code").isEqualTo("PROVIDER_ERROR");
+    }
 }
