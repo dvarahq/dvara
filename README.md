@@ -233,6 +233,10 @@ key as its API key.
   failover along a route's own chain of backup providers and models. See
   [Failover to another provider](#failover-to-another-provider).
 - ✅ **Streaming**, including streamed tool calls where the provider relays them.
+- ✅ **Anthropic Messages API** — `POST /v1/messages`, for a client built for it such as Claude Code:
+  set `ANTHROPIC_BASE_URL` to the gateway and `ANTHROPIC_AUTH_TOKEN` to a gateway API key. Governed
+  like chat, on any provider. Extended thinking and server tools are refused, and Claude Code signed
+  in with a Claude subscription does not use a custom base URL, so it cannot be pointed here.
 - ✅ **Response cache** — exact-match, in memory, per process. Off until
   `dvara.llm-gateway.cache.in-memory.enabled` is `true`.
 

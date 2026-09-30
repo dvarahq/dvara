@@ -220,7 +220,7 @@ public class GlobalExceptionHandler {
             status = HttpStatus.CONFLICT;
             type = "duplicate_error";
         } else if ("INVALID_REQUEST".equals(code) || "UNSUPPORTED_RESPONSE_FORMAT".equals(code)
-                || "UNSUPPORTED_CAPABILITY".equals(code)
+                || "UNSUPPORTED_CAPABILITY".equals(code) || "UNSUPPORTED_API_VERSION".equals(code)
                 || "INVALID_POLICY_STATUS".equals(code) || "COMPLIANCE_NOT_AVAILABLE".equals(code)
                 || "INVALID_REPORT_TYPE".equals(code) || "MCP_NOT_AVAILABLE".equals(code)
                 || "CHARGEBACK_NOT_AVAILABLE".equals(code) || "BUDGET_ESTIMATE_FAILED".equals(code)

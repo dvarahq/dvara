@@ -38,8 +38,8 @@ import java.util.Optional;
 public enum ApiKeyScope {
 
     /**
-     * {@code /v1/chat/completions}, {@code /v1/completions}, {@code /v1/responses}, and
-     * {@code /v1/budget} — the pre-flight estimate for one of them.
+     * {@code /v1/chat/completions}, {@code /v1/completions}, {@code /v1/responses},
+     * {@code /v1/messages}, and {@code /v1/budget} — the pre-flight estimate for one of them.
      */
     COMPLETIONS_WRITE("completions:write"),
     /** {@code /v1/embeddings}. Not covered by completions, so an embeddings-only key can be issued. */
@@ -80,7 +80,8 @@ public enum ApiKeyScope {
         if (path == null) {
             return Optional.empty();
         }
-        if (under(path, "/v1/chat/completions") || under(path, "/v1/completions") || under(path, "/v1/responses")) {
+        if (under(path, "/v1/chat/completions") || under(path, "/v1/completions") || under(path, "/v1/responses")
+                || under(path, "/v1/messages")) {
             return Optional.of(COMPLETIONS_WRITE);
         }
         // /v1/budget prices a request the caller intends to make and reports the workspace's
