@@ -18,6 +18,7 @@ package com.dvarahq.server.web;
 import com.dvarahq.core.plane.GatewayPlane;
 import com.dvarahq.core.audit.AuditEvent;
 import com.dvarahq.core.audit.AuditWriter;
+import com.dvarahq.core.exception.ErrorEnvelope;
 import com.dvarahq.core.id.Ids;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;

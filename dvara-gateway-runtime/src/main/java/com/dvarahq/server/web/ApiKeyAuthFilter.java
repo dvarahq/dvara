@@ -344,6 +344,6 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
     private void reject(HttpServletResponse response, HttpServletRequest request,
                         HttpStatus status, String message, String code, String type) throws IOException {
-        ErrorEnvelope.write(request, response, status.value(), message, code, type, null);
+        Refusals.write(request, response, status.value(), message, code, type, null);
     }
 }

@@ -166,7 +166,7 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
                 errorObj.put("rate_limit", rateLimitInfo);
             }
 
-            ErrorEnvelope.write(request, response, HttpStatus.TOO_MANY_REQUESTS.value(), result.reason(),
+            Refusals.write(request, response, HttpStatus.TOO_MANY_REQUESTS.value(), result.reason(),
                     "rate_limit_exceeded", "rate_limit_error", errorObj);
             return;
         }

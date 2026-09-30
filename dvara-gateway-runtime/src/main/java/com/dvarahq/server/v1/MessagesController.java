@@ -42,7 +42,7 @@ import com.dvarahq.server.service.ProviderDispatcher;
 import com.dvarahq.server.v1.dto.ErrorResponse;
 import com.dvarahq.server.v1.dto.MessagesRequest;
 import com.dvarahq.server.web.AccessLogFilter;
-import com.dvarahq.server.web.ErrorEnvelope;
+import com.dvarahq.core.exception.ErrorEnvelope;
 import com.dvarahq.server.web.GlobalExceptionHandler;
 import com.dvarahq.server.web.TraceIdFilter;
 import io.swagger.v3.oas.annotations.Operation;

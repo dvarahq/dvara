@@ -13,14 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.dvarahq.server.web;
+package com.dvarahq.core.exception;
 
-import com.dvarahq.core.util.JsonMapper;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.MediaType;
-
-import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -33,7 +27,7 @@ import java.util.Map;
  * doorway in OpenAI's, {@code {"error":{"message":...,"type":...,"code":...,"trace_id":...}}}. The status and
  * the code are the same either way, so a refusal means the same thing on every doorway.</p>
  *
- * <p>A servlet filter that refuses a request writes its body here, so that a refusal made before any
+ * <p>A servlet filter that refuses a request builds its body here, so that a refusal made before any
  * controller runs (a missing key, a rate limit, an address that is not allowed) is in the right shape too.</p>
  */
 public final class ErrorEnvelope {
@@ -96,17 +90,5 @@ public final class ErrorEnvelope {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("error", error);
         return body;
-    }
-
-    /** Writes a refusal: the status, a JSON body in the doorway's envelope, and the code for the access log. */
-    public static void write(HttpServletRequest request, HttpServletResponse response, int status, String message,
-                             String code, String type, Map<String, Object> extra) throws IOException {
-        response.setStatus(status);
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        // what the access log, metrics and audit event record for this refusal
-        request.setAttribute(AccessLogFilter.ATTR_ERROR_CODE, code);
-        String traceId = response.getHeader(TraceIdFilter.HEADER);
-        response.getWriter().write(JsonMapper.instance().writeValueAsString(
-                body(request.getRequestURI(), status, message, code, type, traceId, extra)));
     }
 }
