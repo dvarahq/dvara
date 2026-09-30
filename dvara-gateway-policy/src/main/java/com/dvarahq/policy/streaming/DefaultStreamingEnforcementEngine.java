@@ -17,6 +17,7 @@ package com.dvarahq.policy.streaming;
 
 import com.dvarahq.core.enforcement.AuditIntent;
 import com.dvarahq.core.enforcement.ContinuationGroup;
+import com.dvarahq.core.enforcement.ContinuationGroupId;
 import com.dvarahq.core.enforcement.ControlFinding;
 import com.dvarahq.core.enforcement.Detection;
 import com.dvarahq.core.enforcement.Disposition;
@@ -41,6 +42,7 @@ import com.dvarahq.core.pii.PiiAction;
 import com.dvarahq.core.pii.PiiDetector;
 import com.dvarahq.core.pii.PiiEntity;
 import com.dvarahq.core.pii.PiiScanResult;
+import com.dvarahq.policy.guardrail.SystemPromptLeakDetector;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -62,19 +64,34 @@ import java.util.Map;
  * continuation group is evaluated within that one pass, so a value split across streamed deltas is
  * seen while two unrelated owners are never concatenated. There is no sentinel between groups because
  * there is no sentinel that is universally safe.</p>
+ *
+ * <h2>System-prompt leak</h2>
+ *
+ * <p>When the posture carries the request's system prompt, the prose is also compared with it by the
+ * same {@link SystemPromptLeakDetector} rules and thresholds a non-streamed reply gets. Its findings
+ * join the guardrail control: same threshold, same action, same events.</p>
  */
 public class DefaultStreamingEnforcementEngine implements StreamingEnforcementEngine {
 
     private final PiiDetector piiDetector;
     private final GuardrailDetector guardrailDetector;
     private final GroundingDetector groundingDetector;
+    private final SystemPromptLeakDetector leakDetector;
 
     public DefaultStreamingEnforcementEngine(PiiDetector piiDetector,
                                              GuardrailDetector guardrailDetector,
                                              GroundingDetector groundingDetector) {
+        this(piiDetector, guardrailDetector, groundingDetector, new SystemPromptLeakDetector());
+    }
+
+    public DefaultStreamingEnforcementEngine(PiiDetector piiDetector,
+                                             GuardrailDetector guardrailDetector,
+                                             GroundingDetector groundingDetector,
+                                             SystemPromptLeakDetector leakDetector) {
         this.piiDetector = piiDetector;
         this.guardrailDetector = guardrailDetector;
         this.groundingDetector = groundingDetector;
+        this.leakDetector = java.util.Objects.requireNonNull(leakDetector, "leakDetector");
     }
 
     @Override
@@ -151,18 +168,31 @@ public class DefaultStreamingEnforcementEngine implements StreamingEnforcementEn
         }
 
         // ---- Guardrail ----------------------------------------------------------------
-        if (posture.guardrailEnabled() && guardrailDetector != null) {
+        if (posture.guardrailEnabled()
+                && (guardrailDetector != null || posture.promptLeakReference() != null)) {
             List<Detection> detections = new ArrayList<>();
             List<GuardrailDetection> raw = new ArrayList<>();
-            List<GuardrailScanResult> scans = guardrailDetector.scanDocument(document, workspaceId);
+            List<GuardrailScanResult> scans = guardrailDetector == null
+                    ? List.of() : guardrailDetector.scanDocument(document, workspaceId);
+            StreamingPosture.PromptLeakReference leak = posture.promptLeakReference();
             for (int g = 0; g < document.groups().size(); g++) {
                 ContinuationGroup group = document.groups().get(g);
                 String text = group.text();
-                GuardrailScanResult scan = g < scans.size() ? scans.get(g) : null;
-                if (text.isEmpty() || scan == null || !scan.hasDetections()) {
+                if (text.isEmpty()) {
                     continue;
                 }
-                for (GuardrailDetection d : scan.detections()) {
+                List<GuardrailDetection> found = new ArrayList<>();
+                GuardrailScanResult scan = g < scans.size() ? scans.get(g) : null;
+                if (scan != null && scan.hasDetections()) {
+                    found.addAll(scan.detections());
+                }
+                // The prose only, as the non-streamed check reads only the reply's text blocks. The
+                // whole group at once, so a quotation split across chunks is one quotation.
+                if (leak != null && group.id().kind() != ContinuationGroupId.Kind.TOOL_ARGUMENT) {
+                    found.addAll(leakDetector.scanForLeakedPrompt(
+                            leak.systemPrompt(), leak.conversationText(), text).detections());
+                }
+                for (GuardrailDetection d : found) {
                     if (d.riskScore() < posture.guardrailRiskThreshold()) {
                         continue;
                     }

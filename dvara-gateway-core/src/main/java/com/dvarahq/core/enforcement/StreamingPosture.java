@@ -30,15 +30,45 @@ import java.util.Map;
  * <p>Resolution (typed row, then workspace metadata where the typed field is absent, then the
  * install-wide default, with global enablement as an AND) happens in one shared resolver before this
  * record is built. The engine never reads configuration.</p>
+ *
+ * @param promptLeakReference what the request said, for the system-prompt leak check; null when the
+ *                            request carried no system prompt or is not known
  */
 public record StreamingPosture(
         boolean piiEnabled, PiiAction piiAction, Map<String, String> customPiiPatterns,
         boolean guardrailEnabled, GuardrailAction guardrailAction, double guardrailRiskThreshold,
-        boolean groundingEnabled, GuardrailAction groundingAction, List<String> groundingSources) {
+        boolean groundingEnabled, GuardrailAction groundingAction, List<String> groundingSources,
+        PromptLeakReference promptLeakReference) {
 
     public StreamingPosture {
         customPiiPatterns = customPiiPatterns == null ? Map.of() : Map.copyOf(customPiiPatterns);
         groundingSources = groundingSources == null ? List.of() : List.copyOf(groundingSources);
+    }
+
+    /** A posture with no request to compare the response against. */
+    public StreamingPosture(
+            boolean piiEnabled, PiiAction piiAction, Map<String, String> customPiiPatterns,
+            boolean guardrailEnabled, GuardrailAction guardrailAction, double guardrailRiskThreshold,
+            boolean groundingEnabled, GuardrailAction groundingAction, List<String> groundingSources) {
+        this(piiEnabled, piiAction, customPiiPatterns, guardrailEnabled, guardrailAction,
+                guardrailRiskThreshold, groundingEnabled, groundingAction, groundingSources, null);
+    }
+
+    /**
+     * The request text a streamed response is checked against for a leaked system prompt.
+     *
+     * @param systemPrompt     the request's system instructions; never blank
+     * @param conversationText the caller's own user and assistant wording, which is not secret and
+     *                         so never counts as leaked; may be null
+     */
+    public record PromptLeakReference(String systemPrompt, String conversationText) {
+    }
+
+    /** The same posture, checked for a leak of this request's system prompt. */
+    public StreamingPosture withPromptLeakReference(PromptLeakReference reference) {
+        return new StreamingPosture(piiEnabled, piiAction, customPiiPatterns,
+                guardrailEnabled, guardrailAction, guardrailRiskThreshold,
+                groundingEnabled, groundingAction, groundingSources, reference);
     }
 
     /**
