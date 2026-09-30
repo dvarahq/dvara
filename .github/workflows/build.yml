@@ -65,11 +65,32 @@ jobs:
           server-username: MAVEN_USERNAME
           server-password: MAVEN_PASSWORD
 
+      # A release is cut as two commits on main: `Release X`, which carries the released version
+      # and is tagged, then `Open <next>-SNAPSHOT`. scripts/cut-release.sh pushes both at once, so
+      # main's head is normally the snapshot. If a push ever ends at the Release commit, there is
+      # nothing for this job to publish: release.yml publishes that version from its tag, and a
+      # deploy here would upload it by a second route. So the job skips, and the run stays green,
+      # because a release commit on main is correct.
+      - name: The version is a snapshot
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION=$(./mvnw -B -q -DforceStdout help:evaluate -Dexpression=project.version)
+          case "$VERSION" in
+            *-SNAPSHOT)
+              echo "snapshot=true" >> "$GITHUB_OUTPUT"
+              echo "publishing snapshot $VERSION" ;;
+            *)
+              echo "snapshot=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::$VERSION is a release version; release.yml publishes it from its tag, so no snapshot is deployed" ;;
+          esac
+
       # This fails the run rather than skipping it. A publish step that quietly does nothing
       # when a secret is absent is indistinguishable from one nobody is consuming, and the
       # absence is then found by somebody whose build cannot resolve a version this repository
       # claims to publish — months later, and nowhere near the cause.
       - name: The Central credentials are present
+        if: steps.version.outputs.snapshot == 'true'
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
@@ -85,16 +106,12 @@ jobs:
           echo "Central credentials present"
 
       - name: Publish snapshot
+        if: steps.version.outputs.snapshot == 'true'
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
         run: |
           set -euo pipefail
-          VERSION=$(./mvnw -B -q -DforceStdout help:evaluate -Dexpression=project.version)
-          case "$VERSION" in
-            *-SNAPSHOT) ;;
-            *) echo "::error::$VERSION is not a snapshot — this job publishes snapshots only"; exit 1 ;;
-          esac
           # Deliberately not -Prelease. That profile carries central-publishing-maven-plugin with
           # extensions=true, which takes over the deploy phase to build a release bundle for the
           # portal — the wrong mechanism for a snapshot, which is an ordinary Maven deploy.

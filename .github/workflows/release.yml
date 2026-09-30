@@ -47,7 +47,13 @@ jobs:
             *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
           esac
           echo "Releasing $VERSION from tag $GITHUB_REF_NAME"
-          ./mvnw -B -ntp -q versions:set -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+
+      # The version is read from the tagged commit, never set here. What is published must be what
+      # the tag records, so that checking out the tag and building it gives the same artifact. A
+      # tag on a commit whose poms say anything else stops the release before it builds or
+      # publishes anything; scripts/cut-release.sh commits the version and tags that commit.
+      - name: The committed version is the tag's version
+        run: scripts/check-version-matches-tag.sh "${{ steps.version.outputs.version }}"
 
       - name: Build and test
         run: ./mvnw -B -ntp clean install
