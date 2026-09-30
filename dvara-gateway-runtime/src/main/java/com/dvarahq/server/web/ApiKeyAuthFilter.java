@@ -266,6 +266,11 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         chain.doFilter(request, response);
     }
 
+    /**
+     * The key from {@code Authorization: Bearer}, or else from {@code x-api-key}, the header the
+     * Anthropic SDKs and Claude Code send. The same key either way; the header changes nothing about
+     * what it may do.
+     */
     private String extractBearerToken(HttpServletRequest request) {
         String auth = request.getHeader("Authorization");
         if (auth != null && auth.startsWith("Bearer ")) {
@@ -273,6 +278,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             if (!key.isEmpty()) {
                 return key;
             }
+        }
+        String apiKeyHeader = request.getHeader("x-api-key");
+        if (apiKeyHeader != null && !apiKeyHeader.isBlank()) {
+            return apiKeyHeader.trim();
         }
         return null;
     }

@@ -49,6 +49,19 @@ public class MultimodalMessage {
      */
     private String name;
 
+    /**
+     * On a {@code tool}-role result message, true when the tool failed and the output is its error.
+     * Carried to a provider whose wire shape has the flag (Anthropic's {@code is_error}); null when the
+     * caller said nothing.
+     */
+    private Boolean toolError;
+
+    /** A message with no tool error flag. */
+    public MultimodalMessage(String role, List<ContentBlock> content, List<ToolCall> toolCalls,
+                             String toolCallId, String name) {
+        this(role, content, toolCalls, toolCallId, name, null);
+    }
+
     public static MultimodalMessage user(String text) {
         return MultimodalMessage.builder()
                 .role("user")

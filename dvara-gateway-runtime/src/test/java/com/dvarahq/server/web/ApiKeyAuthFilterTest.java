@@ -112,6 +112,36 @@ class ApiKeyAuthFilterTest {
         verify(request).setAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR, "key-1");
     }
 
+    /** The Anthropic SDKs and Claude Code send the key as x-api-key; it is the same key. */
+    @Test
+    void xApiKeyHeader_isAcceptedAsTheKey() throws Exception {
+        var filter = new ApiKeyAuthFilter(repository);
+        when(request.getRequestURI()).thenReturn("/v1/messages");
+        when(request.getHeader("Authorization")).thenReturn(null);
+        when(request.getHeader("x-api-key")).thenReturn(VALID_KEY);
+        when(repository.findByKeyHash(VALID_KEY_HASH)).thenReturn(Optional.of(
+                ApiKey.builder().id("key-1").workspaceId("acme").status(ApiKeyStatus.ACTIVE).build()));
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(chain).doFilter(request, response);
+        verify(request).setAttribute(ApiKeyAuthFilter.WORKSPACE_ID_ATTR, "acme");
+    }
+
+    /** An unknown x-api-key is refused like an unknown bearer key. */
+    @Test
+    void unknownXApiKey_rejects401() throws Exception {
+        var filter = new ApiKeyAuthFilter(repository);
+        when(request.getHeader("Authorization")).thenReturn(null);
+        when(request.getHeader("x-api-key")).thenReturn("unknown-key");
+        when(repository.findByKeyHash(any())).thenReturn(Optional.empty());
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(response).setStatus(401);
+        verify(chain, never()).doFilter(any(), any());
+    }
+
     /**
      * A key that does not resolve is refused. Serving it would be the one credential failure a
      * caller cannot detect: a {@code 200} with no workspace behind it, so every per-workspace

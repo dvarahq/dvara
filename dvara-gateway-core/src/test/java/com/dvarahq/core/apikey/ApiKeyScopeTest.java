@@ -103,4 +103,11 @@ class ApiKeyScopeTest {
         assertThat(ApiKeyScope.forPath("/v1/modelsx")).isEmpty();
         assertThat(ApiKeyScope.forPath("/v1/batchesque")).isEmpty();
     }
+
+    @Test
+    void theAnthropicMessagesDoorway_takesTheCompletionsScope() {
+        assertThat(ApiKeyScope.forPath("/v1/messages")).contains(ApiKeyScope.COMPLETIONS_WRITE);
+        assertThat(ApiKeyScope.permits(java.util.List.of("embeddings:write"), "/v1/messages")).isFalse();
+        assertThat(ApiKeyScope.permits(java.util.List.of("completions:write"), "/v1/messages")).isTrue();
+    }
 }

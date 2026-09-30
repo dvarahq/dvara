@@ -361,6 +361,30 @@ class AnthropicProviderTest {
         server.verify();
     }
 
+    @Test
+    void chat_aFailedToolResult_isSentWithIsError() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(method(HttpMethod.POST))
+              .andExpect(jsonPath("$.messages[1].content[0].type").value("tool_result"))
+              .andExpect(jsonPath("$.messages[1].content[0].is_error").value(true))
+              .andExpect(jsonPath("$.messages[2].content[0].is_error").doesNotExist())
+              .andRespond(withSuccess(anthropicSuccessBody("msg-err", "end_turn", "ok", 5, 1),
+                      MediaType.APPLICATION_JSON));
+
+        MultimodalMessage failed = MultimodalMessage.toolResult("toolu_1", "no such file");
+        failed.setToolError(true);
+        ChatRequest request = ChatRequest.builder()
+                .model("claude-sonnet-4-5")
+                .messages(List.of(
+                        MultimodalMessage.user("Read a.txt and b.txt"),
+                        failed,
+                        MultimodalMessage.toolResult("toolu_2", "hello")))
+                .build();
+
+        provider.chat(request);
+        server.verify();
+    }
+
     // -------------------------------------------------------------------------
     // Multimodal (vision)
     // -------------------------------------------------------------------------

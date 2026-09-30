@@ -211,10 +211,14 @@ public class AnthropicProvider extends AbstractLlmProvider {
      */
     private Map<String, Object> buildAnthropicMessage(MultimodalMessage msg) {
         if ("tool".equals(msg.getRole())) {
-            return Map.of("role", "user", "content", List.of(Map.of(
-                    "type", "tool_result",
-                    "tool_use_id", msg.getToolCallId() == null ? "" : msg.getToolCallId(),
-                    "content", extractText(msg))));
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("type", "tool_result");
+            result.put("tool_use_id", msg.getToolCallId() == null ? "" : msg.getToolCallId());
+            result.put("content", extractText(msg));
+            if (Boolean.TRUE.equals(msg.getToolError())) {
+                result.put("is_error", true);
+            }
+            return Map.of("role", "user", "content", List.of(result));
         }
         if (msg.getToolCalls() != null && !msg.getToolCalls().isEmpty()) {
             List<Object> blocks = new ArrayList<>();
