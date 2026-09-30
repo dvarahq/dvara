@@ -79,4 +79,16 @@ class OllamaPerWorkspaceAutoConfigurationTest {
                         .isInstanceOf(GatewayException.class)
                         .hasMessageContaining("Image URL refused"));
     }
+
+    /** Structured outputs are on by default and an operator on an older Ollama turns them off. */
+    @Test
+    void structuredOutputs_onByDefault_offWithTheSetting() {
+        runner.withPropertyValues("dvara.llm-gateway.providers.ollama.enabled=true")
+                .run(ctx -> assertThat(ctx.getBean(OllamaProvider.class).capabilities().supportsStructuredOutputs())
+                        .isTrue());
+        runner.withPropertyValues("dvara.llm-gateway.providers.ollama.enabled=true",
+                        "dvara.llm-gateway.providers.ollama.structured-outputs=false")
+                .run(ctx -> assertThat(ctx.getBean(OllamaProvider.class).capabilities().supportsStructuredOutputs())
+                        .isFalse());
+    }
 }

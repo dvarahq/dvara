@@ -85,6 +85,14 @@ public class OllamaProvider extends AbstractLlmProvider {
         this.imageFetcher = imageFetcher != null ? imageFetcher : ImageFetcher.DISABLED;
     }
 
+    /** Whether a JSON schema is sent. Ollama follows one from 0.5; an operator on an older one turns this off. */
+    private boolean structuredOutputs = true;
+
+    /** Turns structured outputs ({@code response_format} {@code json_schema}) on or off, and its capability flag with it. */
+    public void setStructuredOutputs(boolean enabled) {
+        this.structuredOutputs = enabled;
+    }
+
     // -------------------------------------------------------------------------
     // Per-workspace endpoints (#30, UC-105 A6/A7)
     // -------------------------------------------------------------------------
@@ -207,19 +215,25 @@ public class OllamaProvider extends AbstractLlmProvider {
     // -------------------------------------------------------------------------
 
     private void rejectUnsupportedResponseFormat(ResponseFormat format) {
-        if (format instanceof ResponseFormat.JsonSchema) {
+        if (format instanceof ResponseFormat.JsonSchema && !structuredOutputs) {
             throw new GatewayException("UNSUPPORTED_RESPONSE_FORMAT",
                     "Ollama provider does not support response_format json_schema. Supported formats: [text, json_object]");
         }
     }
 
     /**
-     * JSON mode as OpenAI's {@code response_format}. Ollama's {@code /v1} endpoint honours that field and
-     * ignores its native top-level {@code format}, so {@code format} would ask for nothing.
+     * JSON mode and a JSON schema as OpenAI's {@code response_format}. Ollama's {@code /v1} endpoint follows
+     * that field and ignores its native top-level {@code format}, so {@code format} would ask for nothing.
      */
     private static void applyResponseFormat(Map<String, Object> body, ResponseFormat format) {
         if (format instanceof ResponseFormat.JsonObject) {
             body.put("response_format", Map.of("type", "json_object"));
+        } else if (format instanceof ResponseFormat.JsonSchema js) {
+            Map<String, Object> jsonSchema = new LinkedHashMap<>();
+            jsonSchema.put("name", js.name());
+            jsonSchema.put("schema", js.schema());
+            jsonSchema.put("strict", js.strict());
+            body.put("response_format", Map.of("type", "json_schema", "json_schema", jsonSchema));
         }
     }
 
@@ -389,7 +403,7 @@ public class OllamaProvider extends AbstractLlmProvider {
     @Override
     public ProviderCapabilities capabilities() {
         // streaming, vision, toolCalls, structuredOutputs, jsonMode, maxContextTokens
-        return new ProviderCapabilities(true, true, true, false, true, 32_000);
+        return new ProviderCapabilities(true, true, true, structuredOutputs, true, 32_000);
     }
 
     @Override

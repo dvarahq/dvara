@@ -105,6 +105,7 @@ dvara:
       ollama:
         enabled: ${OLLAMA_ENABLED:false}
         base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+        structured-outputs: ${OLLAMA_STRUCTURED_OUTPUTS:true}
       bedrock:
         enabled: ${BEDROCK_ENABLED:false}
         access-key: ${AWS_ACCESS_KEY_ID:}

@@ -464,7 +464,7 @@ class OllamaProviderTest {
         assertThat(caps.supportsVision()).isTrue();
         assertThat(caps.supportsToolCalls()).isTrue();
         assertThat(caps.supportsStreamingToolCalls()).isFalse();
-        assertThat(caps.supportsStructuredOutputs()).isFalse();
+        assertThat(caps.supportsStructuredOutputs()).isTrue();
         assertThat(caps.supportsJsonMode()).isTrue();
         assertThat(caps.maxContextTokens()).isEqualTo(32_000);
     }
@@ -529,16 +529,65 @@ class OllamaProviderTest {
         server.verify();
     }
 
-    /** A JSON schema is not declared here, so it is still refused before any call. */
-    @Test
-    void chat_jsonSchemaFormat_isStillRefused() {
-        ChatRequest request = ChatRequest.builder()
-                .model("ollama/llama3.2")
-                .messages(List.of(MultimodalMessage.user("Return JSON")))
-                .responseFormat(new ResponseFormat.JsonSchema("p", Map.of("type", "object"), false))
+    private static ChatRequest schemaRequest(boolean strict) {
+        return ChatRequest.builder()
+                .model("ollama/qwen3:4b-instruct")
+                .messages(List.of(MultimodalMessage.user("Largest city in France, as JSON")))
+                .responseFormat(new ResponseFormat.JsonSchema("city", Map.of(
+                        "type", "object",
+                        "properties", Map.of("city", Map.of("type", "string"), "pop", Map.of("type", "integer")),
+                        "required", List.of("city", "pop")), strict))
                 .build();
+    }
 
-        assertThatThrownBy(() -> provider.chat(request))
+    /**
+     * A JSON schema travels as OpenAI's response_format. Ollama's /v1 endpoint follows it there and ignores
+     * a top-level "format" schema, so "format" would constrain nothing.
+     */
+    @Test
+    void chat_jsonSchemaFormat_travelsAsResponseFormat() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.type").value("json_schema"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.name").value("city"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.schema.type").value("object"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.schema.required[1]").value("pop"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.strict").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.format").doesNotExist())
+              .andRespond(withSuccess(ollamaSuccessBody("o-s", "qwen3:4b-instruct", "{\\\"city\\\":\\\"Paris\\\",\\\"pop\\\":2161000}", 20, 9), MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(schemaRequest(true));
+
+        server.verify();
+        assertThat(response.getChoices().get(0).getMessage().getContent().get(0))
+                .isEqualTo(new com.dvarahq.core.model.ContentBlock.TextBlock("{\"city\":\"Paris\",\"pop\":2161000}"));
+    }
+
+    /** A streamed call carries the schema the same way. */
+    @Test
+    void streamChat_jsonSchemaFormat_travelsAsResponseFormat() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.stream").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.json_schema.name").value("city"))
+              .andRespond(withSuccess("""
+                      data: {"id":"s","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{"content":"{}"},"finish_reason":null}]}
+
+                      data: {"id":"s","model":"qwen3:4b-instruct","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+                      data: [DONE]
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        provider.streamChat(schemaRequest(false)).forEachRemaining(c -> { });
+        server.verify();
+    }
+
+    /** Off (an Ollama older than 0.5): not declared, and a schema that still reaches the provider is refused. */
+    @Test
+    void structuredOutputsOff_isNotDeclared_andASchemaIsRefused() {
+        provider.setStructuredOutputs(false);
+
+        assertThat(provider.capabilities().supportsStructuredOutputs()).isFalse();
+        assertThatThrownBy(() -> provider.chat(schemaRequest(false)))
                 .isInstanceOf(GatewayException.class)
                 .satisfies(ex -> assertThat(((GatewayException) ex).getCode()).isEqualTo("UNSUPPORTED_RESPONSE_FORMAT"));
         server.verify();
