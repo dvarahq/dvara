@@ -465,7 +465,7 @@ class OllamaProviderTest {
         assertThat(caps.supportsToolCalls()).isTrue();
         assertThat(caps.supportsStreamingToolCalls()).isFalse();
         assertThat(caps.supportsStructuredOutputs()).isFalse();
-        assertThat(caps.supportsJsonMode()).isFalse();
+        assertThat(caps.supportsJsonMode()).isTrue();
         assertThat(caps.maxContextTokens()).isEqualTo(32_000);
     }
 
@@ -473,17 +473,75 @@ class OllamaProviderTest {
     // response_format
     // -------------------------------------------------------------------------
 
+    /**
+     * JSON mode travels as OpenAI's response_format. Ollama's /v1 endpoint honours that field and ignores
+     * its native top-level "format", so "format" would ask for nothing.
+     */
     @Test
-    void chat_jsonObjectFormat_throwsUnsupportedResponseFormat() {
-        ChatRequest request = ChatRequest.builder()
+    void chat_jsonObjectFormat_travelsAsResponseFormat() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.type").value("json_object"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.format").doesNotExist())
+              .andRespond(withSuccess(ollamaSuccessBody("o-j", "llama3.2", "{\\\"ok\\\":true}", 5, 3), MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(ChatRequest.builder()
                 .model("ollama/llama3.2")
                 .messages(List.of(MultimodalMessage.user("Return JSON")))
                 .responseFormat(new ResponseFormat.JsonObject())
+                .build());
+
+        server.verify();
+        assertThat(response.getChoices().get(0).getMessage().getContent().get(0))
+                .isEqualTo(new com.dvarahq.core.model.ContentBlock.TextBlock("{\"ok\":true}"));
+    }
+
+    /** A streamed call asks for JSON the same way. */
+    @Test
+    void streamChat_jsonObjectFormat_travelsAsResponseFormat() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.stream").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format.type").value("json_object"))
+              .andRespond(withSuccess("""
+                      data: {"id":"s","model":"llama3.2","choices":[{"index":0,"delta":{"content":"{}"},"finish_reason":null}]}
+
+                      data: {"id":"s","model":"llama3.2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+                      data: [DONE]
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        var it = provider.streamChat(ChatRequest.builder()
+                .model("ollama/llama3.2")
+                .messages(List.of(MultimodalMessage.user("Return JSON")))
+                .responseFormat(new ResponseFormat.JsonObject())
+                .build());
+        it.forEachRemaining(c -> { });
+        server.verify();
+    }
+
+    /** No response_format, or text, sends none. */
+    @Test
+    void chat_noResponseFormat_sendsNone() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.response_format").doesNotExist())
+              .andRespond(withSuccess(ollamaSuccessBody("o-n", "llama3.2", "hi", 1, 1), MediaType.APPLICATION_JSON));
+        provider.chat(chatRequest("ollama/llama3.2", "Hi"));
+        server.verify();
+    }
+
+    /** A JSON schema is not declared here, so it is still refused before any call. */
+    @Test
+    void chat_jsonSchemaFormat_isStillRefused() {
+        ChatRequest request = ChatRequest.builder()
+                .model("ollama/llama3.2")
+                .messages(List.of(MultimodalMessage.user("Return JSON")))
+                .responseFormat(new ResponseFormat.JsonSchema("p", Map.of("type", "object"), false))
                 .build();
 
         assertThatThrownBy(() -> provider.chat(request))
                 .isInstanceOf(GatewayException.class)
                 .satisfies(ex -> assertThat(((GatewayException) ex).getCode()).isEqualTo("UNSUPPORTED_RESPONSE_FORMAT"));
+        server.verify();
     }
 
     @Test

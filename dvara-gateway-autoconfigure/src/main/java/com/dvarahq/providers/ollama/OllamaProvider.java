@@ -207,9 +207,19 @@ public class OllamaProvider extends AbstractLlmProvider {
     // -------------------------------------------------------------------------
 
     private void rejectUnsupportedResponseFormat(ResponseFormat format) {
-        if (format != null && !(format instanceof ResponseFormat.Text)) {
+        if (format instanceof ResponseFormat.JsonSchema) {
             throw new GatewayException("UNSUPPORTED_RESPONSE_FORMAT",
-                    "Ollama provider does not support response_format. Supported formats: [text]");
+                    "Ollama provider does not support response_format json_schema. Supported formats: [text, json_object]");
+        }
+    }
+
+    /**
+     * JSON mode as OpenAI's {@code response_format}. Ollama's {@code /v1} endpoint honours that field and
+     * ignores its native top-level {@code format}, so {@code format} would ask for nothing.
+     */
+    private static void applyResponseFormat(Map<String, Object> body, ResponseFormat format) {
+        if (format instanceof ResponseFormat.JsonObject) {
+            body.put("response_format", Map.of("type", "json_object"));
         }
     }
 
@@ -226,6 +236,7 @@ public class OllamaProvider extends AbstractLlmProvider {
         if (request.getTopP()        != null) body.put("top_p",       request.getTopP());
         if (request.getStop() != null) body.put("stop", request.getStop());
         if (request.getSeed() != null) body.put("seed", request.getSeed());
+        applyResponseFormat(body, request.getResponseFormat());
         applyTools(body, request);
         return body;
     }
@@ -378,7 +389,7 @@ public class OllamaProvider extends AbstractLlmProvider {
     @Override
     public ProviderCapabilities capabilities() {
         // streaming, vision, toolCalls, structuredOutputs, jsonMode, maxContextTokens
-        return new ProviderCapabilities(true, true, true, false, false, 32_000);
+        return new ProviderCapabilities(true, true, true, false, true, 32_000);
     }
 
     @Override
