@@ -15,6 +15,7 @@
  */
 package com.dvarahq.policy.guardrail;
 
+import com.dvarahq.core.guardrail.ImageTokens;
 import com.dvarahq.core.guardrail.TokenEstimation;
 import com.dvarahq.core.guardrail.TokenEstimator;
 import com.dvarahq.core.model.ChatRequest;
@@ -57,10 +58,12 @@ public class TiktokenEstimator implements TokenEstimator {
      * every turn, and the context-window governor reads this number, so counting text blocks alone
      * would under-count precisely the requests most likely to overflow a window.
      *
-     * <p>Images are deliberately not counted. A provider does not tokenize image bytes; it prices
-     * them by tile count from the decoded dimensions, so running BPE over a base64 payload would
-     * give a large number with no relationship to the real cost, and a flat per-image figure would
-     * have no basis either. Counting nothing under-states a vision request by the image's share.</p>
+     * <p>An image is counted by its provider's published formula, from the size in its header (see
+     * {@link ImageTokens}), never by running BPE over its base64 payload: a provider does not
+     * tokenize the bytes, so that would give a large number with no relationship to the cost.</p>
+     *
+     * <p>The switch over the content block kinds has no default on purpose. A new kind of block is a
+     * compile error here, rather than a part of the request that silently counts as nothing.</p>
      */
     @Override
     public int estimateTokens(ChatRequest request) {
@@ -74,10 +77,11 @@ public class TiktokenEstimator implements TokenEstimator {
             total += 4;
             if (message.getContent() != null) {
                 for (var block : message.getContent()) {
-                    if (block instanceof ContentBlock.TextBlock textBlock) {
-                        total += encoding.countTokens(textBlock.text());
-                    }
-                    // ImageBlock: see the note above.
+                    total += switch (block) {
+                        case ContentBlock.TextBlock text -> countTokens(encoding, text.text());
+                        case ContentBlock.ImageBlock image -> ImageTokens.estimate(image, request.getModel());
+                        case null -> 0;
+                    };
                 }
             }
             // A tool call the model made is replayed to the provider on the next turn, name and

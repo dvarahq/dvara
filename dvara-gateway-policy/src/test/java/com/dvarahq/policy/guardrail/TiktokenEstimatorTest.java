@@ -164,15 +164,62 @@ class TiktokenEstimatorTest {
 
     @Test
     void anImageIsNotCountedAsItsBase64Length() {
-        // A provider prices an image by tile count, not by tokenizing its bytes, so BPE over the
-        // payload would be a large number unrelated to the real cost. Named, not papered over.
-        String base64 = "A".repeat(4000);
-        int withImage = estimator.estimateTokens(withMessages(List.of(
-                MultimodalMessage.builder().role("user")
-                        .content(List.of(new ContentBlock.TextBlock("what is this?"),
-                                new ContentBlock.ImageBlock("image/png", base64)))
-                        .build())));
+        // A provider prices an image by its size, not by tokenizing its bytes, so BPE over the
+        // payload would be a large number unrelated to the real cost. Unreadable data counts as the
+        // stated worst case whatever its length.
+        int shortPayload = estimator.estimateTokens(withMessages(List.of(imageMessage(
+                new ContentBlock.ImageBlock("image/png", "A".repeat(4000))))));
+        int longPayload = estimator.estimateTokens(withMessages(List.of(imageMessage(
+                new ContentBlock.ImageBlock("image/png", "A".repeat(40_000))))));
 
-        assertThat(withImage).isLessThan(100);
+        assertThat(longPayload).isEqualTo(shortPayload);
+    }
+
+    @Test
+    void anImageOnlyRequestEstimatesNonZero() {
+        int empty = estimator.estimateTokens(withMessages(List.of(imageMessage())));
+        int withImage = estimator.estimateTokens(withMessages(List.of(imageMessage(
+                new ContentBlock.ImageBlock("image/png", png(512, 512))))));
+
+        assertThat(withImage - empty).isPositive();
+    }
+
+    @Test
+    void anOpenAiImageCostsItsTiles() {
+        // 512x512 at high detail is one tile: 85 + 170. At low detail every image is 85.
+        int empty = estimator.estimateTokens(withMessages(List.of(imageMessage())));
+        int high = estimator.estimateTokens(withMessages(List.of(imageMessage(
+                new ContentBlock.ImageBlock("image/png", png(512, 512), "high")))));
+        int low = estimator.estimateTokens(withMessages(List.of(imageMessage(
+                new ContentBlock.ImageBlock("image/png", png(512, 512), "low")))));
+
+        assertThat(high - empty).isEqualTo(255);
+        assertThat(low - empty).isEqualTo(85);
+    }
+
+    @Test
+    void aClaudeImageCostsItsPixelsOver750() {
+        ChatRequest empty = ChatRequest.builder().model("claude-sonnet-4-5")
+                .messages(List.of(imageMessage())).build();
+        ChatRequest withImage = ChatRequest.builder().model("claude-sonnet-4-5")
+                .messages(List.of(imageMessage(new ContentBlock.ImageBlock("image/png", png(300, 250)))))
+                .build();
+
+        assertThat(estimator.estimateTokens(withImage) - estimator.estimateTokens(empty)).isEqualTo(100);
+    }
+
+    private static MultimodalMessage imageMessage(ContentBlock... blocks) {
+        return MultimodalMessage.builder().role("user").content(List.of(blocks)).build();
+    }
+
+    private static String png(int width, int height) {
+        try {
+            var image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB);
+            var out = new java.io.ByteArrayOutputStream();
+            javax.imageio.ImageIO.write(image, "png", out);
+            return java.util.Base64.getEncoder().encodeToString(out.toByteArray());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 }
