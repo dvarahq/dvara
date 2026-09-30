@@ -1757,4 +1757,57 @@ class ChatCompletionControllerTest {
 
         assertThat(body).doesNotContain("\"usage\"");
     }
+
+    @Test
+    void cachedAndReasoningTokens_areReturnedAsOpenAiDetails() throws Exception {
+        ChatResponse resp = chatResponse("chatcmpl-abc", "o3", "Paris");
+        resp.setUsage(ChatResponse.Usage.builder().promptTokens(1200).completionTokens(500).totalTokens(1700)
+                .cachedInputTokens(1024).cacheWriteTokens(100).reasoningTokens(448).build());
+        when(dispatcher.chat(any())).thenReturn(resp);
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\": \"o3\", \"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.usage.prompt_tokens").value(1200))
+                .andExpect(jsonPath("$.usage.total_tokens").value(1700))
+                .andExpect(jsonPath("$.usage.prompt_tokens_details.cached_tokens").value(1024))
+                .andExpect(jsonPath("$.usage.prompt_tokens_details.cache_write_tokens").value(100))
+                .andExpect(jsonPath("$.usage.completion_tokens_details.reasoning_tokens").value(448));
+    }
+
+    @Test
+    void noBreakdown_sendsNoDetailsObjects() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("chatcmpl-abc", "gpt-4o", "Paris"));
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\": \"gpt-4o\", \"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.usage.prompt_tokens_details").doesNotExist())
+                .andExpect(jsonPath("$.usage.completion_tokens_details").doesNotExist());
+    }
+
+    @Test
+    void streaming_includeUsage_carriesCachedAndReasoningTokens() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c").model("o3").delta("Hi").done(false).build(),
+                SseChunk.builder().id("c").model("o3").finishReason("stop").done(true)
+                        .usage(ChatResponse.Usage.builder().promptTokens(1200).completionTokens(500).totalTokens(1700)
+                                .cachedInputTokens(1024).reasoningTokens(448).build())
+                        .build()).iterator());
+        MvcResult mvcResult = mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model": "o3", "stream": true, "stream_options": {"include_usage": true},
+                                 "messages": [{"role": "user", "content": "Hi"}]}
+                                """))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        String body = mockMvc.perform(asyncDispatch(mvcResult)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("\"prompt_tokens_details\":{\"cached_tokens\":1024}")
+                .contains("\"completion_tokens_details\":{\"reasoning_tokens\":448}");
+    }
 }

@@ -64,4 +64,23 @@ public class TokenUsageRecord {
      */
     private String cacheStatus;
     private Instant timestamp;
+
+    /**
+     * The part of {@code inputTokens} read from the provider's prompt cache. Like the other two
+     * breakdown counts it is part of a total, never added to one; zero when the upstream reported
+     * none or the row is an estimate.
+     */
+    private int cachedInputTokens;
+    /** The part of {@code inputTokens} written to the provider's prompt cache. */
+    private int cacheWriteTokens;
+    /** The part of {@code outputTokens} the model spent reasoning. */
+    private int reasoningTokens;
+
+    /** A row with no cache or reasoning breakdown. */
+    public TokenUsageRecord(String id, String workspaceId, String apiKey, String model, String provider,
+                            int inputTokens, int outputTokens, int totalTokens, boolean estimated,
+                            String credentialFingerprint, String cacheStatus, Instant timestamp) {
+        this(id, workspaceId, apiKey, model, provider, inputTokens, outputTokens, totalTokens, estimated,
+                credentialFingerprint, cacheStatus, timestamp, 0, 0, 0);
+    }
 }

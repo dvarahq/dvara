@@ -535,12 +535,7 @@ public class ResponsesController {
         ResponseResult.OutputItem item = ResponseResult.OutputItem.builder()
                 .type("message").id("msg_" + shortId()).status("completed").role("assistant")
                 .content(List.of(part)).build();
-        ResponseResult.Usage usage = resp.getUsage() == null ? null
-                : ResponseResult.Usage.builder()
-                        .inputTokens(resp.getUsage().getPromptTokens())
-                        .outputTokens(resp.getUsage().getCompletionTokens())
-                        .totalTokens(resp.getUsage().getTotalTokens())
-                        .build();
+        ResponseResult.Usage usage = ResponseResult.Usage.from(resp.getUsage());
         return ResponseResult.builder()
                 .id("resp_" + shortId())
                 .object("response")

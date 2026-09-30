@@ -50,10 +50,16 @@ public class ChatCompletionResponse {
         private String finishReason;
     }
 
+    /**
+     * OpenAI's usage block. The details objects appear only when the upstream reported a cached,
+     * cache-write or reasoning count, so a response without them is byte-for-byte what it was. Each
+     * detail is a part of the count it sits under, as in OpenAI's own responses.
+     */
     @Data
     @Builder
     @NoArgsConstructor
     @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Usage {
         @JsonProperty("prompt_tokens")
         private int promptTokens;
@@ -61,5 +67,54 @@ public class ChatCompletionResponse {
         private int completionTokens;
         @JsonProperty("total_tokens")
         private int totalTokens;
+        @JsonProperty("prompt_tokens_details")
+        private PromptTokensDetails promptTokensDetails;
+        @JsonProperty("completion_tokens_details")
+        private CompletionTokensDetails completionTokensDetails;
+
+        /** The external block for an internal one; null for null. */
+        public static Usage from(com.dvarahq.core.model.ChatResponse.Usage u) {
+            if (u == null) {
+                return null;
+            }
+            return Usage.builder()
+                    .promptTokens(u.getPromptTokens())
+                    .completionTokens(u.getCompletionTokens())
+                    .totalTokens(u.getTotalTokens())
+                    .promptTokensDetails(u.getCachedInputTokens() > 0 || u.getCacheWriteTokens() > 0
+                            ? new PromptTokensDetails(positive(u.getCachedInputTokens()), positive(u.getCacheWriteTokens()))
+                            : null)
+                    .completionTokensDetails(u.getReasoningTokens() > 0
+                            ? new CompletionTokensDetails(u.getReasoningTokens()) : null)
+                    .build();
+        }
+
+        private static Integer positive(int n) {
+            return n > 0 ? n : null;
+        }
+    }
+
+    /**
+     * {@code cached_tokens} is OpenAI's name. {@code cache_write_tokens} has no OpenAI equivalent:
+     * it is what Anthropic and Bedrock report as written to their prompt cache.
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class PromptTokensDetails {
+        @JsonProperty("cached_tokens")
+        private Integer cachedTokens;
+        @JsonProperty("cache_write_tokens")
+        private Integer cacheWriteTokens;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class CompletionTokensDetails {
+        @JsonProperty("reasoning_tokens")
+        private Integer reasoningTokens;
     }
 }

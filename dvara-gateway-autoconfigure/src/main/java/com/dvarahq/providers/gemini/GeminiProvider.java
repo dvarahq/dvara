@@ -334,16 +334,7 @@ public class GeminiProvider extends AbstractLlmProvider {
 
         // Null unless the response carried usageMetadata: a zeroed block would claim the call
         // consumed nothing.
-        ChatResponse.Usage usage = null;
-        if (resp.getUsageMetadata() != null) {
-            int prompt = resp.getUsageMetadata().getPromptTokenCount();
-            int completion = resp.getUsageMetadata().getCandidatesTokenCount();
-            usage = ChatResponse.Usage.builder()
-                    .promptTokens(prompt)
-                    .completionTokens(completion)
-                    .totalTokens(prompt + completion)
-                    .build();
-        }
+        ChatResponse.Usage usage = resp.getUsageMetadata() == null ? null : resp.getUsageMetadata().toUsage();
 
         return ChatResponse.builder()
                 .id("gemini-" + Instant.now().toEpochMilli())
@@ -519,6 +510,8 @@ public class GeminiProvider extends AbstractLlmProvider {
                             .delta(text == null ? null : text.toString())
                             .toolCalls(calls)
                             .finishReason(finishReason)
+                            // Every chunk carries the running usage; the last one's is the call's.
+                            .usage(isDone && chunk.getUsageMetadata() != null ? chunk.getUsageMetadata().toUsage() : null)
                             .done(isDone)
                             .build();
                 }
@@ -589,6 +582,24 @@ public class GeminiProvider extends AbstractLlmProvider {
             @JsonProperty("promptTokenCount")      private int promptTokenCount;
             @JsonProperty("candidatesTokenCount")   private int candidatesTokenCount;
             @JsonProperty("totalTokenCount")        private int totalTokenCount;
+            @JsonProperty("cachedContentTokenCount") private int cachedContentTokenCount;
+            @JsonProperty("thoughtsTokenCount")     private int thoughtsTokenCount;
+
+            /**
+             * {@code promptTokenCount} already includes the cached content. Thinking tokens are
+             * billed as output but are not in {@code candidatesTokenCount}, so the output count
+             * adds them and reports them as reasoning.
+             */
+            ChatResponse.Usage toUsage() {
+                int completion = candidatesTokenCount + thoughtsTokenCount;
+                return ChatResponse.Usage.builder()
+                        .promptTokens(promptTokenCount)
+                        .completionTokens(completion)
+                        .totalTokens(promptTokenCount + completion)
+                        .cachedInputTokens(cachedContentTokenCount)
+                        .reasoningTokens(thoughtsTokenCount)
+                        .build();
+            }
         }
     }
 

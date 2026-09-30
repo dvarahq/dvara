@@ -420,12 +420,16 @@ public class ChatExecutionService {
         int outputTokens = estimated
                 ? tokenEstimator.estimateTokens(outputText) : reportedUsage.getCompletionTokens();
         int totalTokens = estimated ? inputTokens + outputTokens : reportedUsage.getTotalTokens();
+        // An estimate has no breakdown; a reported block keeps the one the upstream sent.
         ChatResponse syntheticResponse = ChatResponse.builder()
                 .model(streamRequest.getModel())
                 .usage(ChatResponse.Usage.builder()
                         .promptTokens(inputTokens)
                         .completionTokens(outputTokens)
                         .totalTokens(totalTokens)
+                        .cachedInputTokens(estimated ? 0 : reportedUsage.getCachedInputTokens())
+                        .cacheWriteTokens(estimated ? 0 : reportedUsage.getCacheWriteTokens())
+                        .reasoningTokens(estimated ? 0 : reportedUsage.getReasoningTokens())
                         .build())
                 .build();
         // Settle the caller's token window against the reservation made at admission, as the sync
@@ -493,6 +497,9 @@ public class ChatExecutionService {
                 .inputTokens(inputTokens)
                 .outputTokens(outputTokens)
                 .totalTokens(totalTokens)
+                .cachedInputTokens(usage != null ? usage.getCachedInputTokens() : 0)
+                .cacheWriteTokens(usage != null ? usage.getCacheWriteTokens() : 0)
+                .reasoningTokens(usage != null ? usage.getReasoningTokens() : 0)
                 .estimated(estimated)
                 .cacheStatus(cacheStatus)
                 .credentialFingerprint(credentialFingerprint)
