@@ -143,6 +143,7 @@ public class ProviderDispatcher {
         Selection selection = selectChat(request, routingCtx);
         LlmProvider primary = selection.provider();
         final ChatRequest req = applyResolvedModel(request, routingCtx);
+        checkAnthropicOnly(req, selection);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
         setServedModelAttribute(req.getModel());
@@ -211,6 +212,7 @@ public class ProviderDispatcher {
         Selection selection = selectChat(request, routingCtx);
         LlmProvider primary = selection.provider();
         final ChatRequest req = applyResolvedModel(request, routingCtx);
+        checkAnthropicOnly(req, selection);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
         setServedModelAttribute(req.getModel());
@@ -237,6 +239,47 @@ public class ProviderDispatcher {
                 throw e;
             }
         });
+    }
+
+    /**
+     * The request's input tokens as the provider routing picks would count them, with no model called:
+     * empty when that provider cannot count, or is paused, and the caller estimates instead. Routed exactly
+     * as a call would be, so the count is the one the call would be charged.
+     */
+    public java.util.OptionalInt countInputTokens(ChatRequest request) {
+        RequestContext routingCtx = RequestContext.builder().build();
+        Selection selection = selectChat(request, routingCtx);
+        ChatRequest req = applyResolvedModel(request, routingCtx);
+        checkAnthropicOnly(req, selection);
+        setProviderAttribute(selection.provider().name());
+        setServedModelAttribute(req.getModel());
+        if (selection.unavailable() != null) {
+            return java.util.OptionalInt.empty();
+        }
+        return selection.provider().countInputTokens(req);
+    }
+
+    /**
+     * A request only an Anthropic provider can serve is refused on any other, naming the provider: extended
+     * thinking changes the answer, so serving it without would serve a different request. What else a Messages
+     * API caller sent (fields the gateway does not model, the beta header) only tunes how Anthropic serves the
+     * call, so another provider leaves it out. A paused primary is left to its route's chain, which skips a
+     * provider that cannot take the request.
+     */
+    private void checkAnthropicOnly(ChatRequest request, Selection selection) {
+        if (selection.unavailable() != null || selection.provider().speaksAnthropicMessages()) {
+            return;
+        }
+        if (request.needsAnthropic()) {
+            throw new GatewayException("UNSUPPORTED_CAPABILITY", "Extended thinking is served only by an"
+                    + " Anthropic provider, and this request routes to provider " + selection.provider().name()
+                    + ". Route the model to Anthropic, or send the request without thinking.");
+        }
+        if (request.getAnthropic() != null && !request.getAnthropic().carriesNothing() && log.isDebugEnabled()) {
+            log.debug("Provider [{}] does not speak the Anthropic Messages API; left out for it: fields {}, beta {}",
+                    selection.provider().name(), request.getAnthropic().fields().keySet(),
+                    request.getAnthropic().beta());
+        }
     }
 
     /**
@@ -498,7 +541,8 @@ public class ProviderDispatcher {
                 continue;
             }
             if (capabilityFilter(List.of(provider), mapped).isEmpty()
-                    || (carriesImage(mapped) && !provider.capabilities().supportsVision())) {
+                    || (carriesImage(mapped) && !provider.capabilities().supportsVision())
+                    || (mapped.needsAnthropic() && !provider.speaksAnthropicMessages())) {
                 capabilityMismatch = true;
                 log.info("Route [{}]: fallback {} cannot take what the request needs; skipped",
                         route.getId(), target.describe());
@@ -563,6 +607,9 @@ public class ProviderDispatcher {
 
         // Apply capability filtering to fallback candidates
         List<LlmProvider> capableFallbacks = capabilityFilter(fallbacks, request);
+        if (request.needsAnthropic()) {
+            capableFallbacks = capableFallbacks.stream().filter(LlmProvider::speaksAnthropicMessages).toList();
+        }
 
         if (capableFallbacks.isEmpty() && !fallbacks.isEmpty() && hasResponseFormatRequirement(request)) {
             // Fallbacks exist but none support the required capability

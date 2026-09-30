@@ -82,6 +82,9 @@ public class WorkspaceStatusFilter implements ChatFilter {
 
     @Override public int order() { return FilterOrder.WORKSPACE_STATUS_ENFORCEMENT; }
 
+    /** A suspended workspace sends nothing to a provider, a count included. */
+    @Override public boolean appliesToTokenCount() { return true; }
+
     @Override
     public ChatRequest preDispatch(ChatRequest request, FilterContext ctx) {
         var workspaceId = ctx.getWorkspaceId();

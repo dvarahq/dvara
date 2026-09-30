@@ -88,15 +88,15 @@ class YamlProviderTypeTest {
         assertThat(registered).hasSize(15);
     }
 
-    /** Three providers have a fixed endpoint; the table must say so, or a file base_url maps into nothing. */
+    /** Two providers have a fixed endpoint; the table must say so, or a file base_url maps into nothing. */
     @Test
     void readsBaseUrl_matchesWhatEachBeanMethodPasses() throws java.io.IOException {
         Map<String, Boolean> fromSource = beanMethodsReadingBaseUrl();
         Map<String, Boolean> table = new TreeMap<>();
         for (YamlProviderType t : YamlProviderType.values()) table.put(t.type(), t.readsBaseUrl());
         assertThat(table).isEqualTo(fromSource);
-        assertThat(fromSource).containsEntry("anthropic", false).containsEntry("bedrock", false).containsEntry("mock", false);
-        assertThat(fromSource.values().stream().filter(b -> !b).count()).isEqualTo(3);
+        assertThat(fromSource).containsEntry("anthropic", true).containsEntry("bedrock", false).containsEntry("mock", false);
+        assertThat(fromSource.values().stream().filter(b -> !b).count()).isEqualTo(2);
     }
 
     /** Azure's condition needs base-url as well as the key; the table says so, and only for Azure. */
@@ -118,15 +118,22 @@ class YamlProviderTypeTest {
     /** The file is judged only on what it alone can decide: a base_url a fixed-endpoint provider would never read. */
     @Test
     void aBaseUrlOnAFixedEndpointProvider_isAProblem_andAzureWithoutOneIsNot() {
+        GatewayYamlConfig.ProviderEntry bedrock = new GatewayYamlConfig.ProviderEntry();
+        bedrock.setType("bedrock");
+        bedrock.setBaseUrl("https://proxy.example");
+        assertThat(YamlProviderType.BEDROCK.problems(bedrock))
+                .containsExactly("base_url: not read by bedrock, whose endpoint is fixed");
+        Map<String, Object> props = new HashMap<>();
+        YamlProviderType.BEDROCK.mapTo(bedrock, props);
+        assertThat(props).containsOnlyKeys("dvara.llm-gateway.providers.bedrock.enabled");
         GatewayYamlConfig.ProviderEntry anthropic = new GatewayYamlConfig.ProviderEntry();
         anthropic.setType("anthropic");
         anthropic.setApiKey("k");
         anthropic.setBaseUrl("https://proxy.example");
-        assertThat(YamlProviderType.ANTHROPIC.problems(anthropic))
-                .containsExactly("base_url: not read by anthropic, whose endpoint is fixed");
-        Map<String, Object> props = new HashMap<>();
-        YamlProviderType.ANTHROPIC.mapTo(anthropic, props);
-        assertThat(props).containsOnlyKeys("dvara.llm-gateway.providers.anthropic.api-key");
+        assertThat(YamlProviderType.ANTHROPIC.problems(anthropic)).as("Anthropic's endpoint can be set").isEmpty();
+        Map<String, Object> anthropicProps = new HashMap<>();
+        YamlProviderType.ANTHROPIC.mapTo(anthropic, anthropicProps);
+        assertThat(anthropicProps).containsEntry("dvara.llm-gateway.providers.anthropic.base-url", "https://proxy.example");
         GatewayYamlConfig.ProviderEntry azure = new GatewayYamlConfig.ProviderEntry();
         azure.setType("azure-openai");
         azure.setApiKey("k");

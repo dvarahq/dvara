@@ -49,6 +49,22 @@ public class RequestPipeline {
     }
 
     /**
+     * The pre-dispatch filters that apply when a request's tokens are only counted
+     * ({@link ChatFilter#appliesToTokenCount()}), in order.
+     *
+     * @return the final (possibly modified) request
+     */
+    public ChatRequest preDispatchTokenCount(ChatRequest request, FilterContext ctx) {
+        ChatRequest current = request;
+        for (ChatFilter filter : filters) {
+            if (filter.appliesToTokenCount()) {
+                current = filter.preDispatch(current, ctx);
+            }
+        }
+        return current;
+    }
+
+    /**
      * Execute all post-dispatch filters in reverse order.
      *
      * @return the final (possibly modified) response

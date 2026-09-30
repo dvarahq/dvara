@@ -89,6 +89,10 @@ public class AuditResponseFilter extends OncePerRequestFilter {
             putIfPresent(payload, "policy_decision", request.getAttribute("policy.decision"));
             putIfPresent(payload, "policy_id", request.getAttribute("policy.policyId"));
             putIfPresent(payload, "policy_rule_id", request.getAttribute("policy.ruleId"));
+            // Which Anthropic beta features the caller asked for: they change what the provider does.
+            if (ErrorEnvelope.anthropic(request.getRequestURI())) {
+                putIfPresent(payload, "anthropic_beta", request.getHeader("anthropic-beta"));
+            }
 
             String workspaceId = (String) request.getAttribute("workspaceId");
 

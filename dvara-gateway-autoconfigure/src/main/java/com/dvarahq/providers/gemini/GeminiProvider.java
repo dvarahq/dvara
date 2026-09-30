@@ -277,6 +277,10 @@ public class GeminiProvider extends AbstractLlmProvider {
                             "inlineData", Map.of(
                                     "mimeType", ib.mediaType(),
                                     "data", ib.data()));
+                    // Only an Anthropic provider takes thinking; the dispatcher never sends it here.
+                    case ContentBlock.ThinkingBlock _, ContentBlock.RedactedThinkingBlock _ ->
+                            throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                                    "Gemini cannot take extended thinking; only an Anthropic provider can.");
                     // No default: the switch is exhaustive over ContentBlock's permitted kinds, so a
                     // new kind is a compile error here rather than a block silently relayed as text.
                 });

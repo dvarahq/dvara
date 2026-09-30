@@ -339,6 +339,10 @@ public class BedrockProvider extends AbstractLlmProvider {
                             "image", Map.of(
                                     "format", stripImageMimePrefix(ib.mediaType()),
                                     "source", Map.of("bytes", ib.data())));
+                    // Only an Anthropic provider takes thinking; the dispatcher never sends it here.
+                    case ContentBlock.ThinkingBlock _, ContentBlock.RedactedThinkingBlock _ ->
+                            throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                                    "Bedrock cannot take extended thinking; only an Anthropic provider can.");
                     // No default: the switch is exhaustive over ContentBlock's permitted kinds, so a
                     // new kind is a compile error here rather than a block silently relayed as text.
                 });

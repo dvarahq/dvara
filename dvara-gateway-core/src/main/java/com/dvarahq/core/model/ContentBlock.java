@@ -22,7 +22,9 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 /**
  * One part of a message's content.
  *
- * <p>Two kinds, because two are what the request path produces: text, and an image. A tool call is
+ * <p>Text and images are what every doorway produces. The two thinking kinds are Anthropic's extended
+ * thinking, which only the Anthropic Messages doorway carries and only an Anthropic provider takes: a
+ * request that holds one is refused on any other provider, so no other provider ever sees one. A tool call is
  * not a content block here — it travels on {@link MultimodalMessage#getToolCalls()} as a
  * {@link ToolCall}, which is the shape the OpenAI-compatible API this gateway serves puts it in, and
  * a tool result travels as a {@code tool}-role message carrying
@@ -40,14 +42,19 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({
         @JsonSubTypes.Type(value = ContentBlock.TextBlock.class, name = "text"),
-        @JsonSubTypes.Type(value = ContentBlock.ImageBlock.class, name = "image")
+        @JsonSubTypes.Type(value = ContentBlock.ImageBlock.class, name = "image"),
+        @JsonSubTypes.Type(value = ContentBlock.ThinkingBlock.class, name = "thinking"),
+        @JsonSubTypes.Type(value = ContentBlock.RedactedThinkingBlock.class, name = "redacted_thinking")
 })
 public sealed interface ContentBlock
-        permits ContentBlock.TextBlock, ContentBlock.ImageBlock {
+        permits ContentBlock.TextBlock, ContentBlock.ImageBlock, ContentBlock.ThinkingBlock,
+        ContentBlock.RedactedThinkingBlock {
 
     /**
      * Returns the textual content of this block, or {@code null} if the block carries no text. Text
-     * blocks return their text; image blocks return {@code null}, their content being binary.
+     * blocks return their text; image blocks return {@code null}, their content being binary. Thinking
+     * blocks return {@code null} too: thinking is not what the message says, and code that reads a message's
+     * text must not take it for that. The response checks read it through {@link ThinkingBlock#thinking()}.
      *
      * <p>This helper exists so mock-scenario Groovy scripts can write
      * {@code request.messages.last().textContent()} without walking the block list and downcasting to
@@ -79,6 +86,24 @@ public sealed interface ContentBlock
         @JsonIgnore
         public boolean isUrl() { return URL_MEDIA_TYPE.equals(mediaType); }
 
+        @Override public String textContent() { return null; }
+    }
+
+    /**
+     * A block of the model's extended thinking, as Anthropic returns it. The {@code signature} is
+     * Anthropic's proof that the text is what the model wrote: the block has to go back to Anthropic
+     * unchanged on a later turn, so nothing here may rewrite it on the way in. On the way out it is output
+     * like any other, and the response checks read it.
+     */
+    record ThinkingBlock(String thinking, String signature) implements ContentBlock {
+        @Override public String textContent() { return null; }
+    }
+
+    /**
+     * Thinking Anthropic returned encrypted. Nobody can read it, the gateway included, so it is carried as
+     * it came, both ways.
+     */
+    record RedactedThinkingBlock(String data) implements ContentBlock {
         @Override public String textContent() { return null; }
     }
 }

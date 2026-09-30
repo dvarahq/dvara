@@ -90,6 +90,23 @@ public interface LlmProvider {
     ProviderCapabilities capabilities();
 
     /**
+     * Whether this provider speaks Anthropic's Messages API, so that what only that API has (extended
+     * thinking and its signed blocks, the {@code anthropic-beta} header, fields the gateway does not model)
+     * can be sent on unchanged. A provider that does not is never given a request that needs it.
+     */
+    default boolean speaksAnthropicMessages() {
+        return false;
+    }
+
+    /**
+     * The request's input tokens as this provider counts them, without calling a model, or empty when the
+     * provider has no way to count; the caller then estimates.
+     */
+    default java.util.OptionalInt countInputTokens(ChatRequest request) {
+        return java.util.OptionalInt.empty();
+    }
+
+    /**
      * Lists models available from this provider by querying the provider's API.
      * Returns an empty list by default (providers that don't support model listing).
      */

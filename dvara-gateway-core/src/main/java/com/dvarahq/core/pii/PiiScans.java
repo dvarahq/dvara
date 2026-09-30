@@ -128,6 +128,11 @@ public final class PiiScans {
             if (choice.getMessage().getContent() != null) {
                 for (var block : choice.getMessage().getContent()) {
                     addIfFound(results, detector, extractText(block), customPatterns);
+                    // Thinking is output too, and reaches the caller like the answer does. Only on the way
+                    // out: on the way in a thinking block is signed and must go back to Anthropic unchanged.
+                    if (block instanceof ContentBlock.ThinkingBlock thinking) {
+                        addIfFound(results, detector, thinking.thinking(), customPatterns);
+                    }
                 }
             }
             // A model-generated tool call's arguments are as capable of carrying personal data as its

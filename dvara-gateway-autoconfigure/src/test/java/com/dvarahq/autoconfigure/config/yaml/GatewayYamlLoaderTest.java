@@ -465,12 +465,11 @@ class GatewayYamlLoaderTest {
     void validate_baseUrlOnAFixedEndpointProvider_isRefused() {
         GatewayYamlConfig config = new GatewayYamlConfig();
         GatewayYamlConfig.ProviderEntry entry = new GatewayYamlConfig.ProviderEntry();
-        entry.setType("anthropic");
-        entry.setApiKey("k");
+        entry.setType("bedrock");
         entry.setBaseUrl("https://proxy.example");
         config.setProviders(List.of(entry));
         assertThat(GatewayYamlLoader.validate(config))
-                .containsExactly("providers[0].base_url: not read by anthropic, whose endpoint is fixed");
+                .containsExactly("providers[0].base_url: not read by bedrock, whose endpoint is fixed");
         entry.setBaseUrl(null);
         assertThat(GatewayYamlLoader.validate(config)).isEmpty();
     }

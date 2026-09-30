@@ -37,6 +37,9 @@ public class TemplateResolutionFilter implements ChatFilter {
 
     @Override public int order() { return FilterOrder.TEMPLATE_RESOLUTION; }
 
+    /** A count is of the prompt the call would send, template included. */
+    @Override public boolean appliesToTokenCount() { return true; }
+
     @Override
     public ChatRequest preDispatch(ChatRequest request, FilterContext ctx) {
         return resolver.resolve(request, ctx.getWorkspaceId());

@@ -253,14 +253,103 @@ class MessagesControllerTest {
                 .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("container")));
     }
 
+    /** Whether a provider may take them is the dispatcher's call; the doorway carries them across. */
     @Test
-    void extendedThinkingIsRefused() throws Exception {
+    void thinkingTheBetaHeaderAndUnknownFieldsAreCarriedForAnthropic() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(reply("4", "stop", null));
+
         mockMvc.perform(messages("""
                         {"model": "claude-sonnet-4-5", "max_tokens": 2000, "thinking": {"type": "enabled", "budget_tokens": 1024},
+                         "top_k": 5, "context_management": {"edits": []},
                          "messages": [{"role": "user", "content": "hi"}]}
+                        """).header("anthropic-beta", "interleaved-thinking-2025-05-14"))
+                .andExpect(status().isOk());
+
+        ChatRequest sent = sentRequest();
+        assertThat(sent.getAnthropic().thinking()).containsEntry("type", "enabled").containsEntry("budget_tokens", 1024);
+        assertThat(sent.getAnthropic().fields()).containsOnlyKeys("top_k", "context_management");
+        assertThat(sent.getAnthropic().beta()).isEqualTo("interleaved-thinking-2025-05-14");
+        assertThat(sent.needsAnthropic()).isTrue();
+    }
+
+    @Test
+    void thinkingBlocksInAnAssistantTurnAreCarriedAsTheyCame() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(reply("ok", "stop", null));
+
+        mockMvc.perform(messages("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 2000,
+                         "messages": [
+                           {"role": "user", "content": "hi"},
+                           {"role": "assistant", "content": [
+                             {"type": "thinking", "thinking": "hmm", "signature": "sig"},
+                             {"type": "redacted_thinking", "data": "opaque"},
+                             {"type": "text", "text": "hello"}]},
+                           {"role": "user", "content": "again"}]}
                         """))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("unsupported_capability"));
+                .andExpect(status().isOk());
+
+        MultimodalMessage assistant = sentRequest().getMessages().get(1);
+        assertThat(assistant.getContent()).containsExactly(
+                new ContentBlock.ThinkingBlock("hmm", "sig"),
+                new ContentBlock.RedactedThinkingBlock("opaque"),
+                new ContentBlock.TextBlock("hello"));
+    }
+
+    @Test
+    void aReplyWithThinkingComesBackWithItsBlocksFirst() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(ChatResponse.builder().id("c").model("claude-sonnet-4-5")
+                .choices(List.of(ChatResponse.Choice.builder().index(0).finishReason("stop")
+                        .message(MultimodalMessage.builder().role("assistant").content(List.of(
+                                new ContentBlock.ThinkingBlock("hmm", "sig"),
+                                new ContentBlock.RedactedThinkingBlock("opaque"),
+                                new ContentBlock.TextBlock("4"))).build())
+                        .build()))
+                .build());
+
+        mockMvc.perform(messages("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 2000, "thinking": {"type": "enabled", "budget_tokens": 1024},
+                         "messages": [{"role": "user", "content": "2+2?"}]}
+                        """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].type").value("thinking"))
+                .andExpect(jsonPath("$.content[0].thinking").value("hmm"))
+                .andExpect(jsonPath("$.content[0].signature").value("sig"))
+                .andExpect(jsonPath("$.content[1].type").value("redacted_thinking"))
+                .andExpect(jsonPath("$.content[1].data").value("opaque"))
+                .andExpect(jsonPath("$.content[2].text").value("4"));
+    }
+
+    @Test
+    void aStreamedThinkingBlockIsThinkingAndSignatureDeltas() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c1").thinking(com.dvarahq.core.model.ThinkingDelta.text(0, "")).build(),
+                SseChunk.builder().id("c1").thinking(com.dvarahq.core.model.ThinkingDelta.text(0, "hm")).build(),
+                SseChunk.builder().id("c1").thinking(com.dvarahq.core.model.ThinkingDelta.text(0, "m")).build(),
+                SseChunk.builder().id("c1").thinking(com.dvarahq.core.model.ThinkingDelta.signature(0, "sig")).build(),
+                SseChunk.builder().id("c1").thinking(com.dvarahq.core.model.ThinkingDelta.redacted(1, "opaque")).build(),
+                SseChunk.builder().id("c1").delta("4").finishReason("stop").done(true).build()).iterator());
+
+        List<Map<String, Object>> events = stream("""
+                {"model": "claude-sonnet-4-5", "max_tokens": 2000, "stream": true,
+                 "thinking": {"type": "enabled", "budget_tokens": 1024},
+                 "messages": [{"role": "user", "content": "2+2?"}]}
+                """);
+
+        List<Object> types = events.stream().map(e -> e.get("type")).toList();
+        assertThat(types).containsExactly("message_start", "ping",
+                "content_block_start", "content_block_delta", "content_block_delta", "content_block_delta",
+                "content_block_stop",
+                "content_block_start", "content_block_stop",
+                "content_block_start", "content_block_delta", "content_block_stop",
+                "message_delta", "message_stop");
+        assertThat(path(events.get(2), "content_block", "type")).isEqualTo("thinking");
+        assertThat(path(events.get(3), "delta", "thinking")).isEqualTo("hm");
+        assertThat(path(events.get(5), "delta", "type")).isEqualTo("signature_delta");
+        assertThat(path(events.get(5), "delta", "signature")).isEqualTo("sig");
+        assertThat(path(events.get(7), "content_block", "type")).isEqualTo("redacted_thinking");
+        assertThat(path(events.get(7), "content_block", "data")).isEqualTo("opaque");
+        assertThat(path(events.get(9), "content_block", "type")).isEqualTo("text");
+        assertThat(path(events.get(9), "index")).isEqualTo(2);
     }
 
     @Test

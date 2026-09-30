@@ -36,9 +36,11 @@ public record ContinuationGroupId(Kind kind, String ownerId, String namespace) {
     /**
      * What sort of thing owns the text. {@code TOOL_ARGUMENT} is a value inside a streamed tool call's
      * JSON arguments: governed like any other content, but never part of the prose a reader
-     * sees, so it is kept out of the text grounding is judged on.
+     * sees, so it is kept out of the text grounding is judged on. {@code THINKING} is a block of a model's
+     * extended thinking: output, scanned like the answer, but not the answer, so grounding does not judge
+     * it either.
      */
-    public enum Kind { MESSAGE, ARTIFACT, STATUS, TEXT_STREAM, STRUCTURAL, TOOL_ARGUMENT }
+    public enum Kind { MESSAGE, ARTIFACT, STATUS, TEXT_STREAM, STRUCTURAL, TOOL_ARGUMENT, THINKING }
 
     public ContinuationGroupId {
         namespace = namespace == null ? "" : namespace;
@@ -71,5 +73,10 @@ public record ContinuationGroupId(Kind kind, String ownerId, String namespace) {
      */
     public static ContinuationGroupId toolArgument(int callIndex, String valueName) {
         return new ContinuationGroupId(Kind.TOOL_ARGUMENT, "tool-call/" + callIndex, valueName);
+    }
+
+    /** The text of the streamed thinking block at {@code blockIndex}: one block, one group. */
+    public static ContinuationGroupId thinking(int blockIndex) {
+        return new ContinuationGroupId(Kind.THINKING, "thinking/" + blockIndex, "");
     }
 }

@@ -34,6 +34,9 @@ public class GuardrailEnforcementFilter implements ChatFilter {
 
     @Override public int order() { return FilterOrder.GUARDRAIL_ENFORCEMENT; }
 
+    /** Counting still sends the text to a provider, so the request guardrails apply to it. */
+    @Override public boolean appliesToTokenCount() { return true; }
+
     @Override
     public ChatRequest preDispatch(ChatRequest request, FilterContext ctx) {
         return guardrailEnforcer.enforceRequest(request, ctx.getWorkspaceId());

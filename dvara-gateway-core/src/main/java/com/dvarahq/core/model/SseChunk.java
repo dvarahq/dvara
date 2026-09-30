@@ -51,4 +51,11 @@ public class SseChunk {
      * was asked about.</p>
      */
     private List<ToolCallDelta> toolCalls;
+
+    /**
+     * A fragment of Anthropic's extended thinking, or null. Only an Anthropic provider produces one, for
+     * a request that asked for thinking. It is output: the streaming guard holds and scans its text like
+     * the answer's.
+     */
+    private ThinkingDelta thinking;
 }

@@ -126,6 +126,17 @@ public class ResilientLlmProvider implements LlmProvider {
     }
 
     @Override
+    public boolean speaksAnthropicMessages() {
+        return delegate.speaksAnthropicMessages();
+    }
+
+    /** A count calls no model, but it is still a call to the provider, so it is held to the same limits. */
+    @Override
+    public java.util.OptionalInt countInputTokens(ChatRequest request) {
+        return executeWithResilience(() -> delegate.countInputTokens(request), chatTimeLimiter);
+    }
+
+    @Override
     public java.util.List<com.dvarahq.core.provider.ModelInfo> listModels() {
         return delegate.listModels();
     }

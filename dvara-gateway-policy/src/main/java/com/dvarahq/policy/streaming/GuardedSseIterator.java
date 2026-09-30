@@ -20,9 +20,12 @@ import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.audit.AuditWriter;
 import com.dvarahq.core.enforcement.AuditIntent;
 import com.dvarahq.core.enforcement.ContinuationGroup;
+import com.dvarahq.core.enforcement.ContinuationGroupId;
 import com.dvarahq.core.enforcement.ControlFinding;
 import com.dvarahq.core.enforcement.EnforcementResult;
 import com.dvarahq.core.enforcement.ResponseDocument;
+import com.dvarahq.core.enforcement.Segment;
+import com.dvarahq.core.enforcement.SegmentId;
 import com.dvarahq.core.enforcement.StreamingEnforcementEngine;
 import com.dvarahq.core.enforcement.StreamingEnforcementTelemetry;
 import com.dvarahq.core.enforcement.StreamingPosture;
@@ -32,6 +35,7 @@ import com.dvarahq.core.id.Ids;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ReleasableUpstream;
 import com.dvarahq.core.model.SseChunk;
+import com.dvarahq.core.model.ThinkingDelta;
 import com.dvarahq.core.model.ToolCallDelta;
 import com.dvarahq.core.pii.PiiDetector;
 import org.slf4j.Logger;
@@ -90,6 +94,11 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
     private final StringBuilder accumulated = new StringBuilder();
     /** Streamed tool calls by normalised index, each assembling its arguments across chunks. */
     private final Map<Integer, ToolCallArguments.Assembly> toolCalls = new LinkedHashMap<>();
+    /**
+     * Blocks of extended thinking by index, each assembling its text and signature. The text is output and
+     * scanned like the answer; the signature and a redacted block's data are carried, not scanned.
+     */
+    private final Map<Integer, Thinking> thinking = new LinkedHashMap<>();
     /** Text plus every call's arguments, ids and names: the one figure the held-characters bound is judged on. */
     private int heldCharacters;
     /**
@@ -237,9 +246,11 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
 
             String delta = chunk.getDelta();
             List<ToolCallDelta> fragments = chunk.getToolCalls();
+            ThinkingDelta thought = chunk.getThinking();
             boolean hasText = delta != null && !delta.isEmpty();
             boolean hasCalls = fragments != null && !fragments.isEmpty();
-            if (!hasText && !hasCalls) {
+            boolean hasThinking = thought != null;
+            if (!hasText && !hasCalls && !hasThinking) {
                 // Metadata-only. Forwarded immediately in both modes: it carries no content, so it can
                 // neither be withheld nor contribute to a decision.
                 if (chunk.isDone()) {
@@ -264,6 +275,9 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
             }
             if (hasCalls && !terminated) {
                 assemble(fragments);
+            }
+            if (hasThinking && !terminated) {
+                think(thought);
             }
             if (terminated) {
                 return; // Deferred overflow: refused without invoking any detector
@@ -398,6 +412,67 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
         }
     }
 
+    /** One block of extended thinking, as far as it has arrived. */
+    private static final class Thinking {
+        final int index;
+        final StringBuilder text = new StringBuilder();
+        final StringBuilder signature = new StringBuilder();
+        String redacted;
+
+        Thinking(int index) {
+            this.index = index;
+        }
+    }
+
+    /**
+     * Joins a thinking fragment onto its block. Everything held is charged to the same bound as the answer,
+     * the signature and redacted data too, since they are held until the end as well.
+     */
+    private void think(ThinkingDelta fragment) {
+        Thinking block = thinking.get(fragment.index());
+        if (block == null) {
+            if (thinking.size() >= MAX_TOOL_CALLS) {
+                if (deferred) {
+                    telemetry.overflow("LLM", "DEFERRED", "THINKING_BLOCKS");
+                    refuse("STREAM_TOO_LARGE_TO_SCAN",
+                            "Streaming response carried more than " + MAX_TOOL_CALLS + " thinking blocks "
+                                    + "while an enforcement action required the whole answer to be "
+                                    + "scanned as one; refused rather than emitted half-scanned");
+                    return;
+                }
+                scanIncomplete = true;
+                return; // relayed as received, not assembled
+            }
+            block = new Thinking(fragment.index());
+            thinking.put(fragment.index(), block);
+        }
+        if (fragment.text() != null && !fragment.text().isEmpty()) {
+            hold(fragment.text(), block.text);
+            if (terminated) {
+                return;
+            }
+        }
+        if (fragment.signature() != null && !fragment.signature().isEmpty()) {
+            int kept = charge(fragment.signature().length());
+            if (terminated) {
+                return;
+            }
+            // A signature is whole or useless; under Immediate it has already gone out as it came.
+            if (kept == fragment.signature().length()) {
+                block.signature.append(fragment.signature());
+            }
+        }
+        if (fragment.redacted() != null) {
+            int kept = charge(fragment.redacted().length());
+            if (terminated) {
+                return;
+            }
+            if (kept == fragment.redacted().length()) {
+                block.redacted = fragment.redacted();
+            }
+        }
+    }
+
     /** Whether {@code length} characters fit the bound given {@code alreadyCharged} of them were charged before. */
     private boolean charged(int length, int alreadyCharged) {
         int extra = length - alreadyCharged;
@@ -407,11 +482,46 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
     /** The response as the engine sees it: the text stream, then each call's argument values. */
     private ResponseDocument document(List<ToolCallArguments.Projection> calls) {
         List<ContinuationGroup> groups = new ArrayList<>();
+        // Thinking first: it is what the model wrote first. Each block is a group of its own, never joined to
+        // the answer or to another block.
+        for (Thinking block : thinking.values()) {
+            if (block.redacted == null && !block.text.isEmpty()) {
+                groups.add(new ContinuationGroup(ContinuationGroupId.thinking(block.index),
+                        List.of(new Segment(thinkingSegment(block.index), block.text.toString()))));
+            }
+        }
         groups.addAll(ResponseDocument.ofText(accumulated.toString()).groups());
         for (ToolCallArguments.Projection call : calls) {
             groups.addAll(call.groups);
         }
         return new ResponseDocument(groups);
+    }
+
+    /** The one segment of a thinking block: its own path, so no edit meant for the answer can land in it. */
+    private static SegmentId thinkingSegment(int index) {
+        return new SegmentId(0, "thinking/" + index, 0);
+    }
+
+    /** A thinking block's text after enforcement: the engine's edited text for it, else what arrived. */
+    private static String enforcedThinking(ResponseDocument enforced, Thinking block) {
+        ContinuationGroupId id = ContinuationGroupId.thinking(block.index);
+        for (ContinuationGroup group : enforced.groups()) {
+            if (group.id().equals(id)) {
+                return group.text();
+            }
+        }
+        return block.text.toString();
+    }
+
+    /** Deferred delivery of the thinking: each block whole, with its signature, ahead of the answer. */
+    private void emitThinking(ResponseDocument enforced) {
+        for (Thinking block : thinking.values()) {
+            ThinkingDelta whole = block.redacted != null
+                    ? ThinkingDelta.redacted(block.index, block.redacted)
+                    : new ThinkingDelta(block.index, enforcedThinking(enforced, block),
+                            block.signature.isEmpty() ? null : block.signature.toString(), null);
+            outQueue.add(SseChunk.builder().id(lastId).model(lastModel).thinking(whole).done(false).build());
+        }
     }
 
     /** The single transition into Enforcing. Idempotent. */
@@ -511,6 +621,7 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
                 ToolCallArguments.Assembly assembly = toolCalls.get(call.index);
                 delivered.add(new ToolCallDelta(call.index, assembly.id, assembly.name, arguments.get()));
             }
+            emitThinking(result.document());
             String text = result.document().assistantText();
             if (!text.isEmpty() || !delivered.isEmpty()) {
                 emitTerminal(text, delivered);
@@ -702,6 +813,7 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
         if (deferred) {
             accumulated.setLength(0);
             toolCalls.clear();
+            thinking.clear();
             finalized = true;
             truncated = true;
             writeSummary();

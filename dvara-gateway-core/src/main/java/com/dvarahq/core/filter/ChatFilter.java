@@ -48,4 +48,14 @@ public interface ChatFilter {
     default ChatResponse postDispatch(ChatRequest request, ChatResponse response, FilterContext ctx) {
         return response;
     }
+
+    /**
+     * Whether this filter runs when a request's tokens are only counted, with no model called. A filter
+     * that governs what the request says (policy, PII, guardrails, a suspended workspace) returns true: the
+     * text is still sent to a provider to be counted. One that admits, counts or bills a call returns false,
+     * because a count is not a call.
+     */
+    default boolean appliesToTokenCount() {
+        return false;
+    }
 }

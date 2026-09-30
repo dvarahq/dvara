@@ -80,6 +80,8 @@ public class TiktokenEstimator implements TokenEstimator {
                     total += switch (block) {
                         case ContentBlock.TextBlock text -> countTokens(encoding, text.text());
                         case ContentBlock.ImageBlock image -> ImageTokens.estimate(image, request.getModel());
+                        case ContentBlock.ThinkingBlock thinking -> countTokens(encoding, thinking.thinking());
+                        case ContentBlock.RedactedThinkingBlock redacted -> countTokens(encoding, redacted.data());
                         case null -> 0;
                     };
                 }

@@ -44,6 +44,8 @@ public class SimpleTokenEstimator implements TokenEstimator {
                     total += switch (block) {
                         case ContentBlock.TextBlock text -> estimateTokens(text.text());
                         case ContentBlock.ImageBlock image -> ImageTokens.estimate(image, request.getModel());
+                        case ContentBlock.ThinkingBlock thinking -> estimateTokens(thinking.thinking());
+                        case ContentBlock.RedactedThinkingBlock redacted -> estimateTokens(redacted.data());
                         case null -> 0;
                     };
                 }
