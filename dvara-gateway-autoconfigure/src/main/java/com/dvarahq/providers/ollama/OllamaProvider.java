@@ -23,6 +23,8 @@ import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
+import com.dvarahq.core.model.EmbeddingRequest;
+import com.dvarahq.core.model.EmbeddingResponse;
 import com.dvarahq.core.model.MultimodalMessage;
 import com.dvarahq.core.model.ResponseFormat;
 import com.dvarahq.core.model.ReleasableUpstream;
@@ -176,6 +178,64 @@ public class OllamaProvider extends AbstractLlmProvider {
                 .body(OllamaResponse.class);
 
         return mapToInternal(resp, request.getModel());
+    }
+
+    // -------------------------------------------------------------------------
+    // Embeddings
+    // -------------------------------------------------------------------------
+
+    /**
+     * Every {@code ollama/} model is offered: Ollama decides which of its models can embed, and one that
+     * cannot is refused upstream with its name in the error.
+     */
+    @Override
+    public boolean supportsEmbedding(String model) {
+        return model != null && model.startsWith("ollama/");
+    }
+
+    /** Ollama's OpenAI-compatible {@code /v1/embeddings}, on the same endpoint a chat call would use. */
+    @Override
+    public EmbeddingResponse embed(EmbeddingRequest request) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", stripPrefix(request.getModel()));
+        body.put("input", request.getInput());
+        if (request.getDimensions() != null) body.put("dimensions", request.getDimensions());
+
+        OllamaEmbeddingResponse resp = target().post("/v1/embeddings")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .onStatus(OllamaProvider::refusedRedirect, (req, res) -> {
+                    throw new GatewayException("PROVIDER_ERROR",
+                            "The Ollama endpoint answered with a redirect, which is not followed");
+                })
+                .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal("Ollama", res);
+                    throw GatewayException.upstream(res.getStatusCode().value(),
+                            "Ollama embedding error " + res.getStatusCode().value() + " for model "
+                                + stripPrefix(request.getModel())
+                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                })
+                .body(OllamaEmbeddingResponse.class);
+
+        if (resp == null || resp.getData() == null) {
+            throw new GatewayException("PROVIDER_ERROR", "Ollama returned an empty embedding response");
+        }
+        return EmbeddingResponse.builder()
+                .object("list")
+                .model(request.getModel())
+                .data(resp.getData().stream()
+                        .map(d -> EmbeddingResponse.EmbeddingData.builder()
+                                .object("embedding")
+                                .index(d.getIndex())
+                                .embedding(d.getEmbedding())
+                                .build())
+                        .toList())
+                .usage(EmbeddingResponse.Usage.builder()
+                        .promptTokens(resp.getUsage() != null ? resp.getUsage().getPromptTokens() : 0)
+                        .totalTokens(resp.getUsage() != null ? resp.getUsage().getTotalTokens() : 0)
+                        .build())
+                .build();
     }
 
     // -------------------------------------------------------------------------
@@ -605,6 +665,25 @@ public class OllamaProvider extends AbstractLlmProvider {
         static class StreamDelta {
             private String role;
             private String content;
+        }
+    }
+
+    @Data @JsonIgnoreProperties(ignoreUnknown = true)
+    private static class OllamaEmbeddingResponse {
+        private String model;
+        private List<OllamaEmbedding> data;
+        private OllamaEmbeddingUsage usage;
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class OllamaEmbedding {
+            private int index;
+            private List<Double> embedding;
+        }
+
+        @Data @JsonIgnoreProperties(ignoreUnknown = true)
+        static class OllamaEmbeddingUsage {
+            @JsonProperty("prompt_tokens") private int promptTokens;
+            @JsonProperty("total_tokens")  private int totalTokens;
         }
     }
 

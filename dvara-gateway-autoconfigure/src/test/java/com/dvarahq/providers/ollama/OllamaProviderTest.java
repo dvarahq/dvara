@@ -82,10 +82,14 @@ class OllamaProviderTest {
         assertThat(provider.supports(request)).isFalse();
     }
 
+    /** Ollama decides which of its models can embed, so every ollama/ model is offered; no other is. */
     @Test
-    void supportsEmbedding_alwaysReturnsFalse() {
-        assertThat(provider.supportsEmbedding("ollama/llama3.2")).isFalse();
-        assertThat(provider.supportsEmbedding("any-model")).isFalse();
+    void supportsEmbedding_everyOllamaModel_andNoOther() {
+        assertThat(provider.supportsEmbedding("ollama/nomic-embed-text")).isTrue();
+        assertThat(provider.supportsEmbedding("ollama/mxbai-embed-large")).isTrue();
+        assertThat(provider.supportsEmbedding("ollama/all-minilm:l6-v2")).isTrue();
+        assertThat(provider.supportsEmbedding("text-embedding-3-small")).isFalse();
+        assertThat(provider.supportsEmbedding(null)).isFalse();
     }
 
     @Test
@@ -755,4 +759,110 @@ class OllamaProviderTest {
         };
     }
 
+    // -------------------------------------------------------------------------
+    // Embeddings
+    // -------------------------------------------------------------------------
+
+    private static final String EMBEDDING_REPLY = """
+            {"object":"list","model":"nomic-embed-text",
+             "data":[{"object":"embedding","index":0,"embedding":[0.1,-0.2,0.3]},
+                     {"object":"embedding","index":1,"embedding":[0.4,0.5,-0.6]}],
+             "usage":{"prompt_tokens":4,"total_tokens":4}}
+            """;
+
+    private static com.dvarahq.core.model.EmbeddingRequest embedding(Integer dimensions) {
+        return com.dvarahq.core.model.EmbeddingRequest.builder()
+                .model("ollama/nomic-embed-text")
+                .input(List.of("hello", "world"))
+                .dimensions(dimensions)
+                .build();
+    }
+
+    /** The call goes to /v1/embeddings without the prefix, and the vectors come back in the OpenAI shape. */
+    @Test
+    void embed_postsToV1Embeddings_andMapsTheVectors() {
+        server.expect(requestTo("http://localhost:11434/v1/embeddings"))
+              .andExpect(method(HttpMethod.POST))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.model").value("nomic-embed-text"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.input[1]").value("world"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.dimensions").doesNotExist())
+              .andRespond(withSuccess(EMBEDDING_REPLY, MediaType.APPLICATION_JSON));
+
+        var response = provider.embed(embedding(null));
+
+        server.verify();
+        assertThat(response.getObject()).isEqualTo("list");
+        assertThat(response.getModel()).isEqualTo("ollama/nomic-embed-text");
+        assertThat(response.getData()).hasSize(2);
+        assertThat(response.getData().get(1).getIndex()).isEqualTo(1);
+        assertThat(response.getData().get(1).getObject()).isEqualTo("embedding");
+        assertThat(response.getData().get(1).getEmbedding()).containsExactly(0.4, 0.5, -0.6);
+        assertThat(response.getUsage().getPromptTokens()).isEqualTo(4);
+        assertThat(response.getUsage().getTotalTokens()).isEqualTo(4);
+    }
+
+    /** dimensions travels only when the caller set it. */
+    @Test
+    void embed_dimensionsTravelWhenSet() {
+        server.expect(requestTo(containsString("/v1/embeddings")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.dimensions").value(64))
+              .andRespond(withSuccess(EMBEDDING_REPLY, MediaType.APPLICATION_JSON));
+        provider.embed(embedding(64));
+        server.verify();
+    }
+
+    /** A model that cannot embed is Ollama's refusal, returned with its status and naming the model. */
+    @Test
+    void embed_upstreamRefusal_namesTheModel() {
+        server.expect(requestTo(containsString("/v1/embeddings")))
+              .andRespond(withServerError().contentType(MediaType.APPLICATION_JSON)
+                      .body("{\"error\":{\"message\":\"This server does not support embeddings\"}}"));
+
+        assertThatThrownBy(() -> provider.embed(embedding(null)))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("nomic-embed-text")
+                .satisfies(e -> assertThat(((GatewayException) e).getUpstreamStatus()).isEqualTo(500));
+        server.verify();
+    }
+
+    /** An empty reply is the upstream's failure, not a null pointer. */
+    @Test
+    void embed_emptyReply_isAProviderError() {
+        server.expect(requestTo(containsString("/v1/embeddings")))
+              .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        assertThatThrownBy(() -> provider.embed(embedding(null)))
+                .isInstanceOf(GatewayException.class)
+                .extracting("code").isEqualTo("PROVIDER_ERROR");
+    }
+
+    /** Per-workspace: embeddings go to the workspace's own endpoint with its key, never the platform one. */
+    @Test
+    void perWorkspace_embeddingsGoToTheWorkspacesOwnEndpoint() {
+        MockRestServiceServer[] tenant = new MockRestServiceServer[1];
+        perWorkspace(tenant, ACME_ONLY);
+        tenant[0].expect(requestTo("https://ollama.acme.test/v1/embeddings"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.header("Authorization", "Bearer acme-key"))
+                .andRespond(withSuccess(EMBEDDING_REPLY, MediaType.APPLICATION_JSON));
+
+        var response = as("acme", () -> provider.embed(embedding(null)));
+
+        tenant[0].verify();
+        server.verify();
+        assertThat(response.getData()).hasSize(2);
+        assertThatThrownBy(() -> as("globex", () -> provider.embed(embedding(null))))
+                .isInstanceOf(GatewayException.class).hasMessageContaining("No Ollama endpoint");
+    }
+
+    /** Per-workspace: a redirect on the embeddings call is refused, not followed. */
+    @Test
+    void perWorkspace_anEmbeddingsRedirectIsRefused() {
+        MockRestServiceServer[] tenant = new MockRestServiceServer[1];
+        perWorkspace(tenant, ACME_ONLY);
+        tenant[0].expect(requestTo("https://ollama.acme.test/v1/embeddings"))
+                .andRespond(withStatus(HttpStatus.FOUND).header("Location", "http://169.254.169.254/latest/meta-data/"));
+
+        assertThatThrownBy(() -> as("acme", () -> provider.embed(embedding(null))))
+                .isInstanceOf(GatewayException.class).hasMessageContaining("redirect");
+        tenant[0].verify();
+    }
 }
