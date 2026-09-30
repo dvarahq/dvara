@@ -16,6 +16,7 @@
 package com.dvarahq.providers.ollama;
 
 import com.dvarahq.providers.support.CredentialInterceptor;
+import com.dvarahq.providers.support.ImageFetcher;
 import com.dvarahq.providers.support.ProviderErrors;
 
 import com.dvarahq.core.exception.GatewayException;
@@ -71,6 +72,17 @@ public class OllamaProvider extends AbstractLlmProvider {
     OllamaProvider(RestClient restClient) {
         super("ollama");
         this.restClient = restClient;
+    }
+
+    /** Fetches an https image URL to inline it; off unless the operator turned fetching on. */
+    private ImageFetcher imageFetcher = ImageFetcher.DISABLED;
+
+    /**
+     * Lets an https image URL be fetched and sent as base64, with the fetcher's own address and size checks.
+     * Ollama takes images as base64 only and refuses a URL.
+     */
+    public void setImageFetcher(ImageFetcher imageFetcher) {
+        this.imageFetcher = imageFetcher != null ? imageFetcher : ImageFetcher.DISABLED;
     }
 
     // -------------------------------------------------------------------------
@@ -202,7 +214,6 @@ public class OllamaProvider extends AbstractLlmProvider {
     }
 
     private Map<String, Object> buildChatBody(ChatRequest request) {
-        rejectUnsupportedContentBlocks(request);
         List<Map<String, Object>> messages = request.getMessages().stream()
                 .map(this::serializeMessage)
                 .collect(Collectors.toList());
@@ -226,7 +237,7 @@ public class OllamaProvider extends AbstractLlmProvider {
     private Map<String, Object> serializeMessage(MultimodalMessage m) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("role", m.getRole());
-        out.put("content", extractText(m));
+        out.put("content", extractContent(m));
         if (m.getToolCalls() != null && !m.getToolCalls().isEmpty()) {
             out.put("tool_calls", m.getToolCalls().stream()
                     .map(tc -> Map.of(
@@ -266,32 +277,48 @@ public class OllamaProvider extends AbstractLlmProvider {
         }
     }
 
-    private void rejectUnsupportedContentBlocks(ChatRequest request) {
-        for (MultimodalMessage msg : request.getMessages()) {
-            if (msg.getContent() == null) continue;
-            for (ContentBlock block : msg.getContent()) {
-                if (block instanceof ContentBlock.ImageBlock) {
-                    throw new GatewayException("UNSUPPORTED_CAPABILITY",
-                            "Ollama vision is not yet implemented in DVARA. Use a vision-capable "
-                            + "provider (OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI) for now.");
-                }
-                // No tool-block branch: a tool call travels on the message's toolCalls, not as a
-                // content block, and serializeMessage carries it (#30).
-            }
-        }
-    }
-
     /** Strip the "ollama/" prefix that the routing key uses. */
     private String stripPrefix(String model) {
         return model != null && model.startsWith("ollama/") ? model.substring(7) : model;
     }
 
-    private String extractText(MultimodalMessage msg) {
-        if (msg.getContent() == null) return "";
+    /**
+     * A text-only message stays a plain string. A message with an image becomes the OpenAI content array
+     * Ollama's {@code /v1} endpoint reads, each image as a base64 {@code data:} URL.
+     */
+    private Object extractContent(MultimodalMessage msg) {
+        if (msg.getContent() == null || msg.getContent().isEmpty()) return "";
+        boolean allText = msg.getContent().stream().allMatch(b -> b instanceof ContentBlock.TextBlock);
+        if (allText) {
+            return msg.getContent().stream()
+                    .map(b -> ((ContentBlock.TextBlock) b).text())
+                    .collect(Collectors.joining("\n"));
+        }
         return msg.getContent().stream()
-                .filter(b -> b instanceof ContentBlock.TextBlock)
-                .map(b -> ((ContentBlock.TextBlock) b).text())
-                .collect(Collectors.joining("\n"));
+                // No default: ContentBlock is sealed, so a new kind is a compile error here rather than a
+                // block silently dropped.
+                .map(b -> switch (b) {
+                    case ContentBlock.TextBlock tb -> (Object) Map.of("type", "text", "text", tb.text());
+                    case ContentBlock.ImageBlock ib -> Map.of("type", "image_url", "image_url", Map.of("url", dataUrl(ib)));
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * An image as a {@code data:} URL. Ollama refuses an https URL ("please use base64 encoded data"), so a
+     * URL is fetched when the operator allowed fetching and refused before the call when not.
+     */
+    private String dataUrl(ContentBlock.ImageBlock ib) {
+        if (!ib.isUrl()) {
+            return "data:" + ib.mediaType() + ";base64," + ib.data();
+        }
+        if (!imageFetcher.enabled()) {
+            throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                    "Ollama takes images as base64 data: URLs, not https URLs. Send the image as base64, "
+                    + "or turn on image fetching (dvara.llm-gateway.image-fetch.enabled).");
+        }
+        ImageFetcher.FetchedImage image = imageFetcher.fetch(ib.data());
+        return "data:" + image.mediaType() + ";base64," + image.base64();
     }
 
     private ChatResponse mapToInternal(OllamaResponse resp, String model) {
@@ -344,12 +371,14 @@ public class OllamaProvider extends AbstractLlmProvider {
     }
 
     /**
+     * Vision is declared: a model without it makes Ollama refuse the image, and that refusal is returned.
      * Tool calls are supported on the plain path (#30). Streamed tool calls are not declared: that path is
      * not verified against Ollama end to end (BR-105-3), so the dispatcher keeps refusing it.
      */
     @Override
     public ProviderCapabilities capabilities() {
-        return new ProviderCapabilities(true, false, true, false, false, 32_000);
+        // streaming, vision, toolCalls, structuredOutputs, jsonMode, maxContextTokens
+        return new ProviderCapabilities(true, true, true, false, false, 32_000);
     }
 
     @Override

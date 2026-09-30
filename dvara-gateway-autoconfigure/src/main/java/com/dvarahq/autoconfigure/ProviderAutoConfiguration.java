@@ -166,6 +166,7 @@ public class ProviderAutoConfiguration {
                                           org.springframework.beans.factory.ObjectProvider<com.dvarahq.providers.ollama.OllamaEndpointResolver> endpoints) {
         RestClient.Builder builder = tlsOnly("ollama", restClientBuilder);
         OllamaProvider provider = new OllamaProvider(props.getProviders().getOllama().getBaseUrl(), builder);
+        provider.setImageFetcher(imageFetcher(props));
         if (props.getProviders().getOllama().isPerWorkspace()) {
             // #30 A6: each workspace's own endpoint. A client that follows no redirect, and not the platform
             // TLS settings, which are for the platform's providers, not a tenant's endpoint.

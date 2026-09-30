@@ -286,7 +286,7 @@ Capabilities as each provider declares them; `/v1/models` reports the same for a
 | Cohere | ✅ | — | — | — | — |
 | Groq | ✅ | — | — | — | — |
 | Qwen | ✅ | — | — | — | — |
-| Ollama | ✅ | — | — | — | — |
+| Ollama | ✅ | ✅ | — | — | — |
 
 A mock provider is included for tests and demos; it needs no account.
 

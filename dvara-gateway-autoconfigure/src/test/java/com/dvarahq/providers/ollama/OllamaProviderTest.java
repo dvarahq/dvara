@@ -461,7 +461,7 @@ class OllamaProviderTest {
         ProviderCapabilities caps = provider.capabilities();
 
         assertThat(caps.supportsStreaming()).isTrue();
-        assertThat(caps.supportsVision()).isFalse();
+        assertThat(caps.supportsVision()).isTrue();
         assertThat(caps.supportsToolCalls()).isTrue();
         assertThat(caps.supportsStreamingToolCalls()).isFalse();
         assertThat(caps.supportsStructuredOutputs()).isFalse();
@@ -542,25 +542,110 @@ class OllamaProviderTest {
     }
 
     // -------------------------------------------------------------------------
-    // Unsupported content-block rejection
+    // Vision
     // -------------------------------------------------------------------------
 
-    @Test
-    void chat_rejectsImageBlockWithUnsupportedCapability() {
-        ChatRequest request = ChatRequest.builder()
-                .model("ollama/llama3.2")
+    private static ChatRequest imageRequest(com.dvarahq.core.model.ContentBlock.ImageBlock image) {
+        return ChatRequest.builder()
+                .model("ollama/qwen3.5:4b")
                 .messages(List.of(MultimodalMessage.builder()
                         .role("user")
                         .content(List.of(
                                 new com.dvarahq.core.model.ContentBlock.TextBlock("Describe this image."),
-                                new com.dvarahq.core.model.ContentBlock.ImageBlock("image/png", "BASE64DATA")))
+                                image))
                         .build()))
                 .build();
+    }
 
+    /** An image travels as a content array, the base64 back in a data: URL, the shape Ollama's /v1 reads. */
+    @Test
+    void chat_imageBlock_travelsAsAContentArrayWithADataUrl() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[0].type").value("text"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[0].text").value("Describe this image."))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[1].type").value("image_url"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[1].image_url.url").value("data:image/png;base64,BASE64DATA"))
+              .andRespond(withSuccess(ollamaSuccessBody("o-v", "qwen3.5:4b", "A red square.", 40, 4), MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(imageRequest(
+                new com.dvarahq.core.model.ContentBlock.ImageBlock("image/png", "BASE64DATA")));
+
+        server.verify();
+        assertThat(response.getChoices().get(0).getMessage().getContent().get(0))
+                .isEqualTo(new com.dvarahq.core.model.ContentBlock.TextBlock("A red square."));
+    }
+
+    /** A message with text only stays a plain string, as before. */
+    @Test
+    void chat_textOnlyMessage_staysAPlainString() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content").value("Hi"))
+              .andRespond(withSuccess(ollamaSuccessBody("o-t", "llama3.2", "Hello", 1, 1), MediaType.APPLICATION_JSON));
+
+        provider.chat(chatRequest("ollama/llama3.2", "Hi"));
+        server.verify();
+    }
+
+    /**
+     * Ollama refuses an https image URL ("please use base64 encoded data instead"). So with fetching off the
+     * gateway refuses it before the call, naming the fix; with fetching on it fetches the image and sends
+     * the bytes.
+     */
+    @Test
+    void chat_imageUrl_isRefusedWhenFetchingIsOff_andInlinedWhenOn() {
+        ChatRequest request = imageRequest(new com.dvarahq.core.model.ContentBlock.ImageBlock(
+                com.dvarahq.core.model.ContentBlock.ImageBlock.URL_MEDIA_TYPE, "https://example.com/cat.png"));
         assertThatThrownBy(() -> provider.chat(request))
                 .isInstanceOf(GatewayException.class)
-                .hasMessageContaining("vision")
+                .hasMessageContaining("base64")
                 .extracting("code").isEqualTo("UNSUPPORTED_CAPABILITY");
+
+        List<String> fetched = new java.util.ArrayList<>();
+        provider.setImageFetcher(stubFetcher(fetched));
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[1].image_url.url").value("data:image/png;base64,iVBORw0KGgo="))
+              .andRespond(withSuccess(ollamaSuccessBody("o-u", "qwen3.5:4b", "A cat.", 40, 3), MediaType.APPLICATION_JSON));
+
+        provider.chat(request);
+
+        server.verify();
+        assertThat(fetched).containsExactly("https://example.com/cat.png");
+    }
+
+    /** A streamed call carries the image the same way. */
+    @Test
+    void streamChat_imageBlock_travelsAsAContentArray() {
+        server.expect(requestTo(containsString("/v1/chat/completions")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.stream").value(true))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.messages[0].content[1].image_url.url").value("data:image/jpeg;base64,JPEGDATA"))
+              .andRespond(withSuccess("""
+                      data: {"id":"s","model":"qwen3.5:4b","choices":[{"index":0,"delta":{"content":"Red"},"finish_reason":null}]}
+
+                      data: {"id":"s","model":"qwen3.5:4b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+                      data: [DONE]
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        var it = provider.streamChat(imageRequest(
+                new com.dvarahq.core.model.ContentBlock.ImageBlock("image/jpeg", "JPEGDATA")));
+        StringBuilder text = new StringBuilder();
+        it.forEachRemaining(c -> { if (c.getDelta() != null) text.append(c.getDelta()); });
+
+        server.verify();
+        assertThat(text.toString()).isEqualTo("Red");
+    }
+
+    /** A fetcher that answers every URL with one PNG, standing in for the real fetch. */
+    private static com.dvarahq.providers.support.ImageFetcher stubFetcher(List<String> fetched) {
+        return new com.dvarahq.providers.support.ImageFetcher(true, 1024, java.time.Duration.ofSeconds(1),
+                java.util.Set.of("image/png")) {
+            @Override
+            public FetchedImage fetch(String url) {
+                fetched.add(url);
+                return new FetchedImage("image/png", "iVBORw0KGgo=");
+            }
+        };
     }
 
 }

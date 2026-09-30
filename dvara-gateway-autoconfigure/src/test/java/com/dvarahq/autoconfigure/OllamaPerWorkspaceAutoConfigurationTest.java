@@ -57,4 +57,26 @@ class OllamaPerWorkspaceAutoConfigurationTest {
     void withNeitherSwitchThereIsNoOllama() {
         runner.run(ctx -> assertThat(ctx).doesNotHaveBean(OllamaProvider.class));
     }
+
+    /** The image fetcher reaches Ollama too: with fetching on, a URL image is fetched, not refused as unsupported. */
+    @Test
+    void imageFetchingOn_reachesOllama() {
+        ChatRequest request = ChatRequest.builder().model("ollama/qwen3.5:4b")
+                .messages(List.of(MultimodalMessage.builder().role("user")
+                        .content(List.of(new com.dvarahq.core.model.ContentBlock.ImageBlock(
+                                com.dvarahq.core.model.ContentBlock.ImageBlock.URL_MEDIA_TYPE,
+                                "https://127.0.0.1/cat.png")))
+                        .build()))
+                .build();
+        runner.withPropertyValues("dvara.llm-gateway.providers.ollama.enabled=true")
+                .run(ctx -> assertThatThrownBy(() -> ctx.getBean(OllamaProvider.class).chat(request))
+                        .isInstanceOf(GatewayException.class)
+                        .extracting("code").isEqualTo("UNSUPPORTED_CAPABILITY"));
+        // On, the fetcher's own address check refuses the loopback URL before any call: it was consulted.
+        runner.withPropertyValues("dvara.llm-gateway.providers.ollama.enabled=true",
+                        "dvara.llm-gateway.image-fetch.enabled=true")
+                .run(ctx -> assertThatThrownBy(() -> ctx.getBean(OllamaProvider.class).chat(request))
+                        .isInstanceOf(GatewayException.class)
+                        .hasMessageContaining("Image URL refused"));
+    }
 }
