@@ -116,10 +116,16 @@ public class InMemoryTokenUsageRepository implements TokenUsageRepository {
         long in = 0;
         long out = 0;
         long total = 0;
+        long cached = 0;
+        long cacheWrite = 0;
+        long reasoning = 0;
         for (TokenUsageRecord r : matched) {
             in += r.getInputTokens();
             out += r.getOutputTokens();
             total += r.getTotalTokens();
+            cached += r.getCachedInputTokens();
+            cacheWrite += r.getCacheWriteTokens();
+            reasoning += r.getReasoningTokens();
         }
         return TokenUsageSummary.builder()
                 .workspaceId(workspaceId)
@@ -128,6 +134,9 @@ public class InMemoryTokenUsageRepository implements TokenUsageRepository {
                 .totalOutputTokens(out)
                 .totalTokens(total)
                 .requestCount(matched.size())
+                .totalCachedInputTokens(cached)
+                .totalCacheWriteTokens(cacheWrite)
+                .totalReasoningTokens(reasoning)
                 .build();
     }
 

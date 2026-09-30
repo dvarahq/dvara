@@ -33,6 +33,10 @@ import lombok.NoArgsConstructor;
  * </ul>
  *
  * The three buckets partition every row: a row is exactly one of cache-hit, estimated, or exact.
+ *
+ * <p>Across all three, it also says how much input was read from or written to a provider's prompt
+ * cache and how much output was reasoning. Those are parts of the counts above, never additions to
+ * them, and a row stored before they were recorded adds zero to each.</p>
  */
 @Data
 @Builder
@@ -48,4 +52,17 @@ public class UsageBreakdown {
     private long cacheHitTokens;
     private long requestCount;
     private long cacheHitCount;
+    /** The input tokens read from a provider's prompt cache. */
+    private long cachedInputTokens;
+    /** The input tokens written to a provider's prompt cache. */
+    private long cacheWriteTokens;
+    /** The output tokens the model spent reasoning. */
+    private long reasoningTokens;
+
+    /** A breakdown with no cache or reasoning parts. */
+    public UsageBreakdown(String model, long exactInputTokens, long exactOutputTokens, long estimatedInputTokens,
+                          long estimatedOutputTokens, long cacheHitTokens, long requestCount, long cacheHitCount) {
+        this(model, exactInputTokens, exactOutputTokens, estimatedInputTokens, estimatedOutputTokens,
+                cacheHitTokens, requestCount, cacheHitCount, 0, 0, 0);
+    }
 }
