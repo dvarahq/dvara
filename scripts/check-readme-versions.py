@@ -19,6 +19,11 @@ their own and cannot go stale. Anywhere else the version must be the newest
 release tag exactly, because a dependency coordinate has to be reproducible.
 
 Run it by hand the same way CI does: python3 scripts/check-readme-versions.py
+
+scripts/cut-release.sh checks the README it is about to propose before the release is tagged, so
+it names the release to check against instead of reading the newest tag:
+
+  python3 scripts/check-readme-versions.py --release 1.8.5
 """
 
 import re
@@ -66,7 +71,14 @@ def current_release() -> str:
 
 
 def main() -> int:
-    version = current_release()
+    args = sys.argv[1:]
+    if args[:1] == ["--release"] and len(args) == 2:
+        version = args[1]
+    elif not args:
+        version = current_release()
+    else:
+        print("usage: check-readme-versions.py [--release <version>]", file=sys.stderr)
+        return 2
     stream = ".".join(version.split(".")[:2])          # 1.8.0 -> 1.8
     text = open(README, encoding="utf-8").read()
     lines = text.splitlines()

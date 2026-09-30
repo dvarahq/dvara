@@ -65,12 +65,12 @@ jobs:
           server-username: MAVEN_USERNAME
           server-password: MAVEN_PASSWORD
 
-      # A release is cut as two commits on main: `Release X`, which carries the released version
-      # and is tagged, then `Open <next>-SNAPSHOT`. scripts/cut-release.sh pushes both at once, so
-      # main's head is normally the snapshot. If a push ever ends at the Release commit, there is
-      # nothing for this job to publish: release.yml publishes that version from its tag, and a
-      # deploy here would upload it by a second route. So the job skips, and the run stays green,
-      # because a release commit on main is correct.
+      # A release is cut as two pull requests merged into main: `Release X`, whose merge commit
+      # carries the released version and is tagged, then the one that opens the next snapshot.
+      # Between the two, main's head is the Release commit, and there is nothing for this job to
+      # publish: release.yml publishes that version from its tag, and a deploy here would upload it
+      # by a second route. So the job skips, and the run stays green, because a release commit on
+      # main is correct.
       - name: The version is a snapshot
         id: version
         run: |
