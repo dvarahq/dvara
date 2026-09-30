@@ -263,7 +263,7 @@ key as its API key.
 > | LLM07 | System prompt leakage | ✅ | extraction attempts caught on the request, leaked system prompt content caught on the response |
 > | LLM08 | Vector and embedding weaknesses | — | lives inside the RAG pipeline, outside a gateway |
 > | LLM09 | Misinformation | — | grounding detection is not in this build |
-> | LLM10 | Unbounded consumption | ✅ | context-window limits, per-provider timeouts and circuit breakers by default; per-key request and token rate limits and input token caps when enabled |
+> | LLM10 | Unbounded consumption | ✅ | context-window limits, provider response size limits, per-provider timeouts and circuit breakers by default; per-key request and token rate limits and input token caps when enabled |
 >
 > ✅ covered · ◐ partly covered · — not covered. The list is [OWASP's 2025 edition](https://genai.owasp.org/llm-top-10/).
 

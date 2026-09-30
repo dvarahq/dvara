@@ -89,15 +89,33 @@ public class ProviderAutoConfiguration {
     /** Null when no module customises provider TLS. The builder is then used as it arrives. */
     private final ProviderTlsCustomizer tlsCustomizer;
     private final com.dvarahq.core.audit.AuditWriter rateLimitAuditWriter; // nullable — best-effort shed audit
+    /** Read when a provider's client is built, for the response size limits. */
+    private final ObjectProvider<GatewayProperties> properties;
 
     public ProviderAutoConfiguration(ObjectProvider<ProviderRateLimitTracker> rateLimitTracker,
                                      ObjectProvider<ProviderTlsCustomizer> tlsCustomizer,
-                                     ObjectProvider<com.dvarahq.core.audit.AuditWriter> auditWriter) {
+                                     ObjectProvider<com.dvarahq.core.audit.AuditWriter> auditWriter,
+                                     ObjectProvider<GatewayProperties> properties) {
         // Resolved once. Absent means no interceptor and no customiser at all, rather than an
         // always-allow tracker or an identity customiser consulted on every call.
         this.rateLimitTracker = rateLimitTracker.getIfAvailable();
         this.tlsCustomizer = tlsCustomizer.getIfAvailable();
         this.rateLimitAuditWriter = auditWriter.getIfAvailable();
+        this.properties = properties;
+    }
+
+    /**
+     * Bounds the bytes read from every provider's responses. Every provider client is built through
+     * {@link #clientFor} or {@link #tlsOnly}, so this is the one place the limit is applied.
+     */
+    private RestClient.Builder sizeLimited(String provider, RestClient.Builder builder) {
+        GatewayProperties props = properties.getIfAvailable(GatewayProperties::new);
+        GatewayProperties.ResponseLimitsConfig limits = props.getResponseLimits();
+        if (limits.getMaxBodyBytes() <= 0 && limits.getMaxStreamBytes() <= 0) {
+            return builder;
+        }
+        return builder.requestInterceptor(new com.dvarahq.providers.support.ResponseSizeLimitInterceptor(
+                provider, limits.getMaxBodyBytes(), limits.getMaxStreamBytes()));
     }
 
     /**
@@ -106,7 +124,7 @@ public class ProviderAutoConfiguration {
      * {@code provider.<name>.api-key}, so the tracker, which keys on that single secret, is not applied.
      */
     private RestClient.Builder tlsOnly(String provider, RestClient.Builder restClientBuilder) {
-        RestClient.Builder builder = restClientBuilder.clone();
+        RestClient.Builder builder = sizeLimited(provider, restClientBuilder.clone());
         return tlsCustomizer == null ? builder : tlsCustomizer.customize(provider, builder);
     }
 
@@ -118,7 +136,7 @@ public class ProviderAutoConfiguration {
      */
     private RestClient.Builder clientFor(String provider, RestClient.Builder restClientBuilder,
                                          SecretProvider secretProvider) {
-        RestClient.Builder builder = restClientBuilder.clone();
+        RestClient.Builder builder = sizeLimited(provider, restClientBuilder.clone());
         if (tlsCustomizer != null) {
             builder = tlsCustomizer.customize(provider, builder);
         }
@@ -175,7 +193,7 @@ public class ProviderAutoConfiguration {
                     .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
                     .connectTimeout(java.time.Duration.ofSeconds(10))
                     .build();
-            provider.usePerWorkspaceEndpoints(endpoints.getIfAvailable(), restClientBuilder.clone()
+            provider.usePerWorkspaceEndpoints(endpoints.getIfAvailable(), sizeLimited("ollama", restClientBuilder.clone())
                     .requestFactory(new org.springframework.http.client.JdkClientHttpRequestFactory(http))
                     .build());
         }
