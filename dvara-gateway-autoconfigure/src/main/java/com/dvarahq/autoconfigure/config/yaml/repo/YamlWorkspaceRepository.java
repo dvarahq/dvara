@@ -59,6 +59,16 @@ public class YamlWorkspaceRepository implements WorkspaceRepository {
     }
 
     @Override
+    public Workspace saveWithoutMetadata(Workspace workspace) {
+        throw YamlReadOnly.on("WorkspaceRepository.saveWithoutMetadata");
+    }
+
+    @Override
+    public Workspace saveIfUnchanged(Workspace workspace, java.time.Instant readUpdatedAt) {
+        throw YamlReadOnly.on("WorkspaceRepository.saveIfUnchanged");
+    }
+
+    @Override
     public boolean deleteById(String id) {
         throw YamlReadOnly.on("WorkspaceRepository.deleteById");
     }
