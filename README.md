@@ -605,6 +605,37 @@ A pushed version tag builds, tests, publishes the artifacts to Maven Central, at
 GitHub Release and publishes the image. The Central upload stops at a staged bundle and is released
 by hand, because a version on Central can never be deleted or replaced.
 
+`scripts/cut-release.sh` makes the tag. It opens a pull request that sets the version, waits for
+the `build` and `gate` checks, squash-merges it and tags the merge commit. A second pull request
+then names the release in this README and opens the next `-SNAPSHOT`. It only prints its plan
+unless given `--execute`.
+
+The same script runs from the Actions tab: **cut-release** → Run workflow, with the version, the
+release-candidate number (blank for a final release) and `confirm`. It plans unless `confirm` is
+`execute`. The workflow needs a repository secret, `RELEASE_TOKEN`, and stops at its first step
+without it. The job's own token cannot be used: a pull request or tag it pushes starts no other
+workflow, so the checks would never run and nothing would be published. To create the token:
+
+1. Signed in as grabdoc: Settings → Developer settings → Personal access tokens → Fine-grained
+   tokens → Generate new token. The script refuses a token owned by anyone else.
+2. Resource owner **dvarahq**. Repository access: **Only select repositories** → `dvarahq/dvara`.
+   Choose the longest expiry allowed, and note the date.
+3. Repository permissions:
+   - **Contents: Read and write**: push the release branches and the tag, merge, and delete the
+     branches after.
+   - **Pull requests: Read and write**: open the two pull requests and squash-merge them.
+   - Metadata: Read is added by GitHub. Nothing else. The repository is public, so the checks on
+     each pull request and the workflow runs are read without a permission. No Workflows either,
+     because the release commits change only the poms and this README.
+4. If dvarahq requires approval of fine-grained tokens, an organisation owner approves it.
+5. Add it to `dvarahq/dvara` as the repository secret `RELEASE_TOKEN` (Settings → Secrets and
+   variables → Actions), or run `gh secret set RELEASE_TOKEN -R dvarahq/dvara`.
+6. Check it with a plan run. The preflight must print `gh user: grabdoc`.
+
+The rules on `main` must let the token's owner merge a pull request once `build` and `gate` pass;
+the pull requests still need both checks green. When the token expires, the plan stops at the
+`gh user` check; generate a new one with the same settings and replace the secret.
+
 </details>
 
 ## Documentation
