@@ -1,0 +1,84 @@
+# Runs scripts/cut-release.sh from the Actions tab, so a release does not depend on one laptop.
+# It plans by default: `confirm` must be set to `execute` before anything is pushed, merged or
+# tagged.
+#
+# It needs the RELEASE_TOKEN repository secret, and refuses to start without it. The job's own
+# GITHUB_TOKEN cannot do this job: a pull request it opens and a tag it pushes start no other
+# workflow, so the build and gate checks would never run on the release pull request, and
+# release.yml would never publish the tag. How to create the token: README.md, "How a release is
+# cut".
+
+name: cut-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to cut, X.Y.Z'
+        required: true
+      rc:
+        description: 'Release-candidate number, blank for the release itself'
+        required: false
+        default: ''
+      confirm:
+        description: 'Type "execute" to cut the release; anything else prints the plan and stops'
+        required: true
+        default: 'plan'
+
+# Every write goes through RELEASE_TOKEN. The job's own token only reads.
+permissions:
+  contents: read
+
+# Two cuts at once would race for the same release branch and the same tag.
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the release token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error title=RELEASE_TOKEN is not set::This workflow needs the RELEASE_TOKEN repository secret. Without it, the release pull request gets no checks and the tag never starts release.yml. Create it as described in README.md (\"How a release is cut\"), or cut the release locally with scripts/cut-release.sh."
+            exit 1
+          fi
+
+      # The checkout stores this token for git, so the pushes of the release branches and the tag
+      # are made as the token's owner. That is what lets them start build, gate and release.yml.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      # The script reads the project version and builds the release with the Maven wrapper.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # The script sets this identity on every commit and tag itself; setting it here as well means
+      # no git command on the runner falls back to a machine default.
+      - name: Identify the committer
+        run: |
+          git config user.name "grabdoc"
+          git config user.email "grabdoc@users.noreply.github.com"
+
+      # The script refuses unless HEAD is origin/main, so a run started from any other branch
+      # stops in the preflight.
+      - name: Cut
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          # Inputs reach the script as data, never as shell text.
+          VERSION: ${{ inputs.version }}
+          RC: ${{ inputs.rc }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          args=("$VERSION")
+          [ -n "$RC" ] && args+=(--rc "$RC")
+          [ "$CONFIRM" = "execute" ] && args+=(--execute)
+          scripts/cut-release.sh "${args[@]}"
