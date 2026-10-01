@@ -261,24 +261,30 @@ public class ProviderDispatcher {
 
     /**
      * A request only an Anthropic provider can serve is refused on any other, naming the provider: extended
-     * thinking changes the answer, so serving it without would serve a different request. What else a Messages
-     * API caller sent (fields the gateway does not model, the beta header) only tunes how Anthropic serves the
-     * call, so another provider leaves it out. A paused primary is left to its route's chain, which skips a
-     * provider that cannot take the request.
+     * thinking changes the answer, so serving it without would serve a different request. What only tunes how
+     * Anthropic serves the call — a field the gateway does not model, a block type it does not read,
+     * {@code cache_control}, the beta header — is left out for another provider, logged and counted. A paused
+     * primary is left to its route's chain, which skips a provider that cannot take the request.
      */
     private void checkAnthropicOnly(ChatRequest request, Selection selection) {
         if (selection.unavailable() != null || selection.provider().speaksAnthropicMessages()) {
             return;
         }
-        if (request.needsAnthropic()) {
-            throw new GatewayException("UNSUPPORTED_CAPABILITY", "Extended thinking is served only by an"
-                    + " Anthropic provider, and this request routes to provider " + selection.provider().name()
-                    + ". Route the model to Anthropic, or send the request without thinking.");
+        List<String> anthropicOnly = request.anthropicOnly();
+        if (!anthropicOnly.isEmpty()) {
+            throw new GatewayException("UNSUPPORTED_CAPABILITY", "This request routes to provider "
+                    + selection.provider().name() + ", which cannot be given what only an Anthropic provider "
+                    + "serves: " + String.join("; ", anthropicOnly) + ". Route the model to Anthropic, or send "
+                    + "the request without " + (anthropicOnly.size() == 1 ? "it." : "them."));
         }
-        if (request.getAnthropic() != null && !request.getAnthropic().carriesNothing() && log.isDebugEnabled()) {
-            log.debug("Provider [{}] does not speak the Anthropic Messages API; left out for it: fields {}, beta {}",
-                    selection.provider().name(), request.getAnthropic().fields().keySet(),
-                    request.getAnthropic().beta());
+        if (request.getAnthropic() == null) {
+            return;
+        }
+        List<String> ignored = request.getAnthropic().ignoredByOthers();
+        ignored.forEach(metrics::recordAnthropicFieldDropped);
+        if (log.isDebugEnabled() && (!ignored.isEmpty() || request.getAnthropic().beta() != null)) {
+            log.debug("Provider [{}] does not speak the Anthropic Messages API; left out for it: {}, beta {}",
+                    selection.provider().name(), ignored, request.getAnthropic().beta());
         }
     }
 

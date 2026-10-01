@@ -16,6 +16,7 @@
 package com.dvarahq.server.v1;
 
 import com.dvarahq.core.exception.GatewayException;
+import com.dvarahq.core.model.AnthropicMessagesBody;
 import com.dvarahq.core.model.AnthropicPassthrough;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
@@ -34,33 +35,34 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Translation between the Anthropic Messages API and the gateway's own request and response.
+ * The Anthropic Messages API on the gateway's side: the request read for governance, and the response in
+ * Anthropic's shape when it has to be rebuilt.
  *
- * <p>Only translation: the request that comes out runs the same governance line as every other
- * doorway. Everything that has a place in the gateway's model is carried across. What only Anthropic's API
- * has — extended thinking and its blocks, top-level fields the gateway does not model, the
- * {@code anthropic-beta} header — travels as an {@link AnthropicPassthrough}: an Anthropic provider sends it
- * on unchanged, and the dispatcher refuses thinking on any other provider. A field the gateway knows it
- * cannot govern, because the provider would act on it outside the gateway, is refused with
- * {@code UNSUPPORTED_CAPABILITY}.</p>
+ * <p>The request body itself is kept as it came ({@link AnthropicMessagesBody}). Its text is read out as the
+ * gateway's messages, so the same policy, PII and guardrail checks as every other doorway apply, and an
+ * Anthropic provider sends the body on with only the governed edits. Any other provider is sent those
+ * messages:</p>
  *
  * <ul>
- *   <li>{@code system} becomes a system message, never user content.</li>
+ *   <li>{@code system} becomes a system message, never user content; a {@code system} message inside
+ *       {@code messages} stays a system message at its place.</li>
  *   <li>A {@code tool_use} block becomes a tool call on the assistant message, its {@code input}
  *       serialized to the JSON text a tool call carries.</li>
  *   <li>A {@code tool_result} block becomes a {@code tool} message answering that call. The blocks
  *       of one user turn keep their order: each result, then any text and images in a user message.</li>
  *   <li>A tool definition's {@code input_schema} becomes its parameters.</li>
  * </ul>
+ *
+ * <p>Extended thinking is refused on a provider that is not Anthropic, naming the provider. What only tunes
+ * how Anthropic serves the call — a top-level field the gateway does not model, a block type it does not
+ * read, {@code cache_control} — is left out for another provider. A field the gateway knows it cannot govern,
+ * because the provider would act on it outside the gateway, is refused on every provider with
+ * {@code UNSUPPORTED_CAPABILITY}.</p>
  */
 final class AnthropicMessages {
 
     /** The one API version this doorway speaks. */
     static final String VERSION = "2023-06-01";
-
-    /** Blocks that may appear in a message's content. */
-    private static final Set<String> BLOCK_TYPES =
-            Set.of("text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking");
 
     /**
      * Top-level fields the gateway cannot govern: with them the provider itself would call MCP servers or run
@@ -90,20 +92,11 @@ final class AnthropicMessages {
     // Request
     // -------------------------------------------------------------------------
 
-    static ChatRequest toInternal(MessagesRequest r, String beta) {
+    static ChatRequest toInternal(MessagesRequest r, String beta, AnthropicMessagesBody body) {
         rejectUnsupported(r);
-        List<MultimodalMessage> messages = new ArrayList<>();
-        String system = systemText(r.getSystem());
-        if (system != null) {
-            messages.add(MultimodalMessage.builder().role("system")
-                    .content(List.of(new ContentBlock.TextBlock(system))).build());
-        }
-        for (Map<String, Object> m : r.getMessages()) {
-            messages.addAll(message(m));
-        }
         return ChatRequest.builder()
                 .model(r.getModel())
-                .messages(messages)
+                .messages(body.messages())
                 .stream(Boolean.TRUE.equals(r.getStream()))
                 .maxTokens(r.getMaxTokens())
                 .temperature(r.getTemperature())
@@ -112,7 +105,7 @@ final class AnthropicMessages {
                 .tools(tools(r.getTools()))
                 .toolChoice(toolChoice(r.getToolChoice()))
                 .user(endUser(r.getMetadata()))
-                .anthropic(new AnthropicPassthrough(r.getThinking(), r.getOther(), beta))
+                .anthropic(new AnthropicPassthrough(r.getThinking(), r.getOther(), beta, body))
                 .build();
     }
 
@@ -129,130 +122,6 @@ final class AnthropicMessages {
                 }
             }
         }
-    }
-
-    private static String systemText(Object system) {
-        if (system == null) {
-            return null;
-        }
-        if (system instanceof String s) {
-            return s.isEmpty() ? null : s;
-        }
-        if (system instanceof List<?> blocks) {
-            List<String> parts = new ArrayList<>();
-            for (Object b : blocks) {
-                Map<String, Object> block = asMap(b, "system blocks must be objects");
-                if (!"text".equals(block.get("type"))) {
-                    throw invalid("system blocks must be text blocks, not " + block.get("type"));
-                }
-                parts.add(string(block.get("text")));
-            }
-            return parts.isEmpty() ? null : String.join("\n\n", parts);
-        }
-        throw invalid("system must be a string or a list of text blocks");
-    }
-
-    /** One Anthropic message as one or more of the gateway's messages. */
-    private static List<MultimodalMessage> message(Map<String, Object> m) {
-        String role = string(m.get("role"));
-        if (!"user".equals(role) && !"assistant".equals(role)) {
-            throw invalid("message role must be user or assistant, not " + role);
-        }
-        Object content = m.get("content");
-        if (content instanceof String s) {
-            return List.of(MultimodalMessage.builder().role(role)
-                    .content(List.of(new ContentBlock.TextBlock(s))).build());
-        }
-        if (!(content instanceof List<?> blocks)) {
-            throw invalid("message content must be a string or a list of blocks");
-        }
-        return "assistant".equals(role) ? List.of(assistant(blocks)) : user(blocks);
-    }
-
-    private static MultimodalMessage assistant(List<?> blocks) {
-        List<ContentBlock> content = new ArrayList<>();
-        List<ToolCall> calls = new ArrayList<>();
-        for (Object b : blocks) {
-            Map<String, Object> block = block(b);
-            switch (string(block.get("type"))) {
-                case "text" -> content.add(new ContentBlock.TextBlock(string(block.get("text"))));
-                case "tool_use" -> calls.add(ToolCall.builder()
-                        .id(string(block.get("id")))
-                        .name(string(block.get("name")))
-                        .arguments(json(block.get("input") == null ? Map.of() : block.get("input")))
-                        .build());
-                // Signed by Anthropic, so carried exactly as they came.
-                case "thinking" -> content.add(new ContentBlock.ThinkingBlock(
-                        string(block.get("thinking")), block.get("signature") == null ? null : string(block.get("signature"))));
-                case "redacted_thinking" -> content.add(new ContentBlock.RedactedThinkingBlock(string(block.get("data"))));
-                default -> throw unsupported("an assistant message may carry text, thinking and tool_use blocks on "
-                        + "/v1/messages, not " + block.get("type") + ".");
-            }
-        }
-        return MultimodalMessage.builder().role("assistant").content(content)
-                .toolCalls(calls.isEmpty() ? null : calls).build();
-    }
-
-    private static List<MultimodalMessage> user(List<?> blocks) {
-        List<MultimodalMessage> out = new ArrayList<>();
-        List<ContentBlock> content = new ArrayList<>();
-        for (Object b : blocks) {
-            Map<String, Object> block = block(b);
-            switch (string(block.get("type"))) {
-                case "text" -> content.add(new ContentBlock.TextBlock(string(block.get("text"))));
-                case "image" -> content.add(image(block));
-                case "tool_result" -> {
-                    if (!content.isEmpty()) {
-                        // A result after other content: keep the order the caller gave.
-                        out.add(MultimodalMessage.builder().role("user").content(content).build());
-                        content = new ArrayList<>();
-                    }
-                    out.add(toolResult(block));
-                }
-                default -> throw unsupported("a user message may carry text, image and tool_result blocks on "
-                        + "/v1/messages, not " + block.get("type") + ".");
-            }
-        }
-        if (!content.isEmpty() || out.isEmpty()) {
-            out.add(MultimodalMessage.builder().role("user").content(content).build());
-        }
-        return out;
-    }
-
-    private static MultimodalMessage toolResult(Map<String, Object> block) {
-        Object content = block.get("content");
-        String text;
-        if (content == null) {
-            text = "";
-        } else if (content instanceof String s) {
-            text = s;
-        } else if (content instanceof List<?> parts) {
-            List<String> texts = new ArrayList<>();
-            for (Object p : parts) {
-                Map<String, Object> part = block(p);
-                if (!"text".equals(part.get("type"))) {
-                    throw unsupported("a tool_result may carry text on /v1/messages, not " + part.get("type") + ".");
-                }
-                texts.add(string(part.get("text")));
-            }
-            text = String.join("\n", texts);
-        } else {
-            throw invalid("tool_result content must be a string or a list of blocks");
-        }
-        MultimodalMessage result = MultimodalMessage.toolResult(string(block.get("tool_use_id")), text);
-        if (Boolean.TRUE.equals(block.get("is_error"))) {
-            result.setToolError(true);
-        }
-        return result;
-    }
-
-    private static ContentBlock image(Map<String, Object> block) {
-        Map<String, Object> source = asMap(block.get("source"), "an image block needs a source");
-        return switch (string(source.get("type"))) {
-            case "base64" -> new ContentBlock.ImageBlock(string(source.get("media_type")), string(source.get("data")));
-            case "url" -> new ContentBlock.ImageBlock(ContentBlock.ImageBlock.URL_MEDIA_TYPE, string(source.get("url")));
-            default -> throw unsupported("image source " + source.get("type") + " is not supported on /v1/messages.");
-        };
     }
 
     private static List<ToolDefinition> tools(List<Map<String, Object>> tools) {
@@ -287,9 +156,7 @@ final class AnthropicMessages {
         if (choice == null) {
             return null;
         }
-        if (Boolean.TRUE.equals(choice.get("disable_parallel_tool_use"))) {
-            throw unsupported("disable_parallel_tool_use is not supported on /v1/messages.");
-        }
+        // disable_parallel_tool_use goes to Anthropic with the body; another provider is not given it.
         return switch (string(choice.get("type"))) {
             case "auto" -> "auto";
             case "any" -> "required";
@@ -408,32 +275,8 @@ final class AnthropicMessages {
     // Helpers
     // -------------------------------------------------------------------------
 
-    private static Map<String, Object> block(Object b) {
-        Map<String, Object> block = asMap(b, "content blocks must be objects");
-        if (!BLOCK_TYPES.contains(string(block.get("type")))) {
-            throw unsupported("the content block type " + block.get("type") + " is not supported on /v1/messages.");
-        }
-        return block;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> asMap(Object o, String message) {
-        if (o instanceof Map<?, ?> m) {
-            return (Map<String, Object>) m;
-        }
-        throw invalid(message);
-    }
-
     private static String string(Object o) {
         return o == null ? "" : o.toString();
-    }
-
-    private static String json(Object value) {
-        try {
-            return JsonMapper.instance().writeValueAsString(value);
-        } catch (Exception e) {
-            throw invalid("a tool_use input could not be read as JSON");
-        }
     }
 
     static Map<String, Object> map(Object... kv) {

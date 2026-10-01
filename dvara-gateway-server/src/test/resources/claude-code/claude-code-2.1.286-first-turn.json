@@ -1,0 +1,257 @@
+{
+  "_note": "Captured from Claude Code 2.1.286 (claude -p, default model) against a local stub. Prompt text, paths, ids and most tool definitions are replaced; every field, role, block type, cache_control and header value is as sent.",
+  "method": "POST",
+  "path": "/v1/messages?beta=true",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "claude-cli/2.1.286 (external, sdk-cli)",
+    "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,effort-2025-11-24,dangerous-tool-use-2026-09-03,afk-mode-2026-01-31",
+    "anthropic-dangerous-direct-browser-access": "true",
+    "anthropic-version": "2023-06-01",
+    "x-app": "cli",
+    "X-Claude-Code-Session-Id": "00000000-0000-4000-8000-000000000000"
+  },
+  "body": {
+    "model": "claude-opus-5-5",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "<system-reminder>\nToday's date is 2026-09-30.\n</system-reminder>\n"
+          },
+          {
+            "type": "text",
+            "text": "Read notes.txt and reply with its first line."
+          }
+        ]
+      },
+      {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /work\n - Is a git repository: false\n - Platform: darwin\n",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "output_config": {
+          "effort": "medium"
+        }
+      }
+    ],
+    "system": [
+      {
+        "type": "text",
+        "text": "x-anthropic-billing-header: cc_version=2.1.286.4ef; cc_entrypoint=sdk-cli;"
+      },
+      {
+        "type": "text",
+        "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      },
+      {
+        "type": "text",
+        "text": "You are an interactive agent that helps users with software engineering tasks. Use the tools available to you.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "Bash",
+        "description": "Executes a bash command and returns its output.",
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "command": {
+              "description": "The command to execute",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Optional timeout in milliseconds (max 600000 for a foreground command)",
+              "type": "number"
+            },
+            "description": {
+              "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nSay what the command does in plain words: do not echo the command's text, its flags, or file paths - the user reads this description, often without seeing the command.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls → \"List files in current directory\"\n- git status → \"Show working tree status\"\n- npm install → \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; → \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main → \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' → \"Fetch JSON from URL and extract data array elements\"",
+              "type": "string"
+            },
+            "run_in_background": {
+              "description": "Set to true to run this command in the background. With it, `timeout` limits how long the command may run in the background before it is stopped (default 1800000 ms, max 7200000 ms).",
+              "type": "boolean"
+            },
+            "dangerouslyDisableSandbox": {
+              "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "Edit",
+        "description": "Performs exact string replacement in a file.",
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "file_path": {
+              "description": "The absolute path to the file to modify",
+              "type": "string"
+            },
+            "old_string": {
+              "description": "The text to replace",
+              "type": "string"
+            },
+            "new_string": {
+              "description": "The text to replace it with (must be different from old_string)",
+              "type": "string"
+            },
+            "replace_all": {
+              "description": "Replace all occurrences of old_string (default false)",
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "file_path",
+            "old_string",
+            "new_string"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "Read",
+        "description": "Reads a file from the local filesystem.",
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "file_path": {
+              "description": "The absolute path to the file to read",
+              "type": "string"
+            },
+            "offset": {
+              "description": "The line number to start reading from. Only provide if the file is too large to read at once",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "limit": {
+              "description": "The number of lines to read. Only provide if the file is too large to read at once.",
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "pages": {
+              "description": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files. Maximum 20 pages per request.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_path"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "metadata": {
+      "user_id": "{\"device_id\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"account_uuid\":\"\",\"session_id\":\"00000000-0000-4000-8000-000000000000\"}"
+    },
+    "max_tokens": 128000,
+    "thinking": {
+      "type": "adaptive",
+      "display": "omitted"
+    },
+    "context_management": {
+      "edits": [
+        {
+          "type": "clear_thinking_20251015",
+          "keep": "all"
+        }
+      ]
+    },
+    "safeguards": [
+      {
+        "type": "dangerous_tool_use",
+        "classifier_context": {
+          "v": 1,
+          "permission_mode": "auto",
+          "platform": "macos",
+          "live_cwd": "/work",
+          "home_dir": "/home/dev",
+          "rule_roots": {
+            "userSettings": "/home/dev/.claude",
+            "projectSettings": "/work",
+            "localSettings": "/work",
+            "flagSettings": "/work",
+            "policySettings": "/work",
+            "cliArg": "/work",
+            "command": "/work",
+            "session": "/work",
+            "toolsNarrowing": "/work",
+            "mcpServerPolicy": "/work",
+            "hostCredential": "/work"
+          },
+          "trusted_directories": {
+            "primary": {
+              "path": "/work",
+              "resolved": [
+                "/work"
+              ]
+            },
+            "additional": [],
+            "network": [],
+            "block_reads_outside_working_directories": false
+          },
+          "rules": {
+            "allow": [],
+            "deny": [],
+            "ask": []
+          },
+          "auto_mode": {
+            "allow": [],
+            "soft_deny": [],
+            "hard_deny": [],
+            "environment": []
+          },
+          "artifact_consent_holdback": false,
+          "case_insensitive_paths": false,
+          "restricted": false,
+          "is_remote_mode": false,
+          "classify_all_shell": false,
+          "user_identity": "dev",
+          "git_state": {
+            "cwd": "/work",
+            "root": null,
+            "branch": null,
+            "default_branch": null,
+            "status": null,
+            "visibility": {
+              "origin": null,
+              "push_remote": null,
+              "remotes": [],
+              "visibility_cache": []
+            },
+            "error": "not_a_repo"
+          }
+        }
+      }
+    ],
+    "output_config": {
+      "effort": "medium"
+    },
+    "stream": true
+  }
+}

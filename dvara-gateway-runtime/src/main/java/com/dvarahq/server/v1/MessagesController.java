@@ -27,8 +27,12 @@ import com.dvarahq.core.guardrail.TokenEstimator;
 import com.dvarahq.core.metering.CallOutcomeListener;
 import com.dvarahq.core.metering.TokenUsageRepository;
 import com.dvarahq.core.metering.WorkspaceUsageListener;
+import com.dvarahq.core.model.AnthropicEvent;
+import com.dvarahq.core.model.AnthropicMessagesBody;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
+import com.dvarahq.core.model.HeldDelivery;
+import com.dvarahq.core.model.MultimodalMessage;
 import com.dvarahq.core.model.SseChunk;
 import com.dvarahq.core.model.ThinkingDelta;
 import com.dvarahq.core.model.ToolCallDelta;
@@ -50,7 +54,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import jakarta.validation.Valid;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -79,10 +84,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * The Anthropic Messages API ({@code POST /v1/messages}), so a client built for it — Claude Code,
  * the Anthropic SDKs — can be pointed at the gateway and governed.
  *
- * <p>This controller only translates (see {@link AnthropicMessages}) and writes Anthropic's stream
- * events. The request runs the same {@link ChatExecutionService} line as
- * {@code /v1/chat/completions}: policy, PII, guardrails, budget, rate limits, streaming enforcement,
- * metering and audit, on whichever provider routing picks.</p>
+ * <p>The request runs the same {@link ChatExecutionService} line as {@code /v1/chat/completions}: policy,
+ * PII, guardrails, budget, rate limits, streaming enforcement, metering and audit, on whichever provider
+ * routing picks. On a route to Anthropic the body goes on as the caller sent it, with only the governed edits
+ * ({@link AnthropicMessagesBody}), and Anthropic's response, plain or streamed, comes back as Anthropic sent
+ * it, again with only the governed edits. A response that governance had to hold or rebuild, or one from
+ * another provider, is written in Anthropic's shape here (see {@link AnthropicMessages}).</p>
  *
  * <p>The {@code anthropic-version} header is required and must be the version this doorway speaks. The
  * {@code anthropic-beta} header is sent on to an Anthropic provider as it came. Errors come back in
@@ -104,6 +111,7 @@ public class MessagesController {
 
     private final long streamingTimeoutMs;
     private final ChatExecutionService executionService;
+    private final GatewayMetrics metrics;
 
     public MessagesController(ProviderDispatcher dispatcher,
                               RequestPipeline requestPipeline,
@@ -124,6 +132,7 @@ public class MessagesController {
                                       "${dvara.llm-gateway.resilience.timeout.streaming-timeout-ms:120000}")
                               long streamingTimeoutMs) {
         this.streamingTimeoutMs = streamingTimeoutMs;
+        this.metrics = metrics;
         this.executionService = new ChatExecutionService(dispatcher, requestPipeline, responseCache,
                 tokenUsageRepository, usageListeners, costCalculationService, costEstimator,
                 piiEnforcer, rateLimiter,
@@ -140,10 +149,13 @@ public class MessagesController {
     @ApiResponse(responseCode = "502", description = "Upstream provider error")
     public Object messages(@RequestHeader(value = "anthropic-version", required = false) String version,
                            @RequestHeader(value = "anthropic-beta", required = false) String beta,
-                           @Valid @RequestBody MessagesRequest request,
+                           @RequestBody(required = false) byte[] rawBody,
                            HttpServletRequest httpRequest,
                            HttpServletResponse httpResponse) {
         AnthropicMessages.checkVersion(version);
+        AnthropicMessagesBody body = AnthropicMessagesBody.parse(rawBody);
+        MessagesRequest request = body.bind(MessagesRequest.class);
+        requireModelAndMessages(request);
         if (request.getMaxTokens() == null) {
             throw new GatewayException("INVALID_REQUEST", "max_tokens is required");
         }
@@ -152,7 +164,8 @@ public class MessagesController {
         httpRequest.setAttribute(AccessLogFilter.ATTR_MODEL, request.getModel());
         httpRequest.setAttribute(AccessLogFilter.ATTR_STREAM, String.valueOf(stream));
 
-        ChatRequest internal = AnthropicMessages.toInternal(request, beta);
+        ChatRequest internal = AnthropicMessages.toInternal(request, beta, body);
+        body.opaqueBlocks().forEach((type, count) -> metrics.recordAnthropicOpaqueBlocks("request", type, count));
         if (stream) {
             return handleStreaming(internal, traceId, httpRequest, httpResponse);
         }
@@ -169,9 +182,42 @@ public class MessagesController {
                 response.getGatewayHeaders().forEach(builder::header);
             }
             ContextResponseHeaders.apply(builder, ctx, ctx.getPolicyDecision());
+            String asSent = asAnthropicSentIt(body, response);
+            if (asSent != null) {
+                return builder.contentType(MediaType.APPLICATION_JSON).body(asSent);
+            }
             return builder.body(AnthropicMessages.toMessage(response, prep.request().getModel()));
         } finally {
             executionService.releasePriority(ctx);
+        }
+    }
+
+    /**
+     * Anthropic's own response, with the governed text written back, when an Anthropic provider answered and
+     * the governed answer still lines up with it block for block; null when the answer is to be rebuilt.
+     */
+    private String asAnthropicSentIt(AnthropicMessagesBody body, ChatResponse response) {
+        ObjectNode upstream = body.upstreamResponse();
+        if (upstream == null || response.getChoices() == null || response.getChoices().isEmpty()) {
+            return null;
+        }
+        MultimodalMessage governed = response.getChoices().get(0).getMessage();
+        ObjectNode out = AnthropicMessagesBody.governedResponse(upstream, governed);
+        if (out == null) {
+            return null;
+        }
+        Map<String, Integer> opaque = new java.util.LinkedHashMap<>();
+        AnthropicMessagesBody.responseMessage(upstream, opaque);
+        opaque.forEach((type, count) -> metrics.recordAnthropicOpaqueBlocks("response", type, count));
+        return AnthropicMessagesBody.write(out);
+    }
+
+    private static void requireModelAndMessages(MessagesRequest request) {
+        if (request.getModel() == null || request.getModel().isBlank()) {
+            throw new GatewayException("INVALID_REQUEST", "model is required");
+        }
+        if (request.getMessages() == null || request.getMessages().isEmpty()) {
+            throw new GatewayException("INVALID_REQUEST", "messages is required");
         }
     }
 
@@ -189,18 +235,16 @@ public class MessagesController {
     @ApiResponse(responseCode = "400", description = "Invalid request, unsupported field or API version")
     public Map<String, Object> countTokens(@RequestHeader(value = "anthropic-version", required = false) String version,
                                            @RequestHeader(value = "anthropic-beta", required = false) String beta,
-                                           @RequestBody MessagesRequest request,
+                                           @RequestBody(required = false) byte[] rawBody,
                                            HttpServletRequest httpRequest) {
         AnthropicMessages.checkVersion(version);
-        if (request.getModel() == null || request.getModel().isBlank()) {
-            throw new GatewayException("INVALID_REQUEST", "model is required");
-        }
-        if (request.getMessages() == null || request.getMessages().isEmpty()) {
-            throw new GatewayException("INVALID_REQUEST", "messages is required");
-        }
+        AnthropicMessagesBody body = AnthropicMessagesBody.parse(rawBody);
+        MessagesRequest request = body.bind(MessagesRequest.class);
+        requireModelAndMessages(request);
         String traceId = (String) httpRequest.getAttribute(TraceIdFilter.ATTR);
         httpRequest.setAttribute(AccessLogFilter.ATTR_MODEL, request.getModel());
-        int tokens = executionService.countInputTokens(AnthropicMessages.toInternal(request, beta), httpRequest, traceId);
+        int tokens = executionService.countInputTokens(AnthropicMessages.toInternal(request, beta, body),
+                httpRequest, traceId);
         return AnthropicMessages.map("input_tokens", tokens);
     }
 
@@ -240,12 +284,14 @@ public class MessagesController {
             Iterator<SseChunk> chunks = null;
             Exception failure = null;
             ChatExecutionService.Attribution who = attribution;
-            EventWriter events = new EventWriter(emitter);
+            EventWriter events = new EventWriter(emitter, streamRequest.getModel());
             try {
                 chunks = executionService.openStream(streamRequest, workspaceId);
                 upstream.set(chunks);
                 who = who.withUpstreamFrom(httpRequest);
-                events.messageStart(streamRequest.getModel());
+                // A guard that holds content delivers it, governed, when the stream ends: Anthropic's own
+                // events are then sent only where they carry no content.
+                boolean held = chunks instanceof HeldDelivery h && h.holdsContent();
 
                 boolean sawDone = false;
                 while (!completed.get() && chunks.hasNext()) {   // cancellation first; see ChatCompletionController
@@ -253,24 +299,36 @@ public class MessagesController {
                     if (chunk.getUsage() != null) {
                         reportedUsage.set(chunk.getUsage());
                     }
-                    if (chunk.getThinking() != null) {
-                        if (chunk.getThinking().text() != null) {
-                            output.append(chunk.getThinking().text());
+                    accumulate(chunk, output);
+                    AnthropicEvent event = chunk.getAnthropicEvent();
+                    if (event != null) {
+                        countOpaque(event);
+                        if (!held) {
+                            events.asSent(event);
+                        } else if ("message_start".equals(event.name()) || "ping".equals(event.name())) {
+                            events.asSent(event);
+                        } else if (event.opaque()) {
+                            events.opaqueRenumbered(event);
                         }
+                        if (chunk.isDone()) {
+                            sawDone = true;
+                            if (held) {
+                                events.finish(chunk.getFinishReason(), reportedUsage.get());
+                            }
+                            break;
+                        }
+                        continue;
+                    }
+                    // Content the guard delivers itself, or a provider that is not Anthropic: in Anthropic's shape.
+                    events.messageStart();
+                    if (chunk.getThinking() != null) {
                         events.thinking(chunk.getThinking());
                     }
                     if (chunk.getDelta() != null && !chunk.getDelta().isEmpty()) {
-                        output.append(chunk.getDelta());
                         events.text(chunk.getDelta());
                     }
                     if (chunk.getToolCalls() != null) {
                         for (ToolCallDelta call : chunk.getToolCalls()) {
-                            if (call.name() != null) {
-                                output.append(call.name());
-                            }
-                            if (call.argumentsFragment() != null) {
-                                output.append(call.argumentsFragment());
-                            }
                             events.toolCall(call);
                         }
                     }
@@ -325,6 +383,9 @@ public class MessagesController {
                 if (!completed.get()) {
                     log.warn("Messages streaming error for trace {}: {}", traceId, failure.getMessage());
                     try {
+                        if (upstream.get() != null) {
+                            events.messageStart();
+                        }
                         events.error(failure);
                         emitter.complete();
                     } catch (Exception ignored) {
@@ -336,10 +397,47 @@ public class MessagesController {
         return emitter;
     }
 
+    /** What the stream said, for metering when the upstream reports no usage. */
+    private static void accumulate(SseChunk chunk, StringBuilder output) {
+        if (chunk.getThinking() != null && chunk.getThinking().text() != null) {
+            output.append(chunk.getThinking().text());
+        }
+        if (chunk.getDelta() != null) {
+            output.append(chunk.getDelta());
+        }
+        if (chunk.getToolCalls() != null) {
+            for (ToolCallDelta call : chunk.getToolCalls()) {
+                if (call.name() != null) {
+                    output.append(call.name());
+                }
+                if (call.argumentsFragment() != null) {
+                    output.append(call.argumentsFragment());
+                }
+            }
+        }
+    }
+
+    /** Counts a content block of a type the gateway does not read, when its first event arrives. */
+    private void countOpaque(AnthropicEvent event) {
+        if (!event.opaque() || !"content_block_start".equals(event.name())) {
+            return;
+        }
+        try {
+            JsonNode data = com.dvarahq.core.util.JsonMapper.instance().readTree(event.data());
+            metrics.recordAnthropicOpaqueBlocks("response", data.path("content_block").path("type").asText(""), 1);
+        } catch (Exception e) {
+            log.debug("Could not read an opaque block's type: {}", e.getMessage());
+        }
+    }
+
     /**
-     * Writes Anthropic's stream events: {@code message_start}, {@code ping}, one
-     * {@code content_block_start} / {@code _delta} / {@code _stop} run per text or tool-use block, then
-     * {@code message_delta} with the stop reason and usage, and {@code message_stop}.
+     * Writes Anthropic's stream events.
+     *
+     * <p>From an Anthropic provider, each event goes as Anthropic sent it ({@link #asSent}). Otherwise, or
+     * where governance held the content and delivers it whole, the events are written here:
+     * {@code message_start}, {@code ping}, one {@code content_block_start} / {@code _delta} / {@code _stop}
+     * run per text or tool-use block, then {@code message_delta} with the stop reason and usage, and
+     * {@code message_stop}.</p>
      *
      * <p>Anthropic streams one block at a time. A tool call's fragments that come back after another
      * block has started cannot be put back into their own block, so that stream is failed rather than
@@ -349,6 +447,10 @@ public class MessagesController {
     static final class EventWriter {
 
         private final SseEmitter emitter;
+        private final String model;
+        private boolean started;
+        /** Anthropic's own message_delta was sent, so the end of the message is only message_stop. */
+        private boolean deltaSent;
         private int nextIndex;
         private Integer openIndex;
         /** The tool call the open block carries, or -1 when the open block is text or thinking. */
@@ -356,18 +458,69 @@ public class MessagesController {
         /** The thinking block the open block carries, or -1 when it is text or a tool call. */
         private int openThinking = -1;
         private final Set<Integer> closedTools = new HashSet<>();
+        /** Anthropic's block index → the index written, for blocks sent while other content is held. */
+        private final Map<Integer, Integer> renumbered = new java.util.HashMap<>();
 
-        EventWriter(SseEmitter emitter) {
+        EventWriter(SseEmitter emitter, String model) {
             this.emitter = emitter;
+            this.model = model;
         }
 
-        void messageStart(String model) throws Exception {
+        /** {@code message_start} and {@code ping}, once, unless Anthropic's own were sent. */
+        void messageStart() throws Exception {
+            if (started) {
+                return;
+            }
+            started = true;
             Map<String, Object> message = AnthropicMessages.map(
                     "id", AnthropicMessages.messageId(), "type", "message", "role", "assistant",
                     "model", model, "content", List.of(), "stop_reason", null, "stop_sequence", null,
                     "usage", AnthropicMessages.map("input_tokens", 0, "output_tokens", 0));
             send("message_start", AnthropicMessages.map("type", "message_start", "message", message));
             send("ping", AnthropicMessages.map("type", "ping"));
+        }
+
+        /** An event as Anthropic sent it. */
+        void asSent(AnthropicEvent event) throws Exception {
+            switch (event.name()) {
+                case "message_start" -> started = true;
+                case "message_delta" -> deltaSent = true;
+                case "content_block_start" -> {
+                    int index = index(event.data());
+                    if (index >= 0) {
+                        nextIndex = Math.max(nextIndex, index + 1);
+                    }
+                }
+                default -> { }
+            }
+            emitter.send(SseEmitter.event().name(event.name()).data(event.data(), MediaType.APPLICATION_JSON));
+        }
+
+        /**
+         * An event of a block the gateway does not read, sent as it arrives while the content around it is
+         * held: as Anthropic sent it, but numbered after the blocks already written.
+         */
+        void opaqueRenumbered(AnthropicEvent event) throws Exception {
+            ObjectNode data = (ObjectNode) com.dvarahq.core.util.JsonMapper.instance().readTree(event.data());
+            int upstreamIndex = data.path("index").asInt(-1);
+            if ("content_block_start".equals(event.name())) {
+                close();
+                renumbered.put(upstreamIndex, nextIndex++);
+            }
+            Integer index = renumbered.get(upstreamIndex);
+            if (index != null) {
+                data.put("index", index);
+            }
+            emitter.send(SseEmitter.event().name(event.name())
+                    .data(com.dvarahq.core.util.JsonMapper.instance().writeValueAsString(data), MediaType.APPLICATION_JSON));
+        }
+
+        private static int index(String data) {
+            try {
+                return com.dvarahq.core.util.JsonMapper.instance().readTree(data).path("index").asInt(-1);
+            } catch (Exception e) {
+                return -1;
+            }
         }
 
         void thinking(ThinkingDelta fragment) throws Exception {
@@ -418,6 +571,11 @@ public class MessagesController {
 
         void finish(String finishReason, ChatResponse.Usage usage) throws Exception {
             close();
+            if (deltaSent && !"content_filter".equals(finishReason)) {
+                send("message_stop", AnthropicMessages.map("type", "message_stop"));
+                return;
+            }
+            messageStart();
             send("message_delta", AnthropicMessages.map("type", "message_delta",
                     "delta", AnthropicMessages.map("stop_reason", AnthropicMessages.stopReason(finishReason),
                             "stop_sequence", null),

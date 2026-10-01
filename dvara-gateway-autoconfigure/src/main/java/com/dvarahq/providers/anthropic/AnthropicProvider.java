@@ -18,6 +18,8 @@ package com.dvarahq.providers.anthropic;
 import com.dvarahq.providers.support.ProviderErrors;
 
 import com.dvarahq.core.exception.GatewayException;
+import com.dvarahq.core.model.AnthropicEvent;
+import com.dvarahq.core.model.AnthropicMessagesBody;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
@@ -36,6 +38,7 @@ import com.dvarahq.providers.support.CredentialInterceptor;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.dvarahq.core.util.JsonMapper;
 import lombok.Data;
 import org.springframework.http.HttpHeaders;
@@ -97,6 +100,10 @@ public class AnthropicProvider extends AbstractLlmProvider {
 
     @Override
     public ChatResponse chat(ChatRequest request) {
+        AnthropicMessagesBody passthrough = passthrough(request);
+        if (passthrough != null) {
+            return chatAsSent(request, passthrough);
+        }
         Map<String, Object> body = buildBody(request);
 
         AnthropicResponse ar = restClient.post()
@@ -116,14 +123,65 @@ public class AnthropicProvider extends AbstractLlmProvider {
         return mapToInternal(ar, request.getModel(), request.getResponseFormat());
     }
 
+    /** The Messages API body a caller sent, when this request has one to send on as it came; else null. */
+    private static AnthropicMessagesBody passthrough(ChatRequest request) {
+        return request.getAnthropic() == null ? null : request.getAnthropic().body();
+    }
+
+    /**
+     * A Messages API request sent on as the caller sent it, with only the governed edits, and Anthropic's
+     * response kept as it came for the caller. The response read here, block for block, is what the gateway's
+     * output checks govern.
+     */
+    private ChatResponse chatAsSent(ChatRequest request, AnthropicMessagesBody passthrough) {
+        String sent = passthrough.governedJson(request);
+        String answer = restClient.post()
+                .uri("/v1/messages")
+                .contentType(MediaType.APPLICATION_JSON)
+                .headers(h -> beta(h, request))
+                .body(sent)
+                .retrieve()
+                .onStatus(status -> status.isError(), (req, res) -> {
+                    ProviderErrors.logRefusal("Anthropic", res);
+                    throw GatewayException.upstream(res.getStatusCode().value(),
+                            "Anthropic API error " + res.getStatusCode().value()
+                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                })
+                .body(String.class);
+        ObjectNode response = AnthropicMessagesBody.parseResponse(answer);
+        MultimodalMessage message = AnthropicMessagesBody.responseMessage(response, new LinkedHashMap<>());
+        String stop = response.path("stop_reason").asText(null);
+        ChatResponse out = ChatResponse.builder()
+                .id(response.path("id").asText(null))
+                .object("chat.completion")
+                .created(Instant.now().getEpochSecond())
+                .model(request.getModel())
+                .choices(List.of(ChatResponse.Choice.builder()
+                        .index(0)
+                        .message(message)
+                        .finishReason("tool_use".equals(stop) ? "tool_calls" : ("end_turn".equals(stop) ? "stop" : stop))
+                        .build()))
+                .usage(usage(response.get("usage")))
+                .build();
+        passthrough.upstreamResponse(response);
+        return out;
+    }
+
     // -------------------------------------------------------------------------
     // Streaming
     // -------------------------------------------------------------------------
 
     @Override
     public Iterator<SseChunk> streamChat(ChatRequest request) {
-        Map<String, Object> body = buildBody(request);
-        body.put("stream", true);
+        AnthropicMessagesBody passthrough = passthrough(request);
+        Object body;
+        if (passthrough != null) {
+            body = passthrough.governedJson(request);
+        } else {
+            Map<String, Object> built = buildBody(request);
+            built.put("stream", true);
+            body = built;
+        }
 
         boolean jsonSchemaMode = request.getResponseFormat() instanceof ResponseFormat.JsonSchema;
 
@@ -143,7 +201,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
                     // what returns a parked read differs per HTTP client; StreamTransport knows both.
                     java.io.InputStream responseBody = res.getBody();
                     BufferedReader reader = new BufferedReader(new InputStreamReader(responseBody, StandardCharsets.UTF_8));
-                    return new AnthropicSseIterator(() -> StreamTransport.release(res, responseBody), reader, request.getModel(), jsonSchemaMode);
+                    return new AnthropicSseIterator(() -> StreamTransport.release(res, responseBody), reader,
+                            request.getModel(), jsonSchemaMode, passthrough != null);
                 }, false);
     }
 
@@ -158,12 +217,19 @@ public class AnthropicProvider extends AbstractLlmProvider {
      */
     @Override
     public OptionalInt countInputTokens(ChatRequest request) {
-        Map<String, Object> full = buildBody(request);
-        Map<String, Object> body = new LinkedHashMap<>();
-        for (String field : COUNT_FIELDS) {
-            if (full.containsKey(field)) {
-                body.put(field, full.get(field));
+        AnthropicMessagesBody passthrough = passthrough(request);
+        Object body;
+        if (passthrough != null) {
+            body = passthrough.governedJson(request, COUNT_FIELDS);
+        } else {
+            Map<String, Object> full = buildBody(request);
+            Map<String, Object> fields = new LinkedHashMap<>();
+            for (String field : COUNT_FIELDS) {
+                if (full.containsKey(field)) {
+                    fields.put(field, full.get(field));
+                }
             }
+            body = fields;
         }
         Map<?, ?> answer = restClient.post()
                 .uri("/v1/messages/count_tokens")
@@ -548,6 +614,21 @@ public class AnthropicProvider extends AbstractLlmProvider {
     }
 
     /**
+     * Anthropic's usage block as the gateway's usage: the cache parts as {@link #usage(int, int, int, int)}
+     * counts them, and the thinking tokens, when Anthropic reports them, as the reasoning part of the output.
+     * Null when there is no usage block.
+     */
+    static ChatResponse.Usage usage(JsonNode u) {
+        if (u == null || !u.isObject()) {
+            return null;
+        }
+        ChatResponse.Usage out = usage(u.path("input_tokens").asInt(), u.path("cache_read_input_tokens").asInt(),
+                u.path("cache_creation_input_tokens").asInt(), u.path("output_tokens").asInt());
+        out.setReasoningTokens(u.path("output_tokens_details").path("thinking_tokens").asInt(0));
+        return out;
+    }
+
+    /**
      * A stream's usage: the input side from message_start, the output count from message_delta,
      * whose {@code output_tokens} is the running total. Null when neither event carried usage, so
      * the call is metered on an estimate and says so.
@@ -561,8 +642,11 @@ public class AnthropicProvider extends AbstractLlmProvider {
         JsonNode in = hasStart ? start : delta;
         int output = hasDelta && delta.has("output_tokens")
                 ? delta.path("output_tokens").asInt() : (hasStart ? start.path("output_tokens").asInt() : 0);
-        return usage(in.path("input_tokens").asInt(), in.path("cache_read_input_tokens").asInt(),
+        ChatResponse.Usage out = usage(in.path("input_tokens").asInt(), in.path("cache_read_input_tokens").asInt(),
                 in.path("cache_creation_input_tokens").asInt(), output);
+        JsonNode details = hasDelta && delta.has("output_tokens_details") ? delta : (hasStart ? start : delta);
+        out.setReasoningTokens(details.path("output_tokens_details").path("thinking_tokens").asInt(0));
+        return out;
     }
 
     // -------------------------------------------------------------------------
@@ -591,22 +675,53 @@ public class AnthropicProvider extends AbstractLlmProvider {
         private final Map<Integer, Integer> toolIndexes = new LinkedHashMap<>();
         /** Content-block index → thinking-block index, numbered the same way. */
         private final Map<Integer, Integer> thinkingIndexes = new LinkedHashMap<>();
+        /**
+         * Whether every event is handed on as a chunk carrying the event itself ({@link AnthropicEvent}), for a
+         * caller that is sent Anthropic's stream as it came. Events that carry no content are then chunks with
+         * no content, and the stream ends on message_stop rather than on message_delta.
+         */
+        private final boolean passthrough;
+        /** Content-block index → its type, so an event of a block the gateway does not read is marked opaque. */
+        private final Map<Integer, String> blockTypes = new LinkedHashMap<>();
+        private String stopFinishReason;
+        private ChatResponse.Usage stopUsage;
+        /** The event being read, set while a chunk is made from it. */
+        private AnthropicEvent event;
 
         AnthropicSseIterator(BufferedReader reader, String model, boolean jsonSchemaMode) {
             this(() -> { }, reader, model, jsonSchemaMode);
         }
 
         AnthropicSseIterator(AutoCloseable transport, BufferedReader reader, String model, boolean jsonSchemaMode) {
+            this(transport, reader, model, jsonSchemaMode, false);
+        }
+
+        AnthropicSseIterator(AutoCloseable transport, BufferedReader reader, String model, boolean jsonSchemaMode,
+                             boolean passthrough) {
             this.transport = transport;
             this.reader = reader;
             this.model = model;
             this.jsonSchemaMode = jsonSchemaMode;
+            this.passthrough = passthrough;
         }
+
+        /** The chunk, carrying the event it was read from when events are handed on. */
+        private SseChunk emit(SseChunk chunk) {
+            return passthrough ? chunk.toBuilder().anthropicEvent(event).build() : chunk;
+        }
+
+        /** An event that carries no content: a chunk of its own when events are handed on, else nothing. */
+        private SseChunk skip() {
+            return passthrough ? SseChunk.builder().id(messageId).model(model).anthropicEvent(event).done(false).build() : null;
+        }
+
+        private static final java.util.Set<String> READ_BLOCKS =
+                java.util.Set.of("text", "thinking", "redacted_thinking", "tool_use");
 
         @Override
         public boolean hasNext() {
+            if (next != null) return true;   // the last chunk may be read with the stream already done
             if (done) return false;
-            if (next != null) return true;
             next = advance();
             return next != null;
         }
@@ -633,6 +748,14 @@ public class AnthropicProvider extends AbstractLlmProvider {
 
                     String data = line.substring(6).trim();
                     JsonNode node = JsonMapper.instance().readTree(data);
+                    if (passthrough) {
+                        if ("content_block_start".equals(currentEvent) && node.hasNonNull("index")) {
+                            blockTypes.put(node.get("index").asInt(), node.path("content_block").path("type").asText(""));
+                        }
+                        String blockType = node.hasNonNull("index") && currentEvent.startsWith("content_block_")
+                                ? blockTypes.get(node.get("index").asInt()) : null;
+                        event = new AnthropicEvent(currentEvent, data, blockType != null && !READ_BLOCKS.contains(blockType));
+                    }
 
                     switch (currentEvent) {
                         case "message_start":
@@ -642,6 +765,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
                             // The input side is final here; the output count arrives on message_delta.
                             startUsage = node.path("message").path("usage");
                             currentEvent = null;
+                            if (passthrough) return skip();
                             continue;
 
                         case "content_block_start":
@@ -658,19 +782,20 @@ public class AnthropicProvider extends AbstractLlmProvider {
                                         : new ThinkingDelta(thought, block.path("thinking").asText(""),
                                                 block.hasNonNull("signature") && !block.path("signature").asText().isEmpty()
                                                         ? block.path("signature").asText() : null, null);
-                                return SseChunk.builder().id(messageId).model(model).thinking(opened).done(false).build();
+                                return emit(SseChunk.builder().id(messageId).model(model).thinking(opened).done(false).build());
                             }
                             if (jsonSchemaMode || !"tool_use".equals(blockType)) {
+                                if (passthrough) return skip();
                                 continue;
                             }
                             int opened = openedToolIndex(node);
-                            return SseChunk.builder()
+                            return emit(SseChunk.builder()
                                     .id(messageId)
                                     .model(model)
                                     .toolCalls(List.of(ToolCallDelta.open(opened,
                                             block.path("id").asText(null), block.path("name").asText(null), null)))
                                     .done(false)
-                                    .build();
+                                    .build());
 
                         case "content_block_delta":
                             JsonNode delta = node.path("delta");
@@ -682,29 +807,33 @@ public class AnthropicProvider extends AbstractLlmProvider {
                                 ThinkingDelta fragment = "thinking_delta".equals(deltaType)
                                         ? ThinkingDelta.text(thought, delta.path("thinking").asText(""))
                                         : ThinkingDelta.signature(thought, delta.path("signature").asText(""));
-                                return SseChunk.builder().id(messageId).model(model).thinking(fragment).done(false).build();
+                                return emit(SseChunk.builder().id(messageId).model(model).thinking(fragment).done(false).build());
                             }
                             if ("input_json_delta".equals(deltaType) && !jsonSchemaMode) {
                                 String partial = delta.path("partial_json").asText(null);
                                 if (partial == null || partial.isEmpty()) {
+                                    if (passthrough) return skip();
                                     continue;
                                 }
-                                return SseChunk.builder()
+                                return emit(SseChunk.builder()
                                         .id(messageId)
                                         .model(model)
                                         .toolCalls(List.of(ToolCallDelta.arguments(continuedToolIndex(node), partial)))
                                         .done(false)
-                                        .build();
+                                        .build());
+                            }
+                            if (passthrough && event.opaque()) {
+                                return skip();   // a block the gateway does not read: no text of its own
                             }
                             String text = "input_json_delta".equals(deltaType)
                                     ? delta.path("partial_json").asText(null)
-                                    : delta.path("text").asText(null);
-                            return SseChunk.builder()
+                                    : (passthrough && !"text_delta".equals(deltaType) ? null : delta.path("text").asText(null));
+                            return emit(SseChunk.builder()
                                     .id(messageId)
                                     .model(model)
                                     .delta(text)
                                     .done(false)
-                                    .build();
+                                    .build());
 
                         case "message_delta":
                             String stopReason = node.path("delta").path("stop_reason").asText(null);
@@ -718,6 +847,13 @@ public class AnthropicProvider extends AbstractLlmProvider {
                             }
                             currentEvent = null;
                             finished = true;
+                            if (passthrough) {
+                                // The stream ends on message_stop, which is handed on too.
+                                stopFinishReason = finishReason;
+                                stopUsage = streamedUsage(startUsage, node.path("usage"));
+                                return emit(SseChunk.builder().id(messageId).model(model)
+                                        .finishReason(finishReason).usage(stopUsage).done(false).build());
+                            }
                             return SseChunk.builder()
                                     .id(messageId)
                                     .model(model)
@@ -734,6 +870,10 @@ public class AnthropicProvider extends AbstractLlmProvider {
                             done = true;
                             closeReader();
                             currentEvent = null;
+                            if (passthrough) {
+                                return emit(SseChunk.builder().id(messageId).model(model)
+                                        .finishReason(stopFinishReason).usage(stopUsage).done(true).build());
+                            }
                             return null;
 
                         case "error":
@@ -744,6 +884,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
 
                         default:
                             currentEvent = null;
+                            if (passthrough) return skip();
                             continue;
                     }
                 }

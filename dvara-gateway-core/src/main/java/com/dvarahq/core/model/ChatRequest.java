@@ -86,16 +86,28 @@ public class ChatRequest {
     private AnthropicPassthrough anthropic;
 
     /**
-     * Whether only an Anthropic provider can serve this request: it turns extended thinking on, or its
-     * history carries thinking blocks, which only Anthropic can read back.
+     * Whether only an Anthropic provider can serve this request: see {@link #anthropicOnly()}.
      */
     public boolean needsAnthropic() {
-        if (anthropic != null && anthropic.asksForThinking()) {
-            return true;
+        return !anthropicOnly().isEmpty();
+    }
+
+    /**
+     * What in this request only an Anthropic provider can serve, in plain words: extended thinking, and thinking
+     * blocks in the history (only Anthropic can read them back). Empty when any provider can serve it.
+     */
+    public java.util.List<String> anthropicOnly() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (anthropic != null) {
+            out.addAll(anthropic.anthropicOnly());
         }
-        return messages != null && messages.stream()
+        boolean thinkingBlocks = messages != null && messages.stream()
                 .filter(m -> m != null && m.getContent() != null)
                 .flatMap(m -> m.getContent().stream())
                 .anyMatch(b -> b instanceof ContentBlock.ThinkingBlock || b instanceof ContentBlock.RedactedThinkingBlock);
+        if (thinkingBlocks) {
+            out.add("thinking blocks in the conversation");
+        }
+        return out;
     }
 }

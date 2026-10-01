@@ -58,4 +58,11 @@ public class SseChunk {
      * the answer's.
      */
     private ThinkingDelta thinking;
+
+    /**
+     * The Anthropic event this chunk was read from, or null. Only an Anthropic provider sets it, for a request
+     * whose body it sends on as it came; a chunk made anywhere else carries none.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private AnthropicEvent anthropicEvent;
 }

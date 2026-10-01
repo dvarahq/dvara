@@ -70,7 +70,8 @@ import java.util.Queue;
  * <p>There is no per-window scanning and no overlap margin: no place in the stream is safe to cut
  * without a detector that states a maximum match span, and none does.</p>
  */
-public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, ReleasableUpstream {
+public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, ReleasableUpstream,
+        com.dvarahq.core.model.HeldDelivery {
 
     private static final Logger log = LoggerFactory.getLogger(GuardedSseIterator.class);
 
@@ -178,6 +179,12 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
         this.telemetry = telemetry == null ? StreamingEnforcementTelemetry.NOOP : telemetry;
         this.deferred = posture.withholds();
         this.unavailableControl = engine.unavailableControl(posture).orElse(null);
+    }
+
+    /** Deferred delivery holds every piece of content until the stream ends. */
+    @Override
+    public boolean holdsContent() {
+        return deferred;
     }
 
     @Override
