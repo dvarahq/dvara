@@ -68,6 +68,12 @@
         <groovy.version>4.0.32</groovy.version>
         <json-schema-validator.version>3.0.0</json-schema-validator.version>
         <hypersistence-tsid.version>2.1.4</hypersistence-tsid.version>
+        <!-- Ahead of the Spring Boot BOM, which manages 2.21.4 and 3.1.4. jackson-databind 2.21.7
+             and 3.1.7 fix three denial-of-service advisories: GHSA-cxp5-3px4-pw24,
+             GHSA-q4xh-88c3-wmh7 and GHSA-wv8q-qhhj-9h54. Delete both once a Boot release
+             manages these versions or newer, so they never pin the build below the BOM. -->
+        <jackson-2-bom.version>2.21.7</jackson-2-bom.version>
+        <jackson-bom.version>3.1.7</jackson-bom.version>
 
         <surefire.heap>1g</surefire.heap>
 
