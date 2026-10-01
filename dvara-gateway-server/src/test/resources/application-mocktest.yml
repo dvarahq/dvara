@@ -11,3 +11,6 @@ dvara:
           - name: custom-model
             when: "request.model == 'mock/custom'"
             response: "Custom model response"
+          - name: mid-conversation-system
+            when: "request.model == 'mock/mid-system' && request.messages.size() == 2 && request.messages[1].role == 'system'"
+            response: "system message in place"

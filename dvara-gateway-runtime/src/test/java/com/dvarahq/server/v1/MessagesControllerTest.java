@@ -77,6 +77,9 @@ class MessagesControllerTest {
     @Autowired
     MockMvc mockMvc;
 
+    @Autowired
+    io.micrometer.core.instrument.MeterRegistry meterRegistry;
+
     @MockitoBean ProviderDispatcher dispatcher;
     @MockitoBean RequestPipeline requestPipeline;
     @MockitoBean ResponseCache responseCache;
@@ -149,9 +152,50 @@ class MessagesControllerTest {
 
         ChatRequest sent = sentRequest();
         assertThat(sent.getMessages().get(0).getRole()).isEqualTo("system");
-        assertThat(sent.getMessages().get(0).textContent()).isEqualTo("You are terse.\n\nAnswer in French.");
+        // One block per block, so governed text can be written back where it came from.
+        assertThat(sent.getMessages().get(0).getContent()).containsExactly(
+                new ContentBlock.TextBlock("You are terse."), new ContentBlock.TextBlock("Answer in French."));
         assertThat(sent.getMessages().get(1).getRole()).isEqualTo("user");
         assertThat(sent.getMessages().get(1).textContent()).isEqualTo("hi");
+    }
+
+    @Test
+    void aSystemMessageInsideMessagesIsASystemMessageAtItsPlace() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(reply("ok", "stop", null));
+
+        mockMvc.perform(messages("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100,
+                         "messages": [{"role": "user", "content": "hi"},
+                                      {"role": "system", "content": [{"type": "text", "text": "Be brief."}]},
+                                      {"role": "user", "content": "again"}]}
+                        """))
+                .andExpect(status().isOk());
+
+        List<MultimodalMessage> sent = sentRequest().getMessages();
+        assertThat(sent).extracting(MultimodalMessage::getRole).containsExactly("user", "system", "user");
+        assertThat(sent.get(1).getContent()).containsExactly(new ContentBlock.TextBlock("Be brief."));
+        assertThat(sentRequest().needsAnthropic()).as("any provider can take a system message").isFalse();
+    }
+
+    @Test
+    void aBlockTypeTheGatewayDoesNotReadIsCarriedForAnthropic_andCounted() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(reply("ok", "stop", null));
+
+        mockMvc.perform(messages("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100,
+                         "messages": [{"role": "user", "content": [
+                             {"type": "text", "text": "hi"}, {"type": "future_block", "x": 1}]}]}
+                        """))
+                .andExpect(status().isOk());
+
+        ChatRequest sent = sentRequest();
+        assertThat(sent.getMessages().get(0).getContent()).containsExactly(new ContentBlock.TextBlock("hi"));
+        assertThat(sent.getAnthropic().body().raw().path("messages").get(0).path("content").get(1)
+                .path("type").asText()).isEqualTo("future_block");
+        assertThat(sent.getAnthropic().ignoredByOthers()).containsExactly("block:future_block");
+        assertThat(sent.needsAnthropic()).as("another provider is served without it").isFalse();
+        assertThat(meterRegistry.get("gateway_anthropic_opaque_blocks_total")
+                .tag("direction", "request").tag("type", "future_block").counter().count()).isEqualTo(1.0);
     }
 
     @Test

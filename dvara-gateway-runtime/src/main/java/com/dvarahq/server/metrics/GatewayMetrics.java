@@ -109,6 +109,54 @@ public class GatewayMetrics {
     }
 
 
+    /** At most this many values of a caller-named tag get a series of their own; the rest are {@code other}. */
+    private static final int CALLER_TAG_LIMIT = 50;
+    private final java.util.Set<String> opaqueTypes = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<String> droppedFields = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Anthropic Messages API content the gateway passed on without reading: block types (and message roles,
+     * as {@code role:<name>}) it does not know. A new type showing up here is one governance cannot see into.
+     *
+     * @param direction {@code request} or {@code response}
+     */
+    public void recordAnthropicOpaqueBlocks(String direction, String type, int count) {
+        Counter.builder("gateway_anthropic_opaque_blocks_total")
+                .description("Anthropic Messages API content blocks passed on without being read by governance")
+                .tag("direction", safe(direction))
+                .tag("type", bounded(type, opaqueTypes))
+                .register(registry)
+                .increment(count);
+    }
+
+    /**
+     * Something a Messages API caller sent for Anthropic that a provider which is not Anthropic was not given: a
+     * top-level field, {@code block:<type>}, {@code role:<name>}, {@code cache_control}.
+     */
+    public void recordAnthropicFieldDropped(String field) {
+        Counter.builder("gateway_anthropic_fields_dropped_total")
+                .description("Anthropic-only request content left out for a provider that is not Anthropic")
+                .tag("field", bounded(field, droppedFields))
+                .register(registry)
+                .increment();
+    }
+
+    /** A caller's string as a tag: cut to a safe form, with the number of series bounded. */
+    private static String bounded(String value, java.util.Set<String> seen) {
+        String tag = value == null ? "" : value.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_:.]", "_");
+        if (tag.length() > 48) {
+            tag = tag.substring(0, 48);
+        }
+        if (!seen.contains(tag)) {
+            if (seen.size() < CALLER_TAG_LIMIT) {
+                seen.add(tag);
+            } else {
+                tag = "other";
+            }
+        }
+        return tag;
+    }
+
     public void recordFallback(String fromProvider, String toProvider) {
         Counter.builder("gateway_fallbacks_total")
                 .description("Total fallback activations")

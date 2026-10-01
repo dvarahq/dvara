@@ -235,9 +235,11 @@ key as its API key.
 - ✅ **Streaming**, including streamed tool calls where the provider relays them.
 - ✅ **Anthropic Messages API** — `POST /v1/messages`, for a client built for it such as Claude Code:
   set `ANTHROPIC_BASE_URL` to the gateway and `ANTHROPIC_AUTH_TOKEN` to a gateway API key. Governed
-  like chat, on any provider. On a route to Anthropic, extended thinking, the `anthropic-beta` header and
-  request fields the gateway does not model go through unchanged; on another provider thinking is refused
-  and the rest is left out. `POST /v1/messages/count_tokens` counts tokens without calling a model. Server
+  like chat, on any provider. On a route to Anthropic the request goes through as the client sent it — every
+  field, message role, content block and the `anthropic-beta` header — and the response comes back as
+  Anthropic sent it, changed only where governance changes it (redacted text, the routed model). On another
+  provider the request is translated: extended thinking is refused naming the provider, and what only tunes
+  Anthropic (a field or block type the gateway does not model, `cache_control`) is left out and counted. `POST /v1/messages/count_tokens` counts tokens without calling a model. Server
   tools, `mcp_servers` and `container` are refused, and Claude Code signed in with a Claude subscription
   does not use a custom base URL, so it cannot be pointed here.
 - ✅ **Response cache** — exact-match, in memory, per process. Off until
