@@ -33,7 +33,7 @@
 > **Governing MCP tool calls or agent-to-agent traffic?** The full DVARA platform runs on your
 > laptop with no licence key. One script starts the gateway, the Flightdeck console and a demo MCP
 > server, then shows a tool call allowed, redacted and denied.
-> **[Govern MCP in 5 minutes →](https://github.com/dvarahq/dvara-examples/tree/main/docker-compose/mcp-quickstart)**
+> **[Govern MCP in 5 minutes →](https://dvarahq.com/docs/mcp-quickstart)**
 
 ## What is DVARA
 
