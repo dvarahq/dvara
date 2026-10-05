@@ -111,6 +111,8 @@ public class MessagesController {
 
     private final long streamingTimeoutMs;
     private final ChatExecutionService executionService;
+    /** Asked between chunks whether a running stream may go on; usually none are registered. */
+    private final com.dvarahq.server.service.StreamStops streamStops;
     private final GatewayMetrics metrics;
 
     public MessagesController(ProviderDispatcher dispatcher,
@@ -128,10 +130,12 @@ public class MessagesController {
                               GatewayMetrics metrics,
                               TokenEstimator tokenEstimator,
                               ObjectProvider<CallOutcomeListener> outcomeListeners,
+                                    org.springframework.beans.factory.ObjectProvider<com.dvarahq.core.filter.StreamStopCheck> streamStopChecks,
                               @org.springframework.beans.factory.annotation.Value(
                                       "${dvara.llm-gateway.resilience.timeout.streaming-timeout-ms:120000}")
                               long streamingTimeoutMs) {
         this.streamingTimeoutMs = streamingTimeoutMs;
+        this.streamStops = com.dvarahq.server.service.StreamStops.of(streamStopChecks);
         this.metrics = metrics;
         this.executionService = new ChatExecutionService(dispatcher, requestPipeline, responseCache,
                 tokenUsageRepository, usageListeners, costCalculationService, costEstimator,
@@ -278,6 +282,7 @@ public class MessagesController {
         AtomicBoolean streamFailed = new AtomicBoolean();
         ChatExecutionService.TokenSettlement settlement = ChatExecutionService.TokenSettlement.capture(httpRequest);
         ChatExecutionService.Attribution attribution = ChatExecutionService.Attribution.capture(httpRequest);
+        com.dvarahq.server.service.StreamStops.Probe stopProbe = streamStops.probe(httpRequest, streamRequest.getModel());
 
         Thread.startVirtualThread(ChatExecutionService.withRequestContext(() -> {
             long streamStart = System.nanoTime();
@@ -296,6 +301,8 @@ public class MessagesController {
                 boolean sawDone = false;
                 while (!completed.get() && chunks.hasNext()) {   // cancellation first; see ChatCompletionController
                     SseChunk chunk = chunks.next();
+                    // Before the chunk is written: a stream that must end does not send it.
+                    stopProbe.checkpoint();
                     if (chunk.getUsage() != null) {
                         reportedUsage.set(chunk.getUsage());
                     }
@@ -381,7 +388,11 @@ public class MessagesController {
                     log.debug("Could not record the stream error for trace {}: {}", traceId, recycled.getMessage());
                 }
                 if (!completed.get()) {
-                    log.warn("Messages streaming error for trace {}: {}", traceId, failure.getMessage());
+                    if (failure instanceof com.dvarahq.server.service.StreamStops.StreamStoppedException stopped) {
+                        log.info("Messages stream for trace {} stopped: {}", traceId, stopped.getCode());
+                    } else {
+                        log.warn("Messages streaming error for trace {}: {}", traceId, failure.getMessage());
+                    }
                     try {
                         if (upstream.get() != null) {
                             events.messageStart();
@@ -584,6 +595,14 @@ public class MessagesController {
         }
 
         void error(Exception failure) throws Exception {
+            if (failure instanceof com.dvarahq.server.service.StreamStops.StreamStoppedException stopped) {
+                // Anthropic's error type follows the status the same refusal would have had up front.
+                com.dvarahq.core.filter.StreamStopCheck.Stop stop = stopped.stop();
+                send("error", AnthropicMessages.map("type", "error", "error", AnthropicMessages.map(
+                        "type", com.dvarahq.core.exception.ErrorEnvelope.anthropicType(stop.status()),
+                        "message", stop.message(), "code", stop.code())));
+                return;
+            }
             String code = failure instanceof GatewayException ge ? ge.getCode() : "PROVIDER_ERROR";
             send("error", AnthropicMessages.map("type", "error", "error", AnthropicMessages.map(
                     "type", "PROVIDER_RESPONSE_TOO_LARGE".equals(code) ? "request_too_large" : "api_error",
