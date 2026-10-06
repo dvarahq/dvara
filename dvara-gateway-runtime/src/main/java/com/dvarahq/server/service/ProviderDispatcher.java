@@ -143,6 +143,7 @@ public class ProviderDispatcher {
         Selection selection = selectChat(request, routingCtx);
         LlmProvider primary = selection.provider();
         final ChatRequest req = applyResolvedModel(request, routingCtx);
+        Refusal refusal = primaryRefusal(req, selection);
         checkAnthropicOnly(req, selection);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
@@ -170,6 +171,9 @@ public class ProviderDispatcher {
                     // The route's provider is paused: nothing is sent to it, and the route's chain takes the call.
                     throw selection.unavailable();
                 }
+                if (refusal != null) {
+                    throw refusal.error();
+                }
                 response = primary.chat(req);
                 long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
                 if (latencyTracker != null) {
@@ -177,7 +181,9 @@ public class ProviderDispatcher {
                 }
                 recordCanaryMetrics(primary.name(), req, response, latencyMs, false, routingCtx);
             } catch (GatewayException e) {
-                if (e == selection.unavailable()) {
+                if (refusal != null && e == refusal.error()) {
+                    response = afterRefusal(refusal, req, primary, routingCtx, startNanos, fallbackCall);
+                } else if (e == selection.unavailable()) {
                     response = attemptFallback(req, primary, e, routingCtx, startNanos, fallbackCall);
                 } else if (isFallbackEligible(e)) {
                     long errorLatencyMs = (System.nanoTime() - startNanos) / 1_000_000;
@@ -212,6 +218,7 @@ public class ProviderDispatcher {
         Selection selection = selectChat(request, routingCtx);
         LlmProvider primary = selection.provider();
         final ChatRequest req = applyResolvedModel(request, routingCtx);
+        Refusal refusal = primaryRefusal(req, selection);
         checkAnthropicOnly(req, selection);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
@@ -223,6 +230,10 @@ public class ProviderDispatcher {
         addSessionId(obs);
         long startNanos = System.nanoTime();
         return obs.observe(() -> {
+            if (refusal != null) {
+                // Nothing is opened on the refused target; the route's chain may take the call.
+                return afterRefusal(refusal, req, primary, routingCtx, startNanos, (p, r) -> p.streamChat(r));
+            }
             if (selection.unavailable() != null) {
                 // The route's provider is paused: nothing is opened on it, and the route's chain takes the call.
                 return attemptFallback(req, primary, selection.unavailable(), routingCtx, startNanos,
@@ -250,6 +261,12 @@ public class ProviderDispatcher {
         RequestContext routingCtx = RequestContext.builder().build();
         Selection selection = selectChat(request, routingCtx);
         ChatRequest req = applyResolvedModel(request, routingCtx);
+        Refusal refusal = primaryRefusal(req, selection);
+        if (refusal != null) {
+            // A count calls no model and does not fail over: the refusal is the answer.
+            refusal.report(req, selection.provider().name());
+            throw refusal.error();
+        }
         checkAnthropicOnly(req, selection);
         setProviderAttribute(selection.provider().name());
         setServedModelAttribute(req.getModel());
@@ -479,6 +496,7 @@ public class ProviderDispatcher {
     private int fallbackMaxAttempts = 3;
     private java.time.Duration fallbackDeadline = java.time.Duration.ofSeconds(60);
     private List<com.dvarahq.core.resilience.FallbackTargetGuard> fallbackGuards = List.of();
+    private List<com.dvarahq.core.resilience.PrimaryTargetGuard> primaryGuards = List.of();
 
     /** {@code dvara.llm-gateway.resilience.fallback.*}: on or off, and how far a failover may go. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -493,6 +511,60 @@ public class ProviderDispatcher {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setFallbackGuards(List<com.dvarahq.core.resilience.FallbackTargetGuard> guards) {
         this.fallbackGuards = guards != null ? List.copyOf(guards) : List.of();
+    }
+
+    /** Every guard the first target must pass, with the model it is sent; none registered allows every target. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPrimaryGuards(List<com.dvarahq.core.resilience.PrimaryTargetGuard> guards) {
+        this.primaryGuards = guards != null ? List.copyOf(guards) : List.of();
+    }
+
+    /** A first target a guard refused: the guard, so it can be told once the refusal is the answer, and its error. */
+    private record Refusal(com.dvarahq.core.resilience.PrimaryTargetGuard guard, GatewayException error) {
+        void report(ChatRequest request, String provider) {
+            try {
+                guard.refused(request, provider, error);
+            } catch (RuntimeException e) {
+                // The caller is refused whether or not the guard could record it.
+                log.warn("Guard {} failed to record a refusal: {}", guard.getClass().getSimpleName(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * The first guard's refusal of the request, with the model it will be sent, on the provider routing picked;
+     * null when every guard allows it. Not asked when that provider is paused: nothing is sent to it.
+     */
+    private Refusal primaryRefusal(ChatRequest request, Selection selection) {
+        if (primaryGuards.isEmpty() || selection.unavailable() != null) {
+            return null;
+        }
+        for (com.dvarahq.core.resilience.PrimaryTargetGuard guard : primaryGuards) {
+            GatewayException error = guard.refuse(request, selection.provider().name());
+            if (error != null) {
+                return new Refusal(guard, error);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The first target was refused: the matched route's chain may serve the request, its targets asked of the
+     * fallback guards. Only a route's chain: the same model on another provider is the model that was refused.
+     * When no target serves it, the refusal is the answer.
+     */
+    private <T> T afterRefusal(Refusal refusal, ChatRequest request, LlmProvider primary, RequestContext routingCtx,
+                               long startNanos, ProviderCall<T> call) {
+        RouteConfig route = routingCtx.getMatchedRoute();
+        if (fallbackEnabled && route != null && route.getFallbacks() != null && !route.getFallbacks().isEmpty()) {
+            try {
+                return attemptRouteChain(route, request, primary, refusal.error(), startNanos, call);
+            } catch (GatewayException noTargetServedIt) {
+                // Whatever the chain ran into, the caller is told why the first target was refused.
+            }
+        }
+        refusal.report(request, primary.name());
+        throw refusal.error();
     }
 
     private <T> T attemptFallback(ChatRequest request, LlmProvider failedProvider, GatewayException originalException,
