@@ -248,6 +248,9 @@ key as its API key.
   Anthropic (a field or block type the gateway does not model, `cache_control`) is left out and counted. `POST /v1/messages/count_tokens` counts tokens without calling a model. Server
   tools, `mcp_servers` and `container` are refused, and Claude Code signed in with a Claude subscription
   does not use a custom base URL, so it cannot be pointed here.
+  `metadata.user_id` is the request's end user, as `user` is on chat, only when it is a plain id. A JSON
+  object there, such as a client's own device and session ids, is not taken as the end user; on a route to
+  Anthropic it still goes upstream as sent.
 - ✅ **Response cache** — exact-match, in memory, per process. Off until
   `dvara.llm-gateway.cache.in-memory.enabled` is `true`.
 

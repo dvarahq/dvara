@@ -166,12 +166,32 @@ final class AnthropicMessages {
         };
     }
 
-    private static String endUser(Map<String, Object> metadata) {
-        if (metadata == null || metadata.get("user_id") == null) {
+    /**
+     * The end user the request names in {@code metadata.user_id}, for the request's {@code user}. A plain id
+     * is the end user. A JSON object, whether sent as an object or as a string holding one, is not: some
+     * clients put their own identifiers there in that form, such as a device hash and a session id, and
+     * taking those as the end user would record client identifiers in every place the end user is kept.
+     * On a route to Anthropic, {@code metadata} still goes upstream as the client sent it.
+     */
+    static String endUser(Map<String, Object> metadata) {
+        Object raw = metadata == null ? null : metadata.get("user_id");
+        if (raw == null || raw instanceof Map<?, ?> || raw instanceof List<?>) {
             return null;
         }
-        String id = string(metadata.get("user_id"));
-        return id.isBlank() ? null : id;
+        String id = string(raw);
+        return id.isBlank() || jsonObject(id) ? null : id;
+    }
+
+    private static boolean jsonObject(String value) {
+        String trimmed = value.strip();
+        if (!trimmed.startsWith("{")) {
+            return false;
+        }
+        try {
+            return JsonMapper.instance().readTree(trimmed).isObject();
+        } catch (Exception notJson) {
+            return false;
+        }
     }
 
     // -------------------------------------------------------------------------
