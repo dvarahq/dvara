@@ -450,6 +450,23 @@ class BatchExecutionServiceTest {
     }
 
     @Test
+    void createBatch_theProviderWillNotReturnTheFile_submitsOnTheUploadCheck() {
+        // Reading the file back is a second look, not the only one: if the provider refuses to serve
+        // it, the submit goes ahead and the check made at upload stands.
+        BatchModelCheck check = mock(BatchModelCheck.class);
+        when(provider.getFileContent("file_1"))
+                .thenThrow(GatewayException.upstream(400, "Not allowed to download files of purpose: batch"));
+        when(provider.createBatch(anyString()))
+                .thenReturn("{\"id\":\"batch_1\",\"status\":\"validating\",\"input_file_id\":\"file_1\"}");
+
+        checkedBy(check).createBatch("{\"input_file_id\":\"file_1\"}", "t1", "k1", null);
+
+        verify(provider).createBatch("{\"input_file_id\":\"file_1\"}");
+        verify(batchJobRepository).save(any());
+        verifyNoInteractions(check);
+    }
+
+    @Test
     void createBatch_withNoCheck_doesNotReadTheFile() {
         when(provider.createBatch(anyString()))
                 .thenReturn("{\"id\":\"batch_1\",\"status\":\"validating\",\"input_file_id\":\"file_1\"}");

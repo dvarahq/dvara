@@ -131,7 +131,8 @@ public class BatchExecutionService {
      *
      * <p>The models are checked again here, not only at upload, because a model can be turned off
      * after its file was accepted. The file is read back from the provider for that, so the check
-     * covers the content the provider will run, whatever path the file took there.</p>
+     * covers the content the provider will run, whatever path the file took there. If the provider
+     * will not hand the file back, the submit goes ahead on the check made at upload.</p>
      */
     public String createBatch(String requestJson, String workspaceId, String apiKeyId, String providerHint) {
         if (submitGate != null) {
@@ -140,9 +141,9 @@ public class BatchExecutionService {
         LlmProvider provider = dispatcher.selectBatchProvider(providerHint);
         if (!modelChecks.isEmpty()) {
             String inputFileId = inputFileId(requestJson);
-            if (inputFileId != null) {
-                checkModels(new String(provider.getFileContent(inputFileId), StandardCharsets.UTF_8),
-                        workspaceId, apiKeyId);
+            byte[] content = inputFileId == null ? null : readBack(provider, inputFileId, workspaceId);
+            if (content != null) {
+                checkModels(new String(content, StandardCharsets.UTF_8), workspaceId, apiKeyId);
             }
         }
         String raw = provider.createBatch(requestJson);
@@ -449,6 +450,23 @@ public class BatchExecutionService {
                             refused.getCode(), refused.getMessage(), refused.getDetails());
                 }
             }
+        }
+    }
+
+    /**
+     * The input file's content, or {@code null} if the provider will not return it: some refuse to
+     * serve a file uploaded for batches, and some do not serve files at all. The submit then relies
+     * on the check made when the file was uploaded. One WARN per submit, naming the file but never
+     * its content.
+     */
+    private static byte[] readBack(LlmProvider provider, String inputFileId, String workspaceId) {
+        try {
+            return provider.getFileContent(inputFileId);
+        } catch (RuntimeException e) {
+            log.warn("Batch input file {} (workspace {}) could not be read back from {}, so its models were "
+                    + "not checked again at submit; the check made at upload stands: {}",
+                    inputFileId, workspaceId, provider.name(), e.toString());
+            return null;
         }
     }
 
