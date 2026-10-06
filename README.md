@@ -317,7 +317,10 @@ with each model's own context window where one is known (see [Model context wind
 | Qwen | ✅ | — | — | — | — |
 | Ollama | ✅ | ✅ | ✅ | ✅ | — |
 
-A mock provider is included for tests and demos; it needs no account.
+A mock provider is included for tests and demos; it needs no account. It also takes batches: an
+uploaded file reads back as what was uploaded, every batch completes on its first poll, and its output
+file holds two canned lines with usage. It keeps the newest 256 uploaded files in memory, so a restart
+forgets them; a file it does not hold is not found, as a provider answers.
 
 ## What is in this repository
 
