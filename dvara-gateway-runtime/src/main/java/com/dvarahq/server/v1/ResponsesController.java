@@ -403,7 +403,7 @@ public class ResponsesController {
     // Mapping: Responses DTO <-> internal model
     // -------------------------------------------------------------------------
 
-    ChatRequest toInternal(ResponseRequest r) {
+    static ChatRequest toInternal(ResponseRequest r) {
         List<MultimodalMessage> messages = new ArrayList<>();
         if (r.getInstructions() != null && !r.getInstructions().isBlank()) {
             messages.add(MultimodalMessage.builder()
@@ -435,7 +435,7 @@ public class ResponsesController {
         return id == null || id.isBlank() ? null : id;
     }
 
-    private List<MultimodalMessage> parseInput(Object input) {
+    private static List<MultimodalMessage> parseInput(Object input) {
         if (input == null) {
             return List.of();
         }
@@ -458,7 +458,7 @@ public class ResponsesController {
         throw new GatewayException("INVALID_REQUEST", "input must be a string or an array of items");
     }
 
-    private MultimodalMessage parseInputItem(Map<String, Object> m) {
+    private static MultimodalMessage parseInputItem(Map<String, Object> m) {
         String role = m.get("role") != null ? m.get("role").toString() : "user";
         Object content = m.get("content");
         List<ContentBlock> blocks = new ArrayList<>();
@@ -478,7 +478,7 @@ public class ResponsesController {
         return MultimodalMessage.builder().role(role).content(blocks).build();
     }
 
-    private ContentBlock parsePart(Map<String, Object> p) {
+    private static ContentBlock parsePart(Map<String, Object> p) {
         String type = p.get("type") != null ? p.get("type").toString() : "input_text";
         return switch (type) {
             case "input_text", "text", "output_text" ->
@@ -493,11 +493,11 @@ public class ResponsesController {
         };
     }
 
-    private ContentBlock parseImage(Map<String, Object> p) {
+    private static ContentBlock parseImage(Map<String, Object> p) {
         return ChatInputs.image(p, "input_image");
     }
 
-    private ResponseFormat parseTextFormat(Map<String, Object> text) {
+    private static ResponseFormat parseTextFormat(Map<String, Object> text) {
         if (text == null) {
             return null;
         }

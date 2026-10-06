@@ -411,7 +411,7 @@ public class ChatCompletionController {
     // Mapping: external DTO ↔ internal model
     // -------------------------------------------------------------------------
 
-    private ChatRequest toInternal(ChatCompletionRequest req) {
+    static ChatRequest toInternal(ChatCompletionRequest req) {
         // The gateway returns one choice. Answering one when several were asked would be a
         // silent lie, so anything but n=1 is refused, as /v1/completions does. `user` is a
         // caller-side tracking id and is accepted and ignored: the gateway attributes by API key.
@@ -464,7 +464,7 @@ public class ChatCompletionController {
      * Only {@code function} tools are relayed; malformed entries are skipped.
      */
     @SuppressWarnings("unchecked")
-    private List<ToolDefinition> toToolDefinitions(List<Object> tools) {
+    private static List<ToolDefinition> toToolDefinitions(List<Object> tools) {
         if (tools == null || tools.isEmpty()) return null;
         List<ToolDefinition> out = new java.util.ArrayList<>();
         for (Object t : tools) {
@@ -485,7 +485,7 @@ public class ChatCompletionController {
     }
 
     /** DTO {@code tool_calls} → internal {@link com.dvarahq.core.model.ToolCall}. */
-    private List<com.dvarahq.core.model.ToolCall> toInternalToolCalls(List<ToolCall> dtoCalls) {
+    private static List<com.dvarahq.core.model.ToolCall> toInternalToolCalls(List<ToolCall> dtoCalls) {
         if (dtoCalls == null || dtoCalls.isEmpty()) return null;
         return dtoCalls.stream()
                 .map(tc -> com.dvarahq.core.model.ToolCall.builder()
@@ -505,7 +505,7 @@ public class ChatCompletionController {
         ChatExecutionService.injectResolvedWorkspace(request, workspaceId);
     }
 
-    ResponseFormat parseResponseFormat(Map<String, Object> raw) {
+    static ResponseFormat parseResponseFormat(Map<String, Object> raw) {
         if (raw == null || raw.isEmpty()) return null;
 
         Object typeObj = raw.get("type");
@@ -524,7 +524,7 @@ public class ChatCompletionController {
     }
 
     @SuppressWarnings("unchecked")
-    private ResponseFormat.JsonSchema parseJsonSchema(Map<String, Object> raw) {
+    private static ResponseFormat.JsonSchema parseJsonSchema(Map<String, Object> raw) {
         Object jsonSchemaObj = raw.get("json_schema");
         if (jsonSchemaObj == null) {
             throw new GatewayException("INVALID_REQUEST",
@@ -556,7 +556,7 @@ public class ChatCompletionController {
      * A message's content: a string, or OpenAI's array of {@code text} and {@code image_url} parts,
      * each parsed into its own content block rather than relayed as the array's Java rendering.
      */
-    private List<ContentBlock> toContentBlocks(Object content) {
+    private static List<ContentBlock> toContentBlocks(Object content) {
         if (content instanceof String text) {
             return List.of(new ContentBlock.TextBlock(text));
         }

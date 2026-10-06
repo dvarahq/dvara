@@ -25,6 +25,7 @@ import com.dvarahq.core.guardrail.GuardrailDetector;
 import com.dvarahq.core.guardrail.GuardrailEnforcer;
 import com.dvarahq.core.guardrail.GuardrailMetricsListener;
 import com.dvarahq.core.guardrail.GuardrailScanResult;
+import com.dvarahq.core.guardrail.TokenEstimator;
 import com.dvarahq.core.id.Ids;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
@@ -58,6 +59,11 @@ public class GuardrailScanService implements GuardrailEnforcer {
     private final GuardrailProperties properties;
     private final SystemPromptLeakDetector leakDetector;
     /**
+     * Counts a request for {@code max-input-tokens}. The same estimator the context-window check, the
+     * rate limiter and the usage meter use, so the cap judges the number they do.
+     */
+    private final TokenEstimator tokenEstimator;
+    /**
      * Everything that wants to hear about a guardrail decision, which is usually nothing.
      *
      * <p>A list rather than one bean with a no-op default, so a module or the application can
@@ -87,11 +93,23 @@ public class GuardrailScanService implements GuardrailEnforcer {
                         .getBeanProvider(GuardrailMetricsListener.class));
     }
 
+    /** With this module's own estimator, the one the gateway registers when nothing else does. */
     public GuardrailScanService(GuardrailDetector detector, AuditWriter auditWriter,
                                  WorkspaceRepository workspaceRepository, GuardrailProperties properties,
                                  SystemPromptLeakDetector leakDetector,
                                  org.springframework.beans.factory.ObjectProvider<GuardrailMetricsListener>
                                          metricsListeners) {
+        this(detector, auditWriter, workspaceRepository, properties, leakDetector, metricsListeners,
+                new TiktokenEstimator());
+    }
+
+    public GuardrailScanService(GuardrailDetector detector, AuditWriter auditWriter,
+                                 WorkspaceRepository workspaceRepository, GuardrailProperties properties,
+                                 SystemPromptLeakDetector leakDetector,
+                                 org.springframework.beans.factory.ObjectProvider<GuardrailMetricsListener>
+                                         metricsListeners,
+                                 TokenEstimator tokenEstimator) {
+        this.tokenEstimator = java.util.Objects.requireNonNull(tokenEstimator, "tokenEstimator");
         this.detector = detector;
         this.auditWriter = auditWriter;
         this.workspaceRepository = workspaceRepository;
@@ -600,19 +618,10 @@ public class GuardrailScanService implements GuardrailEnforcer {
             }
         }
 
-        // Check max input tokens (estimated)
+        // Check max input tokens, counted by the gateway's one estimator: the whole request (text,
+        // tool calls, tool definitions, images), as the context-window check and the meter count it.
         if (config.maxInputTokens > 0) {
-            int estimatedChars = 0;
-            for (var msg : request.getMessages()) {
-                if (msg.getContent() == null) continue;
-                for (var block : msg.getContent()) {
-                    if (block instanceof com.dvarahq.core.model.ContentBlock.TextBlock tb) {
-                        estimatedChars += tb.text() != null ? tb.text().length() : 0;
-                    }
-                }
-            }
-            // Use chars/4 approximation (same as SimpleTokenEstimator) for fast pre-check
-            int estimatedTokens = estimatedChars / 4;
+            int estimatedTokens = tokenEstimator.estimateTokens(request);
             if (estimatedTokens > config.maxInputTokens) {
                 auditInputSizeExceeded(workspaceId, "max_input_tokens",
                         estimatedTokens, config.maxInputTokens);

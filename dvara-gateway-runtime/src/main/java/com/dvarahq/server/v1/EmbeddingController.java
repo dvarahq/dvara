@@ -94,10 +94,7 @@ public class EmbeddingController {
         // guardrail scanner can read — so a non-text input yields an empty view and passes through
         // ungoverned rather than being coerced into something a filter would scan wrongly.
         List<String> inputs = toTexts(request.getInput());
-        ChatRequest governanceView = ChatRequest.builder()
-                .model(request.getModel())
-                .messages(inputs.stream().map(MultimodalMessage::user).toList())
-                .build();
+        ChatRequest governanceView = governanceView(request.getModel(), inputs);
 
         ChatExecutionService.Prepared prep =
                 chatExecutionService.prepare(governanceView, httpRequest, httpResponse, traceId);
@@ -175,6 +172,18 @@ public class EmbeddingController {
                     "encoding_format=" + format + " is not supported; this endpoint returns each "
                     + "embedding as an array of numbers. Omit the field or send encoding_format=float.");
         }
+    }
+
+    /** The embedding input as the chat request the filters govern: one user message per input text. */
+    static ChatRequest governanceView(EmbeddingRequest request) {
+        return governanceView(request.getModel(), toTexts(request.getInput()));
+    }
+
+    private static ChatRequest governanceView(String model, List<String> inputs) {
+        return ChatRequest.builder()
+                .model(model)
+                .messages(inputs.stream().map(MultimodalMessage::user).toList())
+                .build();
     }
 
     /** Every scannable text in an {@code input}, in order; empty when the input is not text. */

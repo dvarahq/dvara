@@ -338,6 +338,50 @@ class GuardrailScanServiceTest {
                 .hasFieldOrPropertyWithValue("code", "INPUT_TOO_LARGE");
     }
 
+    /** A cap that counts with the estimator it is given, on either side of the limit. */
+    private GuardrailScanService cappedAt(int maxInputTokens, com.dvarahq.core.guardrail.TokenEstimator estimator) {
+        GuardrailProperties props = new GuardrailProperties();
+        props.setEnabled(true);
+        props.setDefaultAction(GuardrailAction.BLOCK);
+        props.setMaxInputTokens(maxInputTokens);
+        return new GuardrailScanService(detector, auditWriter, workspaceRepository, props,
+                new SystemPromptLeakDetector(), provider(null), estimator);
+    }
+
+    @Test
+    void enforceRequest_maxInputTokens_judgesTheCountOfTheGatewaysEstimator() {
+        // The cap must judge the number the context-window check and the meter judge, not a
+        // character count of its own. "hi" is no tokens by a characters-over-four count.
+        var estimator = mock(com.dvarahq.core.guardrail.TokenEstimator.class);
+        when(estimator.estimateTokens(any(ChatRequest.class))).thenReturn(1_000);
+        ChatRequest request = buildRequest("hi");
+
+        assertThatThrownBy(() -> cappedAt(999, estimator).enforceRequest(request, "workspace-1"))
+                .isInstanceOf(GatewayException.class)
+                .hasFieldOrPropertyWithValue("code", "INPUT_TOO_LARGE")
+                .hasMessageContaining("1000 > 999");
+        assertThatNoException().isThrownBy(() -> cappedAt(1_000, estimator).enforceRequest(request, "workspace-1"));
+        verify(estimator, atLeastOnce()).estimateTokens(request);
+    }
+
+    @Test
+    void enforceRequest_maxInputTokens_countsTheToolDefinitionsToo() {
+        // Tool schemas are sent on every turn and the provider bills them; a cap that read only the
+        // message text would let a request through that is many times its limit.
+        Map<String, Object> bigSchema = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < 200; i++) {
+            bigSchema.put("field_" + i, Map.of("type", "string", "description", "a field the tool takes " + i));
+        }
+        ChatRequest request = buildRequest("hi").toBuilder()
+                .tools(List.of(ToolDefinition.builder().name("lookup").description("Looks things up")
+                        .parameters(Map.of("type", "object", "properties", bigSchema)).build()))
+                .build();
+
+        assertThatThrownBy(() -> cappedAt(500, new TiktokenEstimator()).enforceRequest(request, "workspace-1"))
+                .isInstanceOf(GatewayException.class)
+                .hasFieldOrPropertyWithValue("code", "INPUT_TOO_LARGE");
+    }
+
     @Test
     void enforceRequest_tenantOverridesMaxMessages_respected() {
         GuardrailProperties props = new GuardrailProperties();

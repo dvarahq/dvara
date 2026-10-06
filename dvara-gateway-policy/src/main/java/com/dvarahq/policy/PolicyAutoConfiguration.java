@@ -390,10 +390,11 @@ public class PolicyAutoConfiguration {
                                                 ObjectProvider<GuardrailMetricsListener> guardrailMetricsListener,
                                                 ObjectProvider<
                                                         GuardrailSettingsRepository> guardrailSettings,
-                                                ObjectProvider<WorkspaceSettingEntryRepository> settingEntries) {
+                                                ObjectProvider<WorkspaceSettingEntryRepository> settingEntries,
+                                                TokenEstimator tokenEstimator) {
         GuardrailScanService service = new GuardrailScanService(guardrailDetector, auditWriter,
                 workspaceRepository, guardrailProperties, new SystemPromptLeakDetector(),
-                guardrailMetricsListener);
+                guardrailMetricsListener, tokenEstimator);
         // ObjectProvider: the typed store registers only with a datasource, and this bean must keep
         // working without one, falling through to the workspace metadata map.
         service.setGuardrailSettings(guardrailSettings.getIfAvailable());
