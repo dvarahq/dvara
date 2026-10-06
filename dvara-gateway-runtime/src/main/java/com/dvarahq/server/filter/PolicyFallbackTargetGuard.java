@@ -21,8 +21,6 @@ import com.dvarahq.core.policy.PolicyDecision;
 import com.dvarahq.core.policy.PolicyEngine;
 import com.dvarahq.core.resilience.FallbackTargetGuard;
 import org.springframework.stereotype.Component;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
 
 /**
  * A route fallback to another model passes the same policy the request passed (#7 REQ-CPF-05, AC-CPF-05):
@@ -41,24 +39,11 @@ public class PolicyFallbackTargetGuard implements FallbackTargetGuard {
 
     @Override
     public String refuse(ChatRequest request, String provider) {
-        PolicyContext context = currentContext();
+        PolicyContext context = PolicyEnforcementFilter.rememberedContext();
         if (context == null) {
             return null;   // no policy was evaluated for this request, so none applies to its fallback
         }
         PolicyDecision decision = policyEngine.evaluate(context, request);
         return decision.allowed() ? null : "policy: " + decision.reason();
-    }
-
-    private static PolicyContext currentContext() {
-        RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
-        if (attrs == null) {
-            return null;
-        }
-        try {
-            return (PolicyContext) attrs.getAttribute(PolicyEnforcementFilter.POLICY_CONTEXT_ATTRIBUTE,
-                    RequestAttributes.SCOPE_REQUEST);
-        } catch (IllegalStateException requestIsGone) {
-            return null;
-        }
     }
 }

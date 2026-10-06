@@ -31,6 +31,8 @@ import com.dvarahq.core.security.SecurityContext;
 import com.dvarahq.core.workspace.Workspace;
 import com.dvarahq.core.workspace.WorkspaceRepository;
 import org.springframework.stereotype.Component;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -91,10 +93,10 @@ public class PolicyEnforcementFilter implements ChatFilter {
 
         PolicyDecision decision = policyEngine.evaluate(policyCtx, request);
         ctx.setPolicyDecision(decision);
-        rememberForFallback(policyCtx);
+        remember(policyCtx, request.getModel());
 
         if (!decision.allowed()) {
-            auditPolicyDenial(request, policyCtx, decision);
+            auditPolicyDenial(auditWriter, request, policyCtx, decision);
             throw new GatewayException("POLICY_DENIED", decision.reason());
         }
 
@@ -104,19 +106,47 @@ public class PolicyEnforcementFilter implements ChatFilter {
     /** Request attribute holding the context this request's policy was evaluated in (#7). */
     public static final String POLICY_CONTEXT_ATTRIBUTE = "dvara.policy.context";
 
+    /** Request attribute holding the model this request's policy was evaluated for. */
+    static final String POLICY_MODEL_ATTRIBUTE = "dvara.policy.model";
+
     /**
-     * Keeps the context on the request, so a route fallback to another model is evaluated against the same
-     * policy with the same facts ({@link PolicyFallbackTargetGuard}).
+     * Keeps the context and the model on the request, so the model the dispatcher actually sends, and a route
+     * fallback to another model, are evaluated against the same policy with the same facts
+     * ({@link PolicyPrimaryTargetGuard}, {@link PolicyFallbackTargetGuard}).
      */
-    private static void rememberForFallback(PolicyContext policyCtx) {
-        var attrs = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+    private static void remember(PolicyContext policyCtx, String model) {
+        RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
         if (attrs != null) {
             try {
-                attrs.setAttribute(POLICY_CONTEXT_ATTRIBUTE, policyCtx,
-                        org.springframework.web.context.request.RequestAttributes.SCOPE_REQUEST);
+                attrs.setAttribute(POLICY_CONTEXT_ATTRIBUTE, policyCtx, RequestAttributes.SCOPE_REQUEST);
+                if (model != null) {
+                    attrs.setAttribute(POLICY_MODEL_ATTRIBUTE, model, RequestAttributes.SCOPE_REQUEST);
+                }
             } catch (IllegalStateException requestIsGone) {
                 // nothing to keep it on
             }
+        }
+    }
+
+    /** The context this request's policy was evaluated in, or null when no policy was evaluated for it. */
+    static PolicyContext rememberedContext() {
+        return (PolicyContext) remembered(POLICY_CONTEXT_ATTRIBUTE);
+    }
+
+    /** The model this request's policy was evaluated for, or null. */
+    static String rememberedModel() {
+        return (String) remembered(POLICY_MODEL_ATTRIBUTE);
+    }
+
+    private static Object remembered(String name) {
+        RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
+        if (attrs == null) {
+            return null;
+        }
+        try {
+            return attrs.getAttribute(name, RequestAttributes.SCOPE_REQUEST);
+        } catch (IllegalStateException requestIsGone) {
+            return null;
         }
     }
 
@@ -144,7 +174,8 @@ public class PolicyEnforcementFilter implements ChatFilter {
      * the status the client gets. They were only on the request's GATEWAY_RESPONSE row, so an audit
      * view, report or SIEM subscriber reading denials on their own saw a denial with no subject.
      */
-    private void auditPolicyDenial(ChatRequest request, PolicyContext policyCtx, PolicyDecision decision) {
+    static void auditPolicyDenial(AuditWriter auditWriter, ChatRequest request, PolicyContext policyCtx,
+                                  PolicyDecision decision) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("model", request.getModel());
         payload.put("status", DENIED_STATUS);
