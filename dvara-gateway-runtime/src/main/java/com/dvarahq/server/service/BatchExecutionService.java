@@ -19,6 +19,7 @@ import com.dvarahq.core.audit.AuditEvent;
 import com.dvarahq.core.audit.AuditWriter;
 import com.dvarahq.core.batch.BatchJob;
 import com.dvarahq.core.batch.BatchJobRepository;
+import com.dvarahq.core.batch.BatchModelCheck;
 import com.dvarahq.core.batch.BatchSubmitGate;
 import com.dvarahq.core.cost.CostRecord;
 import com.dvarahq.core.exception.GatewayException;
@@ -70,6 +71,8 @@ public class BatchExecutionService {
     private final PiiEnforcer piiEnforcer;
     /** Null when no gate is registered; the check is then not made. */
     private final BatchSubmitGate submitGate;
+    /** Empty when nothing checks the models a batch names; the lines are then not read. */
+    private final List<BatchModelCheck> modelChecks;
     private final BatchJobRepository batchJobRepository;
     private final BatchCostBooker costBooker;
     /** Empty when nothing wants to hear about a usage row. */
@@ -79,6 +82,7 @@ public class BatchExecutionService {
 
     public BatchExecutionService(ProviderDispatcher dispatcher, PiiEnforcer piiEnforcer,
                                  org.springframework.beans.factory.ObjectProvider<BatchSubmitGate> submitGate,
+                                 org.springframework.beans.factory.ObjectProvider<BatchModelCheck> modelChecks,
                                  BatchJobRepository batchJobRepository,
                                  BatchCostBooker costBooker,
                                  org.springframework.beans.factory.ObjectProvider<WorkspaceUsageListener> usageListeners,
@@ -86,6 +90,7 @@ public class BatchExecutionService {
         this.dispatcher = dispatcher;
         this.piiEnforcer = piiEnforcer;
         this.submitGate = submitGate.getIfAvailable();
+        this.modelChecks = modelChecks.orderedStream().toList();
         this.batchJobRepository = batchJobRepository;
         this.costBooker = costBooker;
         this.usageListeners = usageListeners.orderedStream().toList();
@@ -104,21 +109,43 @@ public class BatchExecutionService {
      * {@code providerHint} on the subsequent {@code POST /v1/batches} — otherwise submit resolves a
      * different provider that will reject the foreign file id. With a single batch provider (the
      * common case) the hint is unambiguous and can be omitted.</p>
+     *
+     * <p>A file uploaded for batches has its models checked when a {@link BatchModelCheck} is
+     * registered. A file for another purpose is not: its lines are not batch requests.</p>
      */
-    public String uploadFile(byte[] content, String filename, String purpose, String workspaceId, String providerHint) {
+    public String uploadFile(byte[] content, String filename, String purpose, String workspaceId,
+                             String apiKeyId, String providerHint) {
         String scanned = piiEnforcer.enforceBlob(new String(content, StandardCharsets.UTF_8), workspaceId);
+        if ("batch".equals(purpose)) {
+            checkModels(scanned, workspaceId, apiKeyId);
+        }
         LlmProvider provider = dispatcher.selectBatchProvider(providerHint);
         return provider.uploadFile(scanned.getBytes(StandardCharsets.UTF_8), filename, purpose);
     }
 
     // ---- submit -----------------------------------------------------------
 
-    /** Gates the submit if a gate is registered, relays to the provider, and persists a tracking row. */
+    /**
+     * Gates the submit if a gate is registered, checks the input file's models again if a model check
+     * is registered, relays to the provider, and persists a tracking row.
+     *
+     * <p>The models are checked again here, not only at upload, because a model can be turned off
+     * after its file was accepted. The file is read back from the provider for that, so the check
+     * covers the content the provider will run, whatever path the file took there. If the provider
+     * will not hand the file back, the submit goes ahead on the check made at upload.</p>
+     */
     public String createBatch(String requestJson, String workspaceId, String apiKeyId, String providerHint) {
         if (submitGate != null) {
             submitGate.check(workspaceId, apiKeyId);
         }
         LlmProvider provider = dispatcher.selectBatchProvider(providerHint);
+        if (!modelChecks.isEmpty()) {
+            String inputFileId = inputFileId(requestJson);
+            byte[] content = inputFileId == null ? null : readBack(provider, inputFileId, workspaceId);
+            if (content != null) {
+                checkModels(new String(content, StandardCharsets.UTF_8), workspaceId, apiKeyId);
+            }
+        }
         String raw = provider.createBatch(requestJson);
 
         JsonNode node = parse(raw);
@@ -370,6 +397,102 @@ public class BatchExecutionService {
                     job.getProviderBatchId(), skipped, lines, job.getWorkspaceId());
         }
         return perModel;
+    }
+
+    // ---- model checks -----------------------------------------------------
+
+    /**
+     * Asks every registered {@link BatchModelCheck} about each distinct model the JSONL names, and
+     * refuses the whole file if one refuses, naming the first line with that model.
+     *
+     * <p>A line that is not a JSON object, or names no model in {@code body.model}, is refused before
+     * any check is asked: no check can vouch for a line whose model it was not shown. Blank lines are
+     * skipped. Line numbers count every line of the file from 1, blank ones included, so they match
+     * what an editor shows.</p>
+     */
+    private void checkModels(String jsonl, String workspaceId, String apiKeyId) {
+        if (modelChecks.isEmpty()) {
+            return;
+        }
+        // model -> the first line naming it: {line number, custom_id}
+        Map<String, Object[]> firstLine = new LinkedHashMap<>();
+        int number = 0;
+        for (java.util.Iterator<String> lines = jsonl.lines().iterator(); lines.hasNext(); ) {
+            String line = lines.next();
+            number++;
+            if (line.isBlank()) {
+                continue;
+            }
+            JsonNode node;
+            try {
+                node = OBJECT_MAPPER.readTree(line);
+            } catch (Exception e) {
+                node = null;
+            }
+            if (node == null || !node.isObject()) {
+                throw lineRefused(number, null, "INVALID_REQUEST",
+                        "is not a JSON object, so the model it names cannot be checked.", Map.of());
+            }
+            String customId = textOrNull(node, "custom_id");
+            JsonNode model = node.path("body").path("model");
+            if (!model.isTextual() || model.asText().isBlank()) {
+                throw lineRefused(number, customId, "INVALID_REQUEST",
+                        "names no model in body.model, so it cannot be checked.", Map.of());
+            }
+            firstLine.putIfAbsent(model.asText(), new Object[] {number, customId});
+        }
+        for (Map.Entry<String, Object[]> entry : firstLine.entrySet()) {
+            for (BatchModelCheck check : modelChecks) {
+                try {
+                    check.check(workspaceId, apiKeyId, entry.getKey());
+                } catch (GatewayException refused) {
+                    throw lineRefused((Integer) entry.getValue()[0], (String) entry.getValue()[1],
+                            refused.getCode(), refused.getMessage(), refused.getDetails());
+                }
+            }
+        }
+    }
+
+    /**
+     * The input file's content, or {@code null} if the provider will not return it: some refuse to
+     * serve a file uploaded for batches, and some do not serve files at all. The submit then relies
+     * on the check made when the file was uploaded. One WARN per submit, naming the file but never
+     * its content.
+     */
+    private static byte[] readBack(LlmProvider provider, String inputFileId, String workspaceId) {
+        try {
+            return provider.getFileContent(inputFileId);
+        } catch (RuntimeException e) {
+            log.warn("Batch input file {} (workspace {}) could not be read back from {}, so its models were "
+                    + "not checked again at submit; the check made at upload stands: {}",
+                    inputFileId, workspaceId, provider.name(), e.toString());
+            return null;
+        }
+    }
+
+    /** The refusal for one line: the reason's own code and details, with the line added to both. */
+    private static GatewayException lineRefused(int number, String customId, String code, String reason,
+                                                Map<String, Object> details) {
+        Map<String, Object> withLine = new LinkedHashMap<>(details);
+        withLine.put("line", number);
+        withLine.put("custom_id", customId);
+        String where = customId != null
+                ? "Batch line " + number + " (custom_id " + customId + ")"
+                : "Batch line " + number;
+        return new GatewayException(code, where + ": " + reason, withLine);
+    }
+
+    /**
+     * The {@code input_file_id} of a submit body, or {@code null} if it has none or is not JSON. A
+     * body like that is the provider's to refuse; there is no file whose models could be checked.
+     */
+    private static String inputFileId(String requestJson) {
+        try {
+            String id = textOrNull(OBJECT_MAPPER.readTree(requestJson), "input_file_id");
+            return id == null || id.isBlank() ? null : id;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ---- helpers ----------------------------------------------------------

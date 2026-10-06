@@ -19,6 +19,7 @@ import com.dvarahq.server.TestProviders;
 import com.dvarahq.core.audit.AuditWriter;
 import com.dvarahq.core.batch.BatchJob;
 import com.dvarahq.core.batch.BatchJobRepository;
+import com.dvarahq.core.batch.BatchModelCheck;
 import com.dvarahq.core.batch.BatchSubmitGate;
 import com.dvarahq.core.cost.CostRecord;
 import com.dvarahq.core.exception.GatewayException;
@@ -77,14 +78,15 @@ class BatchExecutionServiceTest {
         when(dispatcher.selectBatchProvider(any())).thenReturn(provider);
         when(piiEnforcer.enforceBlob(anyString(), any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service = new BatchExecutionService(dispatcher, piiEnforcer, provider(submitGate), batchJobRepository,
+        service = new BatchExecutionService(dispatcher, piiEnforcer, provider(submitGate), TestProviders.of(null),
+                batchJobRepository,
                 costBooker, TestProviders.of(usageListener), auditWriter, metrics);
     }
 
     @Test
     void uploadFile_scansBlobThenRelays() {
         when(provider.uploadFile(any(), eq("in.jsonl"), eq("batch"))).thenReturn("{\"id\":\"file_1\"}");
-        String raw = service.uploadFile("hello".getBytes(StandardCharsets.UTF_8), "in.jsonl", "batch", "t1", null);
+        String raw = service.uploadFile("hello".getBytes(StandardCharsets.UTF_8), "in.jsonl", "batch", "t1", "k1", null);
         assertThat(raw).contains("file_1");
         verify(piiEnforcer).enforceBlob("hello", "t1");
     }
@@ -299,13 +301,179 @@ class BatchExecutionServiceTest {
         // everything.
         when(provider.createBatch(anyString()))
                 .thenReturn("{\"id\":\"batch_1\",\"status\":\"validating\",\"input_file_id\":\"file_1\"}");
-        var ungated = new BatchExecutionService(dispatcher, piiEnforcer, provider(null), batchJobRepository,
+        var ungated = new BatchExecutionService(dispatcher, piiEnforcer, provider(null), TestProviders.of(null),
+                batchJobRepository,
                 costBooker, TestProviders.of(usageListener), auditWriter, metrics);
 
         ungated.createBatch("{}", "t1", "k1", null);
 
         verify(provider).createBatch("{}");
         verify(batchJobRepository).save(any());
+    }
+
+    // ---- model checks -----------------------------------------------------
+
+    /** Three lines, two models; line 2 is blank, so the lines that name models are 1, 3 and 4. */
+    private static final String INPUT_JSONL =
+            "{\"custom_id\":\"r1\",\"method\":\"POST\",\"url\":\"/v1/chat/completions\",\"body\":{\"model\":\"gpt-4o\"}}\n"
+          + "\n"
+          + "{\"custom_id\":\"r3\",\"method\":\"POST\",\"url\":\"/v1/chat/completions\",\"body\":{\"model\":\"gpt-4o-mini\"}}\n"
+          + "{\"custom_id\":\"r4\",\"method\":\"POST\",\"url\":\"/v1/chat/completions\",\"body\":{\"model\":\"gpt-4o\"}}\n";
+
+    private BatchExecutionService checkedBy(BatchModelCheck check) {
+        return new BatchExecutionService(dispatcher, piiEnforcer, provider(null), TestProviders.of(check),
+                batchJobRepository, costBooker, TestProviders.of(usageListener), auditWriter, metrics);
+    }
+
+    /** A check that refuses one model the way a direct request for it is refused. */
+    private static BatchModelCheck refusing(String model) {
+        return (workspaceId, apiKeyId, m) -> {
+            if (m.equals(model)) {
+                throw new GatewayException("POLICY_DENIED", "Model " + m + " is turned off.",
+                        Map.of("reason", "model_disabled", "model", m));
+            }
+        };
+    }
+
+    @Test
+    void uploadFile_aCheckRefusesAModel_theFileIsNotSentAndTheErrorNamesTheLine() {
+        BatchExecutionService checked = checkedBy(refusing("gpt-4o-mini"));
+
+        assertThatThrownBy(() -> checked.uploadFile(INPUT_JSONL.getBytes(StandardCharsets.UTF_8),
+                "in.jsonl", "batch", "t1", "k1", null))
+                .isInstanceOfSatisfying(GatewayException.class, e -> {
+                    // The check's own refusal, so a caller handles it like a refused direct request ...
+                    assertThat(e.getCode()).isEqualTo("POLICY_DENIED");
+                    assertThat(e.getDetails()).containsEntry("reason", "model_disabled")
+                            .containsEntry("model", "gpt-4o-mini")
+                            // ... with the line that named the model added.
+                            .containsEntry("line", 3)
+                            .containsEntry("custom_id", "r3");
+                    assertThat(e.getMessage())
+                            .isEqualTo("Batch line 3 (custom_id r3): Model gpt-4o-mini is turned off.");
+                });
+        verify(provider, never()).uploadFile(any(), any(), any());
+    }
+
+    @Test
+    void uploadFile_everyModelAllowed_asksOncePerModelAndRelaysTheFile() {
+        BatchModelCheck check = mock(BatchModelCheck.class);
+        when(provider.uploadFile(any(), eq("in.jsonl"), eq("batch"))).thenReturn("{\"id\":\"file_1\"}");
+
+        String raw = checkedBy(check).uploadFile(INPUT_JSONL.getBytes(StandardCharsets.UTF_8),
+                "in.jsonl", "batch", "t1", "k1", null);
+
+        assertThat(raw).contains("file_1");
+        verify(check).check("t1", "k1", "gpt-4o");
+        verify(check).check("t1", "k1", "gpt-4o-mini");
+        verifyNoMoreInteractions(check);
+    }
+
+    @Test
+    void uploadFile_withACheck_aLineThatIsNotJsonIsRefused() {
+        BatchModelCheck check = mock(BatchModelCheck.class);
+        String jsonl = "{\"custom_id\":\"r1\",\"body\":{\"model\":\"gpt-4o\"}}\nnot json\n";
+
+        assertThatThrownBy(() -> checkedBy(check).uploadFile(jsonl.getBytes(StandardCharsets.UTF_8),
+                "in.jsonl", "batch", "t1", "k1", null))
+                .isInstanceOfSatisfying(GatewayException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo("INVALID_REQUEST");
+                    assertThat(e.getDetails()).containsEntry("line", 2);
+                    assertThat(e.getMessage()).startsWith("Batch line 2: is not a JSON object");
+                });
+        verify(provider, never()).uploadFile(any(), any(), any());
+        verifyNoInteractions(check);
+    }
+
+    @Test
+    void uploadFile_withACheck_aLineWithNoModelIsRefused() {
+        String jsonl = "{\"custom_id\":\"r1\",\"body\":{\"messages\":[]}}\n";
+
+        assertThatThrownBy(() -> checkedBy(mock(BatchModelCheck.class)).uploadFile(
+                jsonl.getBytes(StandardCharsets.UTF_8), "in.jsonl", "batch", "t1", "k1", null))
+                .isInstanceOfSatisfying(GatewayException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo("INVALID_REQUEST");
+                    assertThat(e.getDetails()).containsEntry("line", 1).containsEntry("custom_id", "r1");
+                    assertThat(e.getMessage()).contains("names no model in body.model");
+                });
+        verify(provider, never()).uploadFile(any(), any(), any());
+    }
+
+    @Test
+    void uploadFile_withNoCheck_theLinesAreNotRead() {
+        // No check registered: a file the gateway could not read a model from is relayed as before,
+        // and the provider is the one to refuse it.
+        when(provider.uploadFile(any(), eq("in.jsonl"), eq("batch"))).thenReturn("{\"id\":\"file_1\"}");
+
+        assertThat(service.uploadFile("not json".getBytes(StandardCharsets.UTF_8), "in.jsonl", "batch",
+                "t1", "k1", null)).contains("file_1");
+    }
+
+    @Test
+    void uploadFile_forAnotherPurpose_isNotChecked() {
+        BatchModelCheck check = mock(BatchModelCheck.class);
+        when(provider.uploadFile(any(), eq("train.jsonl"), eq("fine-tune"))).thenReturn("{\"id\":\"file_2\"}");
+
+        checkedBy(check).uploadFile("{\"messages\":[]}".getBytes(StandardCharsets.UTF_8),
+                "train.jsonl", "fine-tune", "t1", "k1", null);
+
+        verifyNoInteractions(check);
+    }
+
+    @Test
+    void createBatch_aModelTurnedOffAfterUpload_isRefusedAtSubmit() {
+        // The file was accepted earlier; the model has been turned off since. The submit reads the
+        // file back and asks again, and nothing reaches the provider's batch endpoint.
+        when(provider.getFileContent("file_1")).thenReturn(INPUT_JSONL.getBytes(StandardCharsets.UTF_8));
+        BatchExecutionService checked = checkedBy(refusing("gpt-4o"));
+
+        assertThatThrownBy(() -> checked.createBatch(
+                "{\"input_file_id\":\"file_1\",\"endpoint\":\"/v1/chat/completions\"}", "t1", "k1", null))
+                .isInstanceOfSatisfying(GatewayException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo("POLICY_DENIED");
+                    assertThat(e.getDetails()).containsEntry("line", 1).containsEntry("model", "gpt-4o");
+                });
+        verify(provider, never()).createBatch(anyString());
+        verify(batchJobRepository, never()).save(any());
+    }
+
+    @Test
+    void createBatch_everyModelAllowed_submits() {
+        when(provider.getFileContent("file_1")).thenReturn(INPUT_JSONL.getBytes(StandardCharsets.UTF_8));
+        when(provider.createBatch(anyString()))
+                .thenReturn("{\"id\":\"batch_1\",\"status\":\"validating\",\"input_file_id\":\"file_1\"}");
+
+        checkedBy(refusing("some-other-model")).createBatch("{\"input_file_id\":\"file_1\"}", "t1", "k1", null);
+
+        verify(provider).createBatch("{\"input_file_id\":\"file_1\"}");
+        verify(batchJobRepository).save(any());
+    }
+
+    @Test
+    void createBatch_theProviderWillNotReturnTheFile_submitsOnTheUploadCheck() {
+        // Reading the file back is a second look, not the only one: if the provider refuses to serve
+        // it, the submit goes ahead and the check made at upload stands.
+        BatchModelCheck check = mock(BatchModelCheck.class);
+        when(provider.getFileContent("file_1"))
+                .thenThrow(GatewayException.upstream(400, "Not allowed to download files of purpose: batch"));
+        when(provider.createBatch(anyString()))
+                .thenReturn("{\"id\":\"batch_1\",\"status\":\"validating\",\"input_file_id\":\"file_1\"}");
+
+        checkedBy(check).createBatch("{\"input_file_id\":\"file_1\"}", "t1", "k1", null);
+
+        verify(provider).createBatch("{\"input_file_id\":\"file_1\"}");
+        verify(batchJobRepository).save(any());
+        verifyNoInteractions(check);
+    }
+
+    @Test
+    void createBatch_withNoCheck_doesNotReadTheFile() {
+        when(provider.createBatch(anyString()))
+                .thenReturn("{\"id\":\"batch_1\",\"status\":\"validating\",\"input_file_id\":\"file_1\"}");
+
+        service.createBatch("{\"input_file_id\":\"file_1\"}", "t1", "k1", null);
+
+        verify(provider, never()).getFileContent(anyString());
     }
 
     private static <T> org.springframework.beans.factory.ObjectProvider<T> provider(T value) {

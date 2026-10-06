@@ -229,8 +229,12 @@ key as its API key.
   cap and the context-window check all use that same count.
 - ✅ **Tamper-evident audit** — every decision written to an HMAC-chained log on local disk, with
   an offline verifier that reports what it checked as well as whether it passed.
-- ✅ **Batch** — the OpenAI Batch API through the gateway, governed like everything else. Jobs are
-  tracked in memory, so a restart forgets them.
+- ✅ **Batch** — the OpenAI Batch API through the gateway. The input file is PII-scanned as a whole
+  and its cost is booked when the batch finishes. Its lines do not run the request pipeline, so a
+  policy, guardrail or rate limit on direct requests does not apply to them. An application can
+  refuse models in a batch with a `BatchModelCheck` bean: the gateway asks it about each model a file
+  names when the file is uploaded and again when a batch is submitted, and refuses the file naming
+  the line. Jobs are tracked in memory, so a restart forgets them.
 
 **Routing and reliability**
 

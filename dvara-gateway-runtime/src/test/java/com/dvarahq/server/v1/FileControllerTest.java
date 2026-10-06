@@ -52,7 +52,7 @@ class FileControllerTest {
 
     @Test
     void upload_relaysFileAndReturnsProviderJson() throws Exception {
-        when(batchService.uploadFile(any(), eq("in.jsonl"), eq("batch"), eq(TestApiKey.WORKSPACE), any()))
+        when(batchService.uploadFile(any(), eq("in.jsonl"), eq("batch"), eq(TestApiKey.WORKSPACE), eq(TestApiKey.ID), any()))
                 .thenReturn("{\"id\":\"file_1\",\"object\":\"file\"}");
 
         MockMultipartFile file = new MockMultipartFile(
@@ -66,12 +66,12 @@ class FileControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("file_1"));
 
-        verify(batchService).uploadFile(any(), eq("in.jsonl"), eq("batch"), eq(TestApiKey.WORKSPACE), any());
+        verify(batchService).uploadFile(any(), eq("in.jsonl"), eq("batch"), eq(TestApiKey.WORKSPACE), eq(TestApiKey.ID), any());
     }
 
     @Test
     void upload_piiBlocked_returns400() throws Exception {
-        when(batchService.uploadFile(any(), any(), any(), any(), any()))
+        when(batchService.uploadFile(any(), any(), any(), any(), any(), any()))
                 .thenThrow(new GatewayException("PII_DETECTED", "Batch input file blocked: PII detected (EMAIL)"));
 
         MockMultipartFile file = new MockMultipartFile(
@@ -81,5 +81,22 @@ class FileControllerTest {
         mockMvc.perform(multipart("/v1/files").file(file))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("pii_detected"));
+    }
+
+    @Test
+    void upload_aLineNamingARefusedModel_returnsTheRefusalWithTheLine() throws Exception {
+        when(batchService.uploadFile(any(), any(), any(), any(), any(), any()))
+                .thenThrow(new GatewayException("POLICY_DENIED", "Batch line 2 (custom_id r2): Model x is turned off.",
+                        java.util.Map.of("reason", "model_disabled", "model", "x", "line", 2, "custom_id", "r2")));
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "in.jsonl", "application/jsonl", "{}".getBytes(StandardCharsets.UTF_8));
+
+        mockMvc.perform(multipart("/v1/files").file(file))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("policy_denied"))
+                .andExpect(jsonPath("$.error.model").value("x"))
+                .andExpect(jsonPath("$.error.line").value(2))
+                .andExpect(jsonPath("$.error.custom_id").value("r2"));
     }
 }
