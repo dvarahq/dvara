@@ -58,6 +58,9 @@ public class GuardrailProperties {
      * the bound. {@link #maxMessagesPerRequest} and {@link #maxMessageLength} still apply, and the
      * application may add per-workspace token or budget caps. Set a figure here to bound input
      * below what the model allows.</p>
+     *
+     * <p>The request is counted by the gateway's {@code TokenEstimator}, the same count the
+     * context-window check, the rate limiter and the usage meter use.</p>
      */
     private int maxInputTokens = 0;
 

@@ -224,7 +224,9 @@ key as its API key.
 - ✅ **Guardrails** — prompt-injection defence and content filtering, on the request and the
   response. On by default; each workspace chooses whether a detection logs, flags or blocks.
 - ✅ **Rate limiting** — requests and tokens per minute, per API key, counted inside the process.
-  Off until you enable it.
+  Off until you enable it. A request's tokens are counted once, from what it sends the model (text,
+  tool calls, tool definitions, images), not from its JSON. The rate limit, the guardrail's input-token
+  cap and the context-window check all use that same count.
 - ✅ **Tamper-evident audit** — every decision written to an HMAC-chained log on local disk, with
   an offline verifier that reports what it checked as well as whether it passed.
 - ✅ **Batch** — the OpenAI Batch API through the gateway, governed like everything else. Jobs are

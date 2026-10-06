@@ -16,6 +16,7 @@
 package com.dvarahq.server.web;
 
 import com.dvarahq.core.guardrail.TokenEstimator;
+import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.ratelimit.EffectiveRateLimit;
 import com.dvarahq.core.ratelimit.RateLimitErrorDetail;
 import com.dvarahq.core.ratelimit.RateLimitResult;
@@ -217,7 +218,7 @@ class RateLimitServletFilterTest {
     @Test
     void tokenEstimation_callsCheckLimitWithEstimate() throws Exception {
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
-        when(tokenEstimator.estimateTokens(any(String.class))).thenReturn(500);
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(500);
         filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, null);
 
         when(request.getRequestURI()).thenReturn("/v1/chat/completions");
@@ -243,7 +244,7 @@ class RateLimitServletFilterTest {
     @org.junit.jupiter.params.provider.ValueSource(strings = {"/v1/responses", "/v1/embeddings"})
     void tokenEstimation_reservesForEveryTokenSpendingEndpoint(String uri) throws Exception {
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
-        when(tokenEstimator.estimateTokens(any(String.class))).thenReturn(40);
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(40);
         filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, null);
 
         when(request.getRequestURI()).thenReturn(uri);
@@ -272,7 +273,7 @@ class RateLimitServletFilterTest {
 
         filter.doFilterInternal(request, response, chain);
 
-        verify(tokenEstimator, never()).estimateTokens(any(String.class));
+        verify(tokenEstimator, never()).estimateTokens(any(ChatRequest.class));
         verify(request, never()).getInputStream();
     }
 
@@ -306,7 +307,7 @@ class RateLimitServletFilterTest {
                 .as("every byte reaches the controller, the ones past the cap included")
                 .isEqualTo(body);
         assertThat(forwarded.getValue().getContentLength()).as("still undeclared").isEqualTo(-1);
-        verify(tokenEstimator, never()).estimateTokens(any(String.class));
+        verify(tokenEstimator, never()).estimateTokens(any(ChatRequest.class));
         verify(rateLimiter).checkLimit(eq("sk-test"), any(EffectiveRateLimit.class));
     }
 
@@ -316,10 +317,15 @@ class RateLimitServletFilterTest {
         for (int over : new int[]{0, 1}) {
             setUp();
             TokenEstimator tokenEstimator = mock(TokenEstimator.class);
-            when(tokenEstimator.estimateTokens(any(String.class))).thenReturn(7);
+            when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(7);
             filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, null);
+            // A request the endpoint accepts, padded to exactly the cap, or one byte more.
+            byte[] head = "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"".getBytes(StandardCharsets.UTF_8);
+            byte[] tail = "\"}]}".getBytes(StandardCharsets.UTF_8);
             byte[] body = new byte[10 * 1024 * 1024 + over];
             java.util.Arrays.fill(body, (byte) 'b');
+            System.arraycopy(head, 0, body, 0, head.length);
+            System.arraycopy(tail, 0, body, body.length - tail.length, tail.length);
 
             when(request.getRequestURI()).thenReturn("/v1/chat/completions");
             when(request.getMethod()).thenReturn("POST");
@@ -335,10 +341,10 @@ class RateLimitServletFilterTest {
             verify(chain).doFilter(forwarded.capture(), eq(response));
             assertThat(forwarded.getValue().getInputStream().readAllBytes()).as("over=" + over).isEqualTo(body);
             if (over == 0) {
-                verify(tokenEstimator).estimateTokens(any(String.class));
+                verify(tokenEstimator).estimateTokens(any(ChatRequest.class));
                 verify(rateLimiter).checkLimit(eq("sk-test"), eq(7), any(EffectiveRateLimit.class));
             } else {
-                verify(tokenEstimator, never()).estimateTokens(any(String.class));
+                verify(tokenEstimator, never()).estimateTokens(any(ChatRequest.class));
                 verify(rateLimiter).checkLimit(eq("sk-test"), any(EffectiveRateLimit.class));
             }
         }
@@ -348,7 +354,7 @@ class RateLimitServletFilterTest {
     @Test
     void aChunkedBodyUnderTheCap_isEstimated() throws Exception {
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
-        when(tokenEstimator.estimateTokens(any(String.class))).thenReturn(500);
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(500);
         filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, null);
 
         when(request.getRequestURI()).thenReturn("/v1/chat/completions");
@@ -368,6 +374,88 @@ class RateLimitServletFilterTest {
         verify(rateLimiter).checkLimit(eq("sk-test"), eq(500), any(EffectiveRateLimit.class));
     }
 
+    /** Runs the filter on one body and returns the tokens it reserved. */
+    private int reservedFor(String uri, String body, TokenEstimator estimator) throws Exception {
+        setUp();
+        filter = new RateLimitServletFilter(rateLimiter, estimator, null);
+        when(request.getRequestURI()).thenReturn(uri);
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("sk-test");
+        when(request.getContentLength()).thenReturn(body.length());
+        when(request.getInputStream()).thenReturn(mockInputStream(body));
+        when(rateLimiter.checkLimit(eq("sk-test"), anyInt(), any(EffectiveRateLimit.class)))
+                .thenReturn(RateLimitResult.allow());
+        when(rateLimiter.checkLimit(eq("sk-test"), any(EffectiveRateLimit.class))).thenReturn(RateLimitResult.allow());
+
+        filter.doFilterInternal(request, response, chain);
+
+        ArgumentCaptor<Object> reserved = ArgumentCaptor.forClass(Object.class);
+        verify(request).setAttribute(eq(RateLimitServletFilter.RESERVED_TOKENS_ATTR), reserved.capture());
+        return (Integer) reserved.getValue();
+    }
+
+    /**
+     * The request is counted as the endpoint reads it, not as JSON text. An inline image is counted as
+     * the provider counts an image, so its base64 does not use up the allowance.
+     */
+    @Test
+    void anInlineImage_isCountedAsAnImage_notAsItsBase64() throws Exception {
+        TokenEstimator estimator = new com.dvarahq.autoconfigure.guardrail.SimpleTokenEstimator();
+        String base64 = "A".repeat(400_000);
+        String body = """
+                {"model":"gpt-4o","messages":[{"role":"user","content":[
+                  {"type":"text","text":"What is in this picture?"},
+                  {"type":"image_url","image_url":{"url":"data:image/png;base64,%s","detail":"low"}}]}]}
+                """.formatted(base64);
+
+        int reserved = reservedFor("/v1/chat/completions", body, estimator);
+
+        ChatRequest asTheEndpointReadsIt = ChatRequest.builder().model("gpt-4o")
+                .messages(java.util.List.of(com.dvarahq.core.model.MultimodalMessage.builder().role("user")
+                        .content(java.util.List.of(
+                                new com.dvarahq.core.model.ContentBlock.TextBlock("What is in this picture?"),
+                                new com.dvarahq.core.model.ContentBlock.ImageBlock("image/png", base64, "low")))
+                        .build()))
+                .build();
+        assertThat(reserved)
+                .as("the same count the estimator gives the request the endpoint builds")
+                .isEqualTo(estimator.estimateTokens(asTheEndpointReadsIt));
+        assertThat(reserved)
+                .as("a low-detail image is a small fixed allowance, not 100,000 tokens of base64")
+                .isLessThan(1_000);
+    }
+
+    /** The JSON field names and punctuation are not tokens the provider bills. */
+    @Test
+    void theJsonSyntaxIsNotCounted() throws Exception {
+        TokenEstimator estimator = new com.dvarahq.autoconfigure.guardrail.SimpleTokenEstimator();
+        String body = "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"" + "x".repeat(400) + "\"}]}";
+
+        assertThat(reservedFor("/v1/chat/completions", body, estimator)).isEqualTo(100);
+    }
+
+    /** Each endpoint's body is read in its own shape: the same text costs the same on each. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "/v1/chat/completions|{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}]}",
+            "/v1/responses|{\"model\":\"m\",\"input\":\"%s\"}",
+            "/v1/messages|{\"model\":\"m\",\"max_tokens\":10,\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}]}",
+            "/v1/embeddings|{\"model\":\"m\",\"input\":\"%s\"}"})
+    void everyTokenSpendingEndpoint_countsItsText(String uri, String shape) throws Exception {
+        TokenEstimator estimator = new com.dvarahq.autoconfigure.guardrail.SimpleTokenEstimator();
+
+        assertThat(reservedFor(uri, shape.formatted("y".repeat(800)), estimator)).isEqualTo(200);
+    }
+
+    /** A body the endpoint will refuse reserves nothing; the endpoint answers it. */
+    @Test
+    void aBodyThatIsNotARequest_reservesNothing() throws Exception {
+        TokenEstimator estimator = mock(TokenEstimator.class);
+
+        assertThat(reservedFor("/v1/chat/completions", "not json", estimator)).isZero();
+        verify(estimator, never()).estimateTokens(any(ChatRequest.class));
+    }
+
     @Test
     void tokenEstimation_skippedForAnUploadThatSpendsNoTokens() throws Exception {
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
@@ -384,7 +472,7 @@ class RateLimitServletFilterTest {
 
         verify(rateLimiter).checkLimit(eq("sk-test"), any(EffectiveRateLimit.class));
         verify(rateLimiter, never()).checkLimit(any(), anyInt(), any());
-        verify(tokenEstimator, never()).estimateTokens(any(String.class));
+        verify(tokenEstimator, never()).estimateTokens(any(ChatRequest.class));
     }
 
     @Test
@@ -463,7 +551,7 @@ class RateLimitServletFilterTest {
         WorkspaceRateLimitResolver resolver = mock(WorkspaceRateLimitResolver.class);
         when(resolver.resolve("workspace-A")).thenReturn(override);
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
-        when(tokenEstimator.estimateTokens(any(String.class))).thenReturn(500);
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(500);
         filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, resolver);
 
         when(request.getRequestURI()).thenReturn("/v1/chat/completions");

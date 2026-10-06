@@ -22,6 +22,7 @@ import com.dvarahq.core.ratelimit.RateLimitErrorDetail;
 import com.dvarahq.core.ratelimit.RateLimitResult;
 import com.dvarahq.core.ratelimit.RateLimiter;
 import com.dvarahq.core.ratelimit.WorkspaceRateLimitResolver;
+import com.dvarahq.server.v1.AdmissionRequests;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -108,10 +109,12 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
                     // reported as the request reported it.
                     effectiveRequest = new CachedBodyRequestWrapper(request, body, in);
                 } else {
-                    if (body.length > 0) {
-                        String bodyStr = new String(body, StandardCharsets.UTF_8);
-                        estimatedTokens = tokenEstimator.estimateTokens(bodyStr);
-                    }
+                    // The request the endpoint will build from this body, counted by the one estimator
+                    // the rest of the gateway uses: its text, tool calls, tool definitions and images,
+                    // not its JSON syntax or the base64 of an inline image.
+                    estimatedTokens = AdmissionRequests.forTokenCount(request.getRequestURI(), body)
+                            .map(tokenEstimator::estimateTokens)
+                            .orElse(0);
                     effectiveRequest = new CachedBodyRequestWrapper(request, body);
                 }
             }
