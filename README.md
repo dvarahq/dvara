@@ -380,6 +380,14 @@ policy `allowlist` or `denylist` matches model names exactly, so list each name.
 condition applies only to a request that sets `max_tokens`. A rule's `action` is `DENY` or
 `WARN_AGENT`.
 
+A policy applies to the model the gateway actually sends, not only the model the caller named. When a
+route sends another model (a strategy pins a version or picks a tier), the policy is checked again on
+that model. If it denies it, the caller gets the same `403 policy_denied` and one `POLICY_DENIED` audit
+event, and no provider is called, unless a route backup the policy allows takes the request. **This
+changed in 1.8.6:** before, only the named model was checked, so a request the policy allows by name
+but whose route sends a model the policy denies now fails where it used to be served. Add the model
+the route sends to the `allowlist`, or take it off the `denylist`, to keep serving it.
+
 Anything Spring Boot accepts works the same way here: `--server.port=9090` on the command line, or
 `SERVER_PORT=9090` in the environment.
 
@@ -431,7 +439,8 @@ in `gateway_fallbacks_total{from_provider="openai",to_provider="anthropic"}`.
 - At most `dvara.llm-gateway.resilience.fallback.max-attempts` backups are tried (default `3`), none
   starting more than `...fallback.deadline` after the first attempt (default `60s`). A chain may name
   five. `...fallback.enabled: false` turns failover off.
-- An application that embeds the gateway can check the first provider as well, with a
+- The workspace's policy also checks the model sent to the first provider (see above).
+- An application that embeds the gateway can check the first provider in other ways, with its own
   `PrimaryTargetGuard` bean. It is asked about the request with the model the route actually sends,
   which may not be the one the caller named (a strategy can pin a version or pick a tier). If it refuses,
   the route's chain is tried; if no backup takes the request, the caller gets the guard's error. The
