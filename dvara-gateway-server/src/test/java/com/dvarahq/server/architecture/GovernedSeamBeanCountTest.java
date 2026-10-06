@@ -133,6 +133,10 @@ class GovernedSeamBeanCountTest {
         // after it rather than replacing it.
         m.put(com.dvarahq.core.provider.ModelContextLimits.class, List.of("configuredModelContextLimits"));
 
+        // No model-list filter: /v1/models lists every model of every provider. An application that
+        // turns models off adds one so the list matches what its checks allow.
+        m.put(com.dvarahq.core.provider.ModelListFilter.class, List.of());
+
         // No classifier hook; the detector takes it optionally and checks isAvailable().
         m.put(com.dvarahq.core.guardrail.MlClassifierHook.class, List.of());
 

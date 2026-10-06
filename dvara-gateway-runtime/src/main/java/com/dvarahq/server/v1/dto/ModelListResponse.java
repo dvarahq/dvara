@@ -46,7 +46,7 @@ public class ModelListResponse {
     }
 
     @Data
-    @Builder
+    @Builder(toBuilder = true)
     @NoArgsConstructor
     @AllArgsConstructor
     public static class CapabilitiesDto {

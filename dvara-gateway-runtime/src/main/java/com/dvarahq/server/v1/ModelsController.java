@@ -16,10 +16,15 @@
 package com.dvarahq.server.v1;
 
 import com.dvarahq.core.provider.LlmProvider;
+import com.dvarahq.core.provider.ModelContextLimits;
 import com.dvarahq.core.provider.ModelInfo;
+import com.dvarahq.core.provider.ModelListFilter;
 import com.dvarahq.core.provider.ProviderCapabilities;
+import com.dvarahq.server.filter.ModelWindows;
 import com.dvarahq.server.service.ProviderDispatcher;
+import com.dvarahq.server.v1.dto.AnthropicModelListResponse;
 import com.dvarahq.server.v1.dto.ModelListResponse;
+import com.dvarahq.server.web.ApiKeyAuthFilter;
 import com.dvarahq.server.web.TraceIdFilter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -27,14 +32,30 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.OptionalInt;
 
+/**
+ * {@code GET /v1/models}: the models of every configured provider, narrowed to what the caller may use by
+ * any registered {@link ModelListFilter}, each with its own context window where a
+ * {@link ModelContextLimits} source knows it.
+ *
+ * <p>A request with an {@code anthropic-version} header, as an Anthropic client sends, is answered in
+ * Anthropic's model-list shape and lists only Claude models served by Anthropic. Other models are left
+ * out rather than shown under Claude-like names, so a client built for Anthropic never offers a model it
+ * does not expect.
+ */
 @RestController
 @RequestMapping("/v1")
 @Tag(name = "Models", description = "Model discovery and capabilities")
@@ -45,28 +66,66 @@ public class ModelsController {
     /** How long one provider's model list may take before it is left out of the answer. */
     static final java.time.Duration PER_PROVIDER_TIMEOUT = java.time.Duration.ofSeconds(5);
 
+    /** The header an Anthropic client sends on every request. */
+    static final String ANTHROPIC_VERSION_HEADER = "anthropic-version";
+
     private static final java.util.concurrent.ExecutorService LISTING =
             java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
     private final ProviderDispatcher dispatcher;
     private final java.time.Duration perProviderTimeout;
+    private final List<ModelListFilter> listFilters;
+    private final List<ModelContextLimits> modelLimits;
 
     @org.springframework.beans.factory.annotation.Autowired
+    public ModelsController(ProviderDispatcher dispatcher,
+                            ObjectProvider<ModelListFilter> listFilters,
+                            ObjectProvider<ModelContextLimits> modelLimits) {
+        this(dispatcher, PER_PROVIDER_TIMEOUT,
+                listFilters.orderedStream().toList(), modelLimits.orderedStream().toList());
+    }
+
+    /** With no list filter and no per-model windows: every model, with its provider's window. */
     public ModelsController(ProviderDispatcher dispatcher) {
-        this(dispatcher, PER_PROVIDER_TIMEOUT);
+        this(dispatcher, PER_PROVIDER_TIMEOUT, List.of(), List.of());
     }
 
     ModelsController(ProviderDispatcher dispatcher, java.time.Duration perProviderTimeout) {
+        this(dispatcher, perProviderTimeout, List.of(), List.of());
+    }
+
+    ModelsController(ProviderDispatcher dispatcher, java.time.Duration perProviderTimeout,
+                     List<ModelListFilter> listFilters, List<ModelContextLimits> modelLimits) {
         this.dispatcher = dispatcher;
         this.perProviderTimeout = perProviderTimeout;
+        this.listFilters = listFilters;
+        this.modelLimits = modelLimits;
+    }
+
+    /** One listed model and the provider that listed it. */
+    private record Listed(LlmProvider provider, ModelInfo info) {
     }
 
     @GetMapping("/models")
-    @Operation(summary = "List models", description = "Lists all available models from registered providers by querying each provider's API.")
+    @Operation(summary = "List models", description = "Lists the models of the registered providers that the "
+            + "caller may use, each with its own context window where one is known. Answers in Anthropic's "
+            + "shape, with Claude models only, when the request carries an anthropic-version header.")
     @ApiResponse(responseCode = "200", description = "Model list returned")
-    public ResponseEntity<ModelListResponse> models(HttpServletRequest httpRequest) {
+    public ResponseEntity<?> models(HttpServletRequest httpRequest) {
         String traceId = (String) httpRequest.getAttribute(TraceIdFilter.ATTR);
+        Object workspace = httpRequest.getAttribute(ApiKeyAuthFilter.WORKSPACE_ID_ATTR);
+        List<Listed> listed = narrow(workspace instanceof String w ? w : null, listAll());
 
+        Object body = httpRequest.getHeader(ANTHROPIC_VERSION_HEADER) != null
+                ? anthropicList(listed)
+                : openAiList(listed);
+        return ResponseEntity.ok()
+                .header(TraceIdFilter.HEADER, traceId)
+                .body(body);
+    }
+
+    /** Every provider's models, in provider order. */
+    private List<Listed> listAll() {
         // Every provider is asked at once, and one that has not answered within the timeout is left
         // out, so a single slow provider cannot slow this endpoint for every caller.
         List<LlmProvider> providers = dispatcher.allProviders();
@@ -75,12 +134,11 @@ public class ModelsController {
             lists.add(LISTING.submit(provider::listModels));
         }
         long deadline = System.nanoTime() + perProviderTimeout.toNanos();
-        List<ModelListResponse.ModelData> models = new ArrayList<>();
+        List<Listed> all = new ArrayList<>();
         for (int i = 0; i < providers.size(); i++) {
             LlmProvider provider = providers.get(i);
             java.util.concurrent.Future<List<ModelInfo>> listing = lists.get(i);
             try {
-                ModelListResponse.CapabilitiesDto capsDto = toCapabilitiesDto(provider.capabilities());
                 long remaining = Math.max(0, deadline - System.nanoTime());
                 List<ModelInfo> providerModels;
                 try {
@@ -94,27 +152,104 @@ public class ModelsController {
                     throw e.getCause() instanceof Exception cause ? cause : e;
                 }
                 for (ModelInfo info : providerModels) {
-                    models.add(ModelListResponse.ModelData.builder()
-                            .id(info.id())
-                            .object("model")
-                            .created(info.created())
-                            .ownedBy(info.ownedBy())
-                            .capabilities(capsDto)
-                            .build());
+                    all.add(new Listed(provider, info));
                 }
             } catch (Exception e) {
                 log.warn("Failed to list models from provider {}: {}", provider.name(), e.getMessage());
             }
         }
+        return all;
+    }
 
-        ModelListResponse response = ModelListResponse.builder()
+    /**
+     * What every {@link ModelListFilter} keeps, in the order the providers listed it. An entry a filter
+     * returns that it was not given is ignored, so a filter can only remove.
+     */
+    private List<Listed> narrow(String workspaceId, List<Listed> all) {
+        if (listFilters.isEmpty() || all.isEmpty()) {
+            return all;
+        }
+        List<ModelInfo> kept = all.stream().map(Listed::info).toList();
+        for (ModelListFilter filter : listFilters) {
+            List<ModelInfo> next;
+            try {
+                next = filter.filter(workspaceId, kept);
+            } catch (RuntimeException e) {
+                log.warn("Model list filter {} failed; the list is answered without it: {}",
+                        filter.getClass().getSimpleName(), e.getMessage());
+                continue;
+            }
+            if (next == null) {
+                log.warn("Model list filter {} returned no list; the list is answered without it",
+                        filter.getClass().getSimpleName());
+                continue;
+            }
+            kept = next;
+        }
+        Map<ModelInfo, Integer> remaining = new HashMap<>();
+        for (ModelInfo info : kept) {
+            remaining.merge(info, 1, Integer::sum);
+        }
+        List<Listed> out = new ArrayList<>(Math.min(all.size(), kept.size()));
+        for (Listed entry : all) {
+            Integer count = remaining.get(entry.info());
+            if (count != null && count > 0) {
+                remaining.put(entry.info(), count - 1);
+                out.add(entry);
+            }
+        }
+        return out;
+    }
+
+    private ModelListResponse openAiList(List<Listed> listed) {
+        Map<LlmProvider, ModelListResponse.CapabilitiesDto> byProvider = new HashMap<>();
+        List<ModelListResponse.ModelData> models = new ArrayList<>(listed.size());
+        for (Listed entry : listed) {
+            ModelListResponse.CapabilitiesDto providerCaps = byProvider.computeIfAbsent(entry.provider(),
+                    p -> toCapabilitiesDto(p.capabilities()));
+            OptionalInt own = ModelWindows.of(modelLimits, entry.provider().name(), entry.info().id());
+            ModelListResponse.CapabilitiesDto caps = own.isPresent()
+                    ? providerCaps.toBuilder().maxContextTokens(own.getAsInt()).build()
+                    : providerCaps;
+            models.add(ModelListResponse.ModelData.builder()
+                    .id(entry.info().id())
+                    .object("model")
+                    .created(entry.info().created())
+                    .ownedBy(entry.info().ownedBy())
+                    .capabilities(caps)
+                    .build());
+        }
+        return ModelListResponse.builder()
                 .object("list")
                 .data(models)
                 .build();
+    }
 
-        return ResponseEntity.ok()
-                .header(TraceIdFilter.HEADER, traceId)
-                .body(response);
+    /** Anthropic's shape, holding only the Claude models Anthropic serves. The whole list is one page. */
+    private static AnthropicModelListResponse anthropicList(List<Listed> listed) {
+        List<AnthropicModelListResponse.Model> models = new ArrayList<>();
+        for (Listed entry : listed) {
+            if (!isClaude(entry.info())) {
+                continue;
+            }
+            models.add(new AnthropicModelListResponse.Model(
+                    "model",
+                    entry.info().id(),
+                    entry.info().id(),
+                    Instant.ofEpochSecond(Math.max(0, entry.info().created())).toString()));
+        }
+        return new AnthropicModelListResponse(
+                models,
+                false,
+                models.isEmpty() ? null : models.getFirst().id(),
+                models.isEmpty() ? null : models.getLast().id());
+    }
+
+    /** A model Anthropic owns, under a Claude model id. */
+    static boolean isClaude(ModelInfo info) {
+        return info.id() != null
+                && info.id().toLowerCase(Locale.ROOT).startsWith("claude")
+                && "anthropic".equalsIgnoreCase(info.ownedBy());
     }
 
     static ModelListResponse.CapabilitiesDto toCapabilitiesDto(ProviderCapabilities caps) {

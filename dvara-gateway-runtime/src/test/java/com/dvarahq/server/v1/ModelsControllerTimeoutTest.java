@@ -56,7 +56,7 @@ class ModelsControllerTimeoutTest {
         ModelsController controller = new ModelsController(dispatcher, Duration.ofMillis(400));
 
         long start = System.nanoTime();
-        ModelListResponse body = controller.models(new MockHttpServletRequest()).getBody();
+        ModelListResponse body = (ModelListResponse) controller.models(new MockHttpServletRequest()).getBody();
         long tookMs = (System.nanoTime() - start) / 1_000_000;
 
         assertThat(body.getData()).extracting(ModelListResponse.ModelData::getId)
@@ -73,7 +73,7 @@ class ModelsControllerTimeoutTest {
         ModelsController controller = new ModelsController(dispatcher, Duration.ofSeconds(5));
 
         long start = System.nanoTime();
-        ModelListResponse body = controller.models(new MockHttpServletRequest()).getBody();
+        ModelListResponse body = (ModelListResponse) controller.models(new MockHttpServletRequest()).getBody();
         long tookMs = (System.nanoTime() - start) / 1_000_000;
 
         assertThat(body.getData()).hasSize(3);
