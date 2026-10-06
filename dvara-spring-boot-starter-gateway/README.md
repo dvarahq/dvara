@@ -53,6 +53,37 @@ Prometheus registry and OpenTelemetry tracing, because the endpoints need them. 
 to the key in `DVARA_ACTUATOR_METRICS_API_KEY`, and the other actuator endpoints only to
 `DVARA_ACTUATOR_API_KEY`.
 
+## Ending a stream that is already running
+
+A request filter can refuse a call before it reaches a provider. To end a streamed answer that
+has already started, for example when an agent's session is ended mid-answer, register a
+`StreamStopCheck` bean (from `dvara-gateway-core`):
+
+```java
+@Bean
+StreamStopCheck endedSessions(EndedSessions ended) {
+    return stream -> ended.contains(stream.sessionId())
+            ? Optional.of(new StreamStopCheck.Stop(403, "session_ended", null, "The session was ended."))
+            : Optional.empty();
+}
+```
+
+The gateway asks every check once per chunk, before writing it, on `/v1/chat/completions`,
+`/v1/responses` and `/v1/messages`. Keep a check cheap: read memory, never call the network.
+When a check answers with a stop:
+
+- the chunk in hand is not sent;
+- the client gets one last error event in its API's shape: `data: {"error":{...}}` with no
+  `[DONE]` on chat completions, `response.failed` on the Responses API, an `error` event on the
+  Messages API;
+- the provider connection is closed;
+- the access log, the metrics and the audit record show the stop's code, and the tokens already
+  sent are metered and billed.
+
+A check that throws is logged and not asked again for that stream; it never ends one. With no
+check registered, streams run exactly as before. Where the streaming guard holds an answer back
+until the provider has finished, the first check runs when the guard starts to deliver.
+
 ## Licence
 
 Apache License 2.0. See [LICENSE](../LICENSE).

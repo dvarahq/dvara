@@ -93,6 +93,8 @@ public class ChatCompletionController {
     // controller and the other doorways cannot drift. Built from the injected deps rather than
     // injected as a bean so the @WebMvcTest slice stays wired to the same mocks.
     private final ChatExecutionService executionService;
+    /** Asked between chunks whether a running stream may go on; usually none are registered. */
+    private final com.dvarahq.server.service.StreamStops streamStops;
 
     public ChatCompletionController(ProviderDispatcher dispatcher,
                                     RequestPipeline requestPipeline,
@@ -109,10 +111,12 @@ public class ChatCompletionController {
                                     GatewayMetrics metrics,
                                     TokenEstimator tokenEstimator,
                                     org.springframework.beans.factory.ObjectProvider<CallOutcomeListener> outcomeListeners,
+                                    org.springframework.beans.factory.ObjectProvider<com.dvarahq.core.filter.StreamStopCheck> streamStopChecks,
                                     @org.springframework.beans.factory.annotation.Value(
                                             "${dvara.llm-gateway.resilience.timeout.streaming-timeout-ms:120000}")
                                     long streamingTimeoutMs) {
         this.streamingTimeoutMs = streamingTimeoutMs;
+        this.streamStops = com.dvarahq.server.service.StreamStops.of(streamStopChecks);
         this.executionService = new ChatExecutionService(dispatcher, requestPipeline, responseCache,
                 tokenUsageRepository, usageListeners, costCalculationService, costEstimator,
                 piiEnforcer, rateLimiter,
@@ -214,6 +218,7 @@ public class ChatCompletionController {
         // The row's attribution too: key and workspace now; provider and credential are
         // stamped while the stream is opened, so they are taken right after openStream, below.
         ChatExecutionService.Attribution attribution = ChatExecutionService.Attribution.capture(httpRequest);
+        com.dvarahq.server.service.StreamStops.Probe stopProbe = streamStops.probe(httpRequest, streamRequest.getModel());
 
         Thread.startVirtualThread(ChatExecutionService.withRequestContext(() -> {
             long streamStart = System.nanoTime();
@@ -233,6 +238,8 @@ public class ChatCompletionController {
                 // failure against a caller who has already left.
                 while (!completed.get() && chunks.hasNext()) {
                     SseChunk chunk = chunks.next();
+                    // Before the chunk is written: a stream that must end does not send it.
+                    stopProbe.checkpoint();
                     if (chunk.getId() != null) {
                         streamId = chunk.getId();
                     }
@@ -345,7 +352,15 @@ public class ChatCompletionController {
                     // ran, and the container may have recycled the request since.
                     log.debug("Could not record the stream error for trace {}: {}", traceId, recycled.getMessage());
                 }
-                if (!completed.get()) {
+                if (!completed.get() && failure instanceof com.dvarahq.server.service.StreamStops.StreamStoppedException stopped) {
+                    log.info("Stream for trace {} stopped: {}", traceId, stopped.getCode());
+                    try {
+                        emitter.send(SseEmitter.event().data(stopEvent(stopped.stop(), traceId), MediaType.APPLICATION_JSON));
+                        emitter.complete();
+                    } catch (Exception ignored) {
+                        // emitter already completed
+                    }
+                } else if (!completed.get()) {
                     log.warn("Streaming error for trace {}: {}", traceId, failure.getMessage());
                     try {
                         emitter.completeWithError(failure);
@@ -625,6 +640,16 @@ public class ChatCompletionController {
         }
     }
 
+
+    /**
+     * The last event of a stream a {@link com.dvarahq.core.filter.StreamStopCheck} ended: an error object
+     * as OpenAI sends one mid-stream, {@code {"error":{"message","type","code","trace_id"}}}, with no
+     * {@code [DONE]} after it, so a client does not take the partial answer for a whole one.
+     */
+    static String stopEvent(com.dvarahq.core.filter.StreamStopCheck.Stop stop, String traceId) throws Exception {
+        return JsonMapper.instance().writeValueAsString(com.dvarahq.core.exception.ErrorEnvelope.body(
+                "/v1/chat/completions", stop.status(), stop.message(), stop.code(), stop.type(), traceId, null));
+    }
 
     /**
      * What a stream that failed mid-flight is recorded under. The status stays 200, since

@@ -101,6 +101,8 @@ public class ResponsesController {
     // Shared execution line, built from the injected deps (not a bean) so the @WebMvcTest
     // slice stays wired to the same mocks, as ChatCompletionController does.
     private final ChatExecutionService executionService;
+    /** Asked between chunks whether a running stream may go on; usually none are registered. */
+    private final com.dvarahq.server.service.StreamStops streamStops;
 
     public ResponsesController(ProviderDispatcher dispatcher,
                                RequestPipeline requestPipeline,
@@ -117,10 +119,12 @@ public class ResponsesController {
                                GatewayMetrics metrics,
                                TokenEstimator tokenEstimator,
                               org.springframework.beans.factory.ObjectProvider<CallOutcomeListener> outcomeListeners,
+                                    org.springframework.beans.factory.ObjectProvider<com.dvarahq.core.filter.StreamStopCheck> streamStopChecks,
                                     @org.springframework.beans.factory.annotation.Value(
                                             "${dvara.llm-gateway.resilience.timeout.streaming-timeout-ms:120000}")
                                     long streamingTimeoutMs) {
         this.streamingTimeoutMs = streamingTimeoutMs;
+        this.streamStops = com.dvarahq.server.service.StreamStops.of(streamStopChecks);
         this.executionService = new ChatExecutionService(dispatcher, requestPipeline, responseCache,
                 tokenUsageRepository, usageListeners, costCalculationService, costEstimator,
                 piiEnforcer, rateLimiter,
@@ -229,6 +233,7 @@ public class ResponsesController {
         // The row's attribution too: key and workspace now; provider and credential are
         // stamped while the stream is opened, so they are taken right after openStream, below.
         ChatExecutionService.Attribution attribution = ChatExecutionService.Attribution.capture(httpRequest);
+        com.dvarahq.server.service.StreamStops.Probe stopProbe = streamStops.probe(httpRequest, model);
 
         Thread.startVirtualThread(ChatExecutionService.withRequestContext(() -> {
             long streamStart = System.nanoTime();
@@ -253,6 +258,8 @@ public class ResponsesController {
                 boolean sawDone = false;
                 while (!completed.get() && chunks.hasNext()) {   // cancellation first; see ChatCompletionController
                     SseChunk chunk = chunks.next();
+                    // Before the chunk is written: a stream that must end does not send it.
+                    stopProbe.checkpoint();
                     // the exact usage arrives on the final chunk. Hold the last non-null
                     // rather than only checking `done`: the usage-bearing chunk follows the one
                     // carrying finish_reason, so keying off done would miss it.
@@ -329,10 +336,17 @@ public class ResponsesController {
                     log.debug("Could not record the stream error for trace {}: {}", traceId, recycled.getMessage());
                 }
                 if (!completed.get()) {
-                    log.warn("Responses streaming error for trace {}: {}", traceId, failure.getMessage());
+                    // A stop ends the response with its own code; anything else is the provider's failure.
+                    String errorCode = "provider_error";
+                    if (failure instanceof com.dvarahq.server.service.StreamStops.StreamStoppedException stopped) {
+                        errorCode = stopped.stop().code();
+                        log.info("Responses stream for trace {} stopped: {}", traceId, errorCode);
+                    } else {
+                        log.warn("Responses streaming error for trace {}: {}", traceId, failure.getMessage());
+                    }
                     try {
                         Map<String, Object> failed = responseObject(responseId, model, "failed", List.of(), createdAt);
-                        failed.put("error", mapOf("code", "provider_error", "message", failure.getMessage()));
+                        failed.put("error", mapOf("code", errorCode, "message", failure.getMessage()));
                         emit(emitter, "response.failed", seq, mapOf("response", failed));
                         emitter.complete();
                     } catch (Exception ignored) {

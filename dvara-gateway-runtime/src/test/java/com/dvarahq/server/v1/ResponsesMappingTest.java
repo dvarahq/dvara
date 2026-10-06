@@ -55,7 +55,8 @@ class ResponsesMappingTest {
             mock(TokenUsageRepository.class), TestProviders.of(mock(WorkspaceUsageListener.class)), TestProviders.of(mock(CostCalculationService.class)),
             TestProviders.of(mock(CostEstimator.class)), mock(PiiEnforcer.class), mock(RateLimiter.class),
             mock(StreamingResponseEnforcer.class), mock(AuditWriter.class), TestProviders.of(mock(PriorityAdmissionController.class)),
-            mock(GatewayMetrics.class), mock(TokenEstimator.class), TestProviders.of(CallOutcomeListener.NOOP), 120_000L);
+            mock(GatewayMetrics.class), mock(TokenEstimator.class), TestProviders.of(CallOutcomeListener.NOOP),
+            TestProviders.<com.dvarahq.core.filter.StreamStopCheck>of(null), 120_000L);
 
     // -------- request -> ChatRequest --------
 
