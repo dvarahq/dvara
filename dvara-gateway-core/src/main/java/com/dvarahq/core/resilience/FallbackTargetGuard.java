@@ -18,10 +18,11 @@ package com.dvarahq.core.resilience;
 import com.dvarahq.core.model.ChatRequest;
 
 /**
- * Decides whether a route's fallback may receive a request (#7 REQ-CPF-05). The primary passed the
+ * Decides whether a route's fallback may receive a request. The primary passed the
  * gateway's checks with the model the caller asked for; a fallback may be another provider and another
  * model, so every guard is asked again about the request as that fallback would receive it. A guard that
  * refuses keeps the request off that target; the next target in the chain is tried.
+ * The first target is asked of {@link PrimaryTargetGuard}.
  *
  * <p>Implementations must not have side effects the request already caused once, such as a second audit
  * event or a second budget charge: they decide, they do not act. Several may be registered; each must allow.

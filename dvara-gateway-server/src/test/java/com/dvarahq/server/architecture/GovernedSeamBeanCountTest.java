@@ -137,6 +137,11 @@ class GovernedSeamBeanCountTest {
         // turns models off adds one so the list matches what its checks allow.
         m.put(com.dvarahq.core.provider.ModelListFilter.class, List.of());
 
+        // No first-target guard: the first provider is sent the request as the route maps it. An
+        // application that refuses models adds one, so a route that changes the model is checked on the
+        // model it sends.
+        m.put(com.dvarahq.core.resilience.PrimaryTargetGuard.class, List.of());
+
         // No classifier hook; the detector takes it optionally and checks isAvailable().
         m.put(com.dvarahq.core.guardrail.MlClassifierHook.class, List.of());
 

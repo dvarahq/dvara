@@ -426,6 +426,11 @@ in `gateway_fallbacks_total{from_provider="openai",to_provider="anthropic"}`.
 - At most `dvara.llm-gateway.resilience.fallback.max-attempts` backups are tried (default `3`), none
   starting more than `...fallback.deadline` after the first attempt (default `60s`). A chain may name
   five. `...fallback.enabled: false` turns failover off.
+- An application that embeds the gateway can check the first provider as well, with a
+  `PrimaryTargetGuard` bean. It is asked about the request with the model the route actually sends,
+  which may not be the one the caller named (a strategy can pin a version or pick a tier). If it refuses,
+  the route's chain is tried; if no backup takes the request, the caller gets the guard's error. The
+  refused provider is never called.
 
 ### Model context windows
 
