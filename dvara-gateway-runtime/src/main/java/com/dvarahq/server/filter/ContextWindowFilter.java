@@ -133,21 +133,7 @@ public class ContextWindowFilter implements ChatFilter {
 
     /** The first source that knows the model, in order; empty when none does. */
     private OptionalInt modelWindow(String provider, String model) {
-        for (ModelContextLimits source : modelLimits) {
-            OptionalInt window;
-            try {
-                window = source.contextTokens(provider, model);
-            } catch (RuntimeException e) {
-                // A lookup that fails must not fail the request; the provider's window still holds.
-                log.debug("Model limit source {} threw for {} on {}: {}",
-                        source.getClass().getSimpleName(), model, provider, e.getMessage());
-                continue;
-            }
-            if (window != null && window.isPresent() && window.getAsInt() > 0) {
-                return window;
-            }
-        }
-        return OptionalInt.empty();
+        return ModelWindows.of(modelLimits, provider, model);
     }
 
     /**

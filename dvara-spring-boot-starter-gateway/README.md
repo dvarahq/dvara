@@ -24,7 +24,7 @@ request pipeline. Your application keeps everything the first starter gives it a
 | `POST /v1/responses` | the Responses API |
 | `POST /v1/completions` | legacy text completion |
 | `POST /v1/embeddings` | embeddings |
-| `GET /v1/models` | the models your configured providers offer |
+| `GET /v1/models` | the models your configured providers offer; a `ModelListFilter` bean narrows it per caller |
 | `POST /v1/batches`, `POST /v1/files` | the OpenAI Batch API |
 
 Every one of them runs the full governance pipeline: policy, PII, guardrails, rate limiting and

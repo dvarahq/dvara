@@ -253,6 +253,9 @@ key as its API key.
   `metadata.user_id` is the request's end user, as `user` is on chat, only when it is a plain id. A JSON
   object there, such as a client's own device and session ids, is not taken as the end user; on a route to
   Anthropic it still goes upstream as sent.
+  `GET /v1/models` with an `anthropic-version` header answers in Anthropic's model-list shape and lists
+  only the Claude models Anthropic serves, so a client built for Anthropic is never offered another
+  provider's model.
 - ✅ **Response cache** — exact-match, in memory, per process. Off until
   `dvara.llm-gateway.cache.in-memory.enabled` is `true`.
 
@@ -289,7 +292,8 @@ key as its API key.
 
 ## Supported providers
 
-Capabilities as each provider declares them; `/v1/models` reports the same for a running gateway.
+Capabilities as each provider declares them; `/v1/models` reports the same for a running gateway,
+with each model's own context window where one is known (see [Model context windows](#model-context-windows)).
 
 | Provider | Streaming | Vision | Tool calls | Structured outputs | Batch |
 |---|:-:|:-:|:-:|:-:|:-:|
@@ -452,6 +456,7 @@ model_limits:
   `...[0].context-tokens`. An application that embeds the gateway can also supply its own
   `ModelContextLimits` bean, for example one that reads a model catalogue. Entries written here win
   over it.
+- `GET /v1/models` shows the same window for each model, in `capabilities.max_context_tokens`.
 - The guardrail's size limits apply first: by default a single message longer than 50,000 characters
   or a request with more than 100 messages is refused with `413`.
   `dvara.llm-gateway.guardrail.max-message-length` and `...max-messages-per-request` change them.
