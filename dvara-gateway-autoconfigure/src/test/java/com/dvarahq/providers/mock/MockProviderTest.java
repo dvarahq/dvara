@@ -26,6 +26,7 @@ import com.dvarahq.core.util.JsonMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -549,5 +550,69 @@ class MockProviderTest {
         provider.replaceFileScenarios(List.of());
         assertThat(provider.chat(request("mock/any", "hi")).getChoices().get(0).getMessage()
                 .getContent().get(0).toString()).contains("default text");
+    }
+
+    // ---- Batch API files -------------------------------------------------
+
+    private static String idOf(String json) throws Exception {
+        return JsonMapper.instance().readTree(json).path("id").asText();
+    }
+
+    @Test
+    void anUploadedFile_readsBackAsTheSameBytes_notAsTheBatchOutput() throws Exception {
+        var provider = new MockProvider("response", 0, 0, 0.0);
+        byte[] input = "{\"custom_id\":\"1\",\"body\":{\"model\":\"mock/a\"}}\n".getBytes(StandardCharsets.UTF_8);
+
+        String fileId = idOf(provider.uploadFile(input, "in.jsonl", "batch"));
+
+        assertThat(provider.getFileContent(fileId)).isEqualTo(input);
+    }
+
+    @Test
+    void twoUploads_eachReadBackAsItsOwnContent() throws Exception {
+        var provider = new MockProvider("response", 0, 0, 0.0);
+        String first = idOf(provider.uploadFile("one".getBytes(StandardCharsets.UTF_8), "a.jsonl", "batch"));
+        String second = idOf(provider.uploadFile("two".getBytes(StandardCharsets.UTF_8), "b.jsonl", "batch"));
+
+        assertThat(first).isNotEqualTo(second);
+        assertThat(new String(provider.getFileContent(first), StandardCharsets.UTF_8)).isEqualTo("one");
+        assertThat(new String(provider.getFileContent(second), StandardCharsets.UTF_8)).isEqualTo("two");
+    }
+
+    @Test
+    void theBatchOutputId_stillReturnsTheOutputWithUsage() throws Exception {
+        var provider = new MockProvider("response", 0, 0, 0.0);
+        String fileId = idOf(provider.uploadFile("in".getBytes(StandardCharsets.UTF_8), "in.jsonl", "batch"));
+        String batchId = idOf(provider.createBatch("{\"input_file_id\":\"" + fileId + "\"}"));
+
+        JsonNode batch = JsonMapper.instance().readTree(provider.getBatch(batchId));
+        assertThat(batch.path("input_file_id").asText()).isEqualTo(fileId);
+        String output = new String(provider.getFileContent(batch.path("output_file_id").asText()), StandardCharsets.UTF_8);
+        assertThat(output.lines()).hasSize(2)
+                .allSatisfy(line -> assertThat(line).contains("\"usage\"").contains("mock/batch-model"));
+    }
+
+    @Test
+    void anUnknownFileId_isNotFound_asAProviderAnswers() {
+        var provider = new MockProvider("response", 0, 0, 0.0);
+
+        assertThatThrownBy(() -> provider.getFileContent("mock-file-nobody-uploaded"))
+                .isInstanceOfSatisfying(GatewayException.class, e -> {
+                    assertThat(e.getUpstreamStatus()).isEqualTo(404);
+                    assertThat(e.getMessage()).contains("mock-file-nobody-uploaded");
+                });
+    }
+
+    @Test
+    void onlyTheNewestFilesAreKept() throws Exception {
+        var provider = new MockProvider("response", 0, 0, 0.0);
+        String oldest = idOf(provider.uploadFile("old".getBytes(StandardCharsets.UTF_8), "a.jsonl", "batch"));
+        String newest = null;
+        for (int i = 0; i < MockProvider.KEPT_FILES; i++) {
+            newest = idOf(provider.uploadFile(("n" + i).getBytes(StandardCharsets.UTF_8), "a.jsonl", "batch"));
+        }
+
+        assertThatThrownBy(() -> provider.getFileContent(oldest)).isInstanceOf(GatewayException.class);
+        assertThat(provider.getFileContent(newest)).isNotEmpty();
     }
 }

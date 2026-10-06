@@ -28,8 +28,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Random;
 import java.util.UUID;
@@ -210,14 +213,34 @@ public class MockProvider extends AbstractLlmProvider {
     }
 
     // ---- Batch API: canned lifecycle for dev / CI -------------------
-    // uploadFile -> file object; createBatch -> a job that is immediately reported
-    // "completed" on the next poll, with an output file whose per-line usage the
-    // metering path sums. Deterministic + stateless so e2e tests are repeatable.
+    // uploadFile -> a file object whose content the Mock keeps, so reading the file back returns what
+    // was uploaded; createBatch -> a job that is reported "completed" on the next poll, with an output
+    // file whose per-line usage the metering path sums. The output file is the same canned one for
+    // every batch. A batch id is derived from its input file id, so a poll needs no stored state.
+
+    private static final String FILE_PREFIX = "mock-file-";
+    private static final String BATCH_PREFIX = "mock-batch-";
+
+    /** The id of the canned output file every batch reports. */
+    static final String OUTPUT_FILE_ID = FILE_PREFIX + "out";
+
+    /** How many uploaded files the Mock keeps. The oldest is forgotten first. */
+    static final int KEPT_FILES = 256;
+
+    /** Uploaded file id to its content, as it was uploaded. */
+    private final Map<String, byte[]> files = Collections.synchronizedMap(new LinkedHashMap<>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) {
+            return size() > KEPT_FILES;
+        }
+    });
 
     @Override
     public String uploadFile(byte[] content, String filename, String purpose) {
         checkErrorRate();
-        return "{\"id\":\"mock-file-in\",\"object\":\"file\",\"bytes\":" + content.length
+        String id = FILE_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 24);
+        files.put(id, content.clone());
+        return "{\"id\":\"" + id + "\",\"object\":\"file\",\"bytes\":" + content.length
                 + ",\"filename\":\"" + (filename != null ? filename : "input.jsonl")
                 + "\",\"purpose\":\"" + purpose + "\",\"status\":\"processed\"}";
     }
@@ -225,14 +248,23 @@ public class MockProvider extends AbstractLlmProvider {
     @Override
     public String createBatch(String requestJson) {
         checkErrorRate();
-        return "{\"id\":\"mock-batch-1\",\"object\":\"batch\",\"status\":\"validating\","
-                + "\"endpoint\":\"/v1/chat/completions\",\"input_file_id\":\"mock-file-in\"}";
+        String inputFileId;
+        try {
+            inputFileId = JsonMapper.instance().readTree(requestJson).path("input_file_id").asText("");
+        } catch (Exception e) {
+            inputFileId = "";
+        }
+        String batchId = inputFileId.startsWith(FILE_PREFIX)
+                ? BATCH_PREFIX + inputFileId.substring(FILE_PREFIX.length())
+                : BATCH_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 24);
+        return "{\"id\":\"" + batchId + "\",\"object\":\"batch\",\"status\":\"validating\","
+                + "\"endpoint\":\"/v1/chat/completions\",\"input_file_id\":\"" + inputFileId + "\"}";
     }
 
     @Override
     public String getBatch(String batchId) {
         return "{\"id\":\"" + batchId + "\",\"object\":\"batch\",\"status\":\"completed\","
-                + "\"input_file_id\":\"mock-file-in\",\"output_file_id\":\"mock-file-out\","
+                + "\"input_file_id\":\"" + inputFileOf(batchId) + "\",\"output_file_id\":\"" + OUTPUT_FILE_ID + "\","
                 + "\"request_counts\":{\"total\":2,\"completed\":2,\"failed\":0}}";
     }
 
@@ -241,17 +273,32 @@ public class MockProvider extends AbstractLlmProvider {
         // "cancelled" with an output file: the shape that actually needs handling, because a
         // cancelled batch still bills for the requests that finished before it stopped.
         return "{\"id\":\"" + batchId + "\",\"object\":\"batch\",\"status\":\"cancelled\","
-                + "\"input_file_id\":\"mock-file-in\",\"output_file_id\":\"mock-file-out\","
+                + "\"input_file_id\":\"" + inputFileOf(batchId) + "\",\"output_file_id\":\"" + OUTPUT_FILE_ID + "\","
                 + "\"request_counts\":{\"total\":2,\"completed\":2,\"failed\":0}}";
     }
 
+    private static String inputFileOf(String batchId) {
+        return batchId.startsWith(BATCH_PREFIX) ? FILE_PREFIX + batchId.substring(BATCH_PREFIX.length()) : "";
+    }
+
+    /**
+     * An uploaded file's own content, or the canned output file for {@link #OUTPUT_FILE_ID}. Any
+     * other id is answered as a provider answers it: not found.
+     */
     @Override
     public byte[] getFileContent(String fileId) {
-        // Two completed request lines; the metering path sums prompt/completion per model.
-        String jsonl =
-                "{\"custom_id\":\"1\",\"response\":{\"status_code\":200,\"body\":{\"model\":\"mock/batch-model\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}}}\n"
-              + "{\"custom_id\":\"2\",\"response\":{\"status_code\":200,\"body\":{\"model\":\"mock/batch-model\",\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8,\"total_tokens\":28}}}}\n";
-        return jsonl.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (OUTPUT_FILE_ID.equals(fileId)) {
+            // Two completed request lines; the metering path sums prompt/completion per model.
+            String jsonl =
+                    "{\"custom_id\":\"1\",\"response\":{\"status_code\":200,\"body\":{\"model\":\"mock/batch-model\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}}}\n"
+                  + "{\"custom_id\":\"2\",\"response\":{\"status_code\":200,\"body\":{\"model\":\"mock/batch-model\",\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8,\"total_tokens\":28}}}}\n";
+            return jsonl.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        byte[] content = files.get(fileId);
+        if (content == null) {
+            throw GatewayException.upstream(404, "Mock file download error 404: no such file " + fileId);
+        }
+        return content.clone();
     }
 
     @Override
