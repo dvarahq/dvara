@@ -192,6 +192,29 @@ class GatewayConfigEnvironmentPostProcessorTest {
     }
 
     @Test
+    void modelLimitsInTheFileBecomeModelLimitProperties() throws IOException {
+        StandardEnvironment environment = environmentWith("""
+                model_limits:
+                  - model: gpt-4.1
+                    provider: openai
+                    context_tokens: 1047576
+                  - model: "claude-*"
+                    context_tokens: 200000
+                """);
+
+        new GatewayConfigEnvironmentPostProcessor().postProcessEnvironment(environment, null);
+
+        assertThat(environment.getProperty("dvara.llm-gateway.model-limits[0].model")).isEqualTo("gpt-4.1");
+        assertThat(environment.getProperty("dvara.llm-gateway.model-limits[0].provider")).isEqualTo("openai");
+        assertThat(environment.getProperty("dvara.llm-gateway.model-limits[0].context-tokens")).isEqualTo("1047576");
+        assertThat(environment.getProperty("dvara.llm-gateway.model-limits[1].model")).isEqualTo("claude-*");
+        assertThat(environment.getProperty("dvara.llm-gateway.model-limits[1].provider"))
+                .as("no provider written means any provider, so no property")
+                .isNull();
+        assertThat(environment.getProperty("dvara.llm-gateway.model-limits[1].context-tokens")).isEqualTo("200000");
+    }
+
+    @Test
     void aBurstAloneDoesNotSwitchRateLimitingOn() throws IOException {
         StandardEnvironment environment = environmentWith("""
                 rate_limits:

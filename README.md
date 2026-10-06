@@ -418,6 +418,39 @@ in `gateway_fallbacks_total{from_provider="openai",to_provider="anthropic"}`.
   starting more than `...fallback.deadline` after the first attempt (default `60s`). A chain may name
   five. `...fallback.enabled: false` turns failover off.
 
+### Model context windows
+
+Before a request is sent, the gateway estimates its size and compares it with the context window of
+the model that will serve it. At 90% of the window it refuses the request with
+`400 context_window_exceeded`, or trims it if the workspace asks for that. Each provider declares one
+window for all its models (OpenAI declares 128,000 tokens), and many models accept more. Write a
+model's own window in `model_limits`, and the gateway uses it instead:
+
+```yaml
+model_limits:
+  - model: gpt-4.1          # exactly this model
+    context_tokens: 1047576
+  - model: "gpt-4.1-*"      # a trailing * matches every model with that prefix
+    context_tokens: 1047576
+  - model: claude-sonnet-4-5
+    provider: anthropic     # optional: only when this provider serves it
+    context_tokens: 1000000
+```
+
+- A model with no entry keeps its provider's window.
+- When several entries match, the most specific wins: an exact model over a prefix, a longer prefix over
+  a shorter one, and an entry naming the provider over one that does not.
+- If a request could be served by more than one provider (failover), the smallest window among them
+  applies.
+- An entry without `model` or with no positive `context_tokens` stops the gateway at startup.
+- The same list can be set as Spring properties, `dvara.llm-gateway.model-limits[0].model` and
+  `...[0].context-tokens`. An application that embeds the gateway can also supply its own
+  `ModelContextLimits` bean, for example one that reads a model catalogue. Entries written here win
+  over it.
+- The guardrail's size limits apply first: by default a single message longer than 50,000 characters
+  or a request with more than 100 messages is refused with `413`.
+  `dvara.llm-gateway.guardrail.max-message-length` and `...max-messages-per-request` change them.
+
 ### API keys
 
 Every request under `/v1` carries an API key, and a request without one is refused with `401`.

@@ -505,6 +505,92 @@ class ChatFilterTest {
                 .isEqualTo(32_000);
     }
 
+    // --- ContextWindowFilter: a model's own window, where one is known ---
+
+    /** A source that knows one model's window, on any provider. */
+    private static com.dvarahq.core.provider.ModelContextLimits knows(String model, int window) {
+        return (provider, requested) -> model.equals(requested)
+                ? java.util.OptionalInt.of(window) : java.util.OptionalInt.empty();
+    }
+
+    private static org.springframework.beans.factory.ObjectProvider<com.dvarahq.core.provider.ModelContextLimits>
+            limitsOf(com.dvarahq.core.provider.ModelContextLimits... sources) {
+        var beanFactory = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        for (int i = 0; i < sources.length; i++) {
+            beanFactory.addBean("limits" + i, sources[i]);
+        }
+        return beanFactory.getBeanProvider(com.dvarahq.core.provider.ModelContextLimits.class);
+    }
+
+    private static int windowFor(String model,
+                                 org.springframework.beans.factory.ObjectProvider<com.dvarahq.core.provider.ModelContextLimits> limits,
+                                 com.dvarahq.core.provider.LlmProvider... providers) {
+        var governor = mock(com.dvarahq.core.guardrail.ContextWindowGovernor.class);
+        when(governor.evaluate(any(), anyInt(), any())).thenReturn(
+                com.dvarahq.core.guardrail.ContextWindowResult.withinLimits(10, 1));
+        var filter = new ContextWindowFilter(governor, mock(GatewayMetrics.class), providersOf(providers), limits);
+
+        filter.preDispatch(ChatRequest.builder().model(model).build(),
+                FilterContext.builder().workspaceId("t1").build());
+
+        var captor = org.mockito.ArgumentCaptor.forClass(Integer.class);
+        verify(governor).evaluate(any(), captor.capture(), any());
+        return captor.getValue();
+    }
+
+    @Test
+    void contextWindowFilter_aModelWithAKnownWindowGetsItsOwnWindowNotTheProviders() {
+        // The provider declares 128,000 for everything; this model accepts about a million.
+        assertThat(windowFor("gpt-4.1", limitsOf(knows("gpt-4.1", 1_047_576)),
+                providerWithWindow("openai", 128_000, true)))
+                .isEqualTo(1_047_576);
+    }
+
+    @Test
+    void contextWindowFilter_aModelNoSourceKnowsKeepsTheProvidersWindow() {
+        assertThat(windowFor("gpt-4o", limitsOf(knows("gpt-4.1", 1_047_576)),
+                providerWithWindow("openai", 128_000, true)))
+                .isEqualTo(128_000);
+    }
+
+    @Test
+    void contextWindowFilter_theSourceIsAskedForTheProviderThatWouldServeTheCall() {
+        var limits = mock(com.dvarahq.core.provider.ModelContextLimits.class);
+        when(limits.contextTokens(any(), any())).thenReturn(java.util.OptionalInt.empty());
+        when(limits.contextTokens("openai", "gpt-4.1")).thenReturn(java.util.OptionalInt.of(1_047_576));
+
+        // A second candidate whose own window for the model is unknown keeps its declared one, and the
+        // smallest still holds, since the call may fail over to it.
+        assertThat(windowFor("gpt-4.1", limitsOf(limits),
+                providerWithWindow("openai", 128_000, true),
+                providerWithWindow("azure-openai", 200_000, true)))
+                .isEqualTo(200_000);
+    }
+
+    @Test
+    void contextWindowFilter_theFirstSourceThatKnowsTheModelDecides() {
+        assertThat(windowFor("gpt-4.1", limitsOf(knows("gpt-4.1", 300_000), knows("gpt-4.1", 1_047_576)),
+                providerWithWindow("openai", 128_000, true)))
+                .isEqualTo(300_000);
+    }
+
+    @Test
+    void contextWindowFilter_aSourceThatThrowsIsSkippedAndTheNextOneAnswers() {
+        com.dvarahq.core.provider.ModelContextLimits broken = (provider, model) -> {
+            throw new IllegalStateException("lookup failed");
+        };
+        assertThat(windowFor("gpt-4.1", limitsOf(broken, knows("gpt-4.1", 1_047_576)),
+                providerWithWindow("openai", 128_000, true)))
+                .isEqualTo(1_047_576);
+    }
+
+    @Test
+    void contextWindowFilter_aSourceAnsweringNoPositiveWindowIsTreatedAsNotKnowing() {
+        assertThat(windowFor("gpt-4.1", limitsOf(knows("gpt-4.1", 0)),
+                providerWithWindow("openai", 128_000, true)))
+                .isEqualTo(128_000);
+    }
+
     // --- OutputSchemaFilter ---
 
     @Test

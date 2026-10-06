@@ -249,6 +249,39 @@ class GatewayYamlLoaderTest {
     }
 
     @Test
+    void load_parsesModelLimits() throws IOException {
+        GatewayYamlConfig config = parse("""
+                model_limits:
+                  - model: gpt-4.1
+                    provider: openai
+                    context_tokens: 1047576
+                """);
+        assertThat(config.getModelLimits()).hasSize(1);
+        assertThat(config.getModelLimits().get(0).getModel()).isEqualTo("gpt-4.1");
+        assertThat(config.getModelLimits().get(0).getProvider()).isEqualTo("openai");
+        assertThat(config.getModelLimits().get(0).getContextTokens()).isEqualTo(1_047_576);
+        assertThat(GatewayYamlLoader.validate(config)).isEmpty();
+    }
+
+    @Test
+    void validate_aModelLimitWithoutAModelOrAWindow_returnsErrors() throws IOException {
+        GatewayYamlConfig config = parse("""
+                model_limits:
+                  - context_tokens: 1000
+                  - model: gpt-4.1
+                  - model: "gpt-*-mini"
+                    context_tokens: 1000
+                  - model: gpt-4o
+                    context_tokens: -5
+                """);
+        assertThat(GatewayYamlLoader.validate(config)).containsExactly(
+                "model_limits[0].model: required field is missing",
+                "model_limits[1].context_tokens: required, a positive number of tokens",
+                "model_limits[2].model: a '*' may appear only at the end",
+                "model_limits[3].context_tokens: required, a positive number of tokens");
+    }
+
+    @Test
     void validate_unknownApiKeyScope_returnsError() {
         // a scope nothing recognises grants nothing at request time, so a typo would narrow
         // the key silently; it is refused here, where the operator can read the message.

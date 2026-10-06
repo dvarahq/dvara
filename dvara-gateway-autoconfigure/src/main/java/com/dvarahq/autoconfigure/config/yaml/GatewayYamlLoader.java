@@ -131,6 +131,22 @@ public final class GatewayYamlLoader {
             }
         }
 
+        if (config.getModelLimits() != null) {
+            for (int i = 0; i < config.getModelLimits().size(); i++) {
+                GatewayYamlConfig.ModelLimitEntry m = config.getModelLimits().get(i);
+                String prefix = "model_limits[" + i + "]";
+                if (m == null || m.getModel() == null || m.getModel().isBlank()) {
+                    errors.add(prefix + ".model: required field is missing");
+                } else if (m.getModel().strip().indexOf('*') >= 0
+                        && m.getModel().strip().indexOf('*') != m.getModel().strip().length() - 1) {
+                    errors.add(prefix + ".model: a '*' may appear only at the end");
+                }
+                if (m != null && (m.getContextTokens() == null || m.getContextTokens() <= 0)) {
+                    errors.add(prefix + ".context_tokens: required, a positive number of tokens");
+                }
+            }
+        }
+
         if (config.getWorkspaces() != null) {
             for (int i = 0; i < config.getWorkspaces().size(); i++) {
                 GatewayYamlConfig.WorkspaceEntry w = config.getWorkspaces().get(i);

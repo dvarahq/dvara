@@ -128,6 +128,11 @@ class GovernedSeamBeanCountTest {
         m.put(com.dvarahq.core.guardrail.GuardrailMetricsListener.class,
                 List.of("guardrailMetricsListenerImpl"));
 
+        // Model context windows are asked in order and the first that knows a model answers; this
+        // build has one, from configuration. Another source (a model catalogue, say) joins the list
+        // after it rather than replacing it.
+        m.put(com.dvarahq.core.provider.ModelContextLimits.class, List.of("configuredModelContextLimits"));
+
         // No classifier hook; the detector takes it optionally and checks isAvailable().
         m.put(com.dvarahq.core.guardrail.MlClassifierHook.class, List.of());
 

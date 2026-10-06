@@ -151,6 +151,18 @@ public class ProviderAutoConfiguration {
     }
 
     /**
+     * The model context windows written in {@code dvara.llm-gateway.model-limits}. Always registered,
+     * and answers nothing until an entry is written. It is one source among possibly several: the
+     * context-window check asks every {@link com.dvarahq.core.provider.ModelContextLimits} bean in
+     * order, and this one comes first so that configuration wins.
+     */
+    @Bean
+    public com.dvarahq.autoconfigure.guardrail.ConfiguredModelContextLimits configuredModelContextLimits(
+            GatewayProperties props) {
+        return new com.dvarahq.autoconfigure.guardrail.ConfiguredModelContextLimits(props.getModelLimits());
+    }
+
+    /**
      * Register OpenAI only when the api-key property is present AND non-blank.
      * An empty string (e.g. {@code OPENAI_API_KEY=} unset) will not trigger registration,
      * giving the caller a clear 400 "no provider" error rather than a 502 from OpenAI.

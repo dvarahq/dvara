@@ -26,8 +26,8 @@ import java.util.Map;
  * POJO model for the {@code gateway.yaml} configuration schema.
  *
  * <p>The file has two readers, and they take different halves of it. {@code
- * GatewayConfigEnvironmentPostProcessor} runs before the context and turns {@code providers} and
- * {@code rate_limits} into Spring properties; the file config store reads {@code workspaces},
+ * GatewayConfigEnvironmentPostProcessor} runs before the context and turns {@code providers},
+ * {@code rate_limits} and {@code model_limits} into Spring properties; the file config store reads {@code workspaces},
  * {@code api_keys}, {@code routes}, {@code policies}, {@code output_schemas} and
  * {@code prompt_templates} and serves them as repositories for the whole life of the process.
  */
@@ -51,6 +51,10 @@ public class GatewayYamlConfig {
 
     @JsonProperty("rate_limits")
     private RateLimitsEntry rateLimits;
+
+    /** Per-model context windows; each becomes {@code dvara.llm-gateway.model-limits[n]}. */
+    @JsonProperty("model_limits")
+    private List<ModelLimitEntry> modelLimits;
 
     /**
      * Retained only so that a file carrying {@code require_api_key:} is refused by name instead of
@@ -283,5 +287,21 @@ public class GatewayYamlConfig {
 
         @JsonProperty("tokens_burst")
         private Integer tokensBurst;
+    }
+
+    /**
+     * One model's context window, used by the context-window check in place of the window its
+     * provider declares for every model it serves.
+     */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ModelLimitEntry {
+        /** The model as the caller sends it; a trailing {@code *} matches a prefix. */
+        private String model;
+        /** Optional: the provider this applies to. Absent means any provider serving the model. */
+        private String provider;
+
+        @JsonProperty("context_tokens")
+        private Integer contextTokens;
     }
 }
