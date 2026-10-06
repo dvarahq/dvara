@@ -23,17 +23,21 @@ import com.dvarahq.core.guardrail.ContextWindowGovernor;
 import com.dvarahq.core.guardrail.ContextWindowResult;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.provider.LlmProvider;
+import com.dvarahq.core.provider.ModelContextLimits;
 import com.dvarahq.server.metrics.GatewayMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.OptionalInt;
 
 /**
- * Applies the context-window governor to a request, against the window declared by the provider
- * that will serve it rather than a fixed number.
+ * Applies the context-window governor to a request, against the window of the model as served by
+ * the provider that will serve it rather than a fixed number: the model's own window where one is
+ * known, otherwise the window the provider declares.
  */
 @Component
 public class ContextWindowFilter implements ChatFilter {
@@ -50,14 +54,28 @@ public class ContextWindowFilter implements ChatFilter {
     private final ContextWindowGovernor governor;
     private final GatewayMetrics metrics;
     private final List<LlmProvider> providers;
+    private final List<ModelContextLimits> modelLimits;
 
+    @Autowired
+    public ContextWindowFilter(ContextWindowGovernor governor, GatewayMetrics metrics,
+                               ObjectProvider<LlmProvider> providers,
+                               ObjectProvider<ModelContextLimits> modelLimits) {
+        this.governor = governor;
+        this.metrics = metrics;
+        // Snapshots, as the dispatcher takes: providers are registered at startup. ObjectProvider
+        // rather than a List parameter so a context with no provider configured still starts.
+        this.providers = providers.orderedStream().toList();
+        // In order: the first source that knows the model decides its window.
+        this.modelLimits = modelLimits.orderedStream().toList();
+    }
+
+    /** With no per-model windows: every model gets the window its provider declares. */
     public ContextWindowFilter(ContextWindowGovernor governor, GatewayMetrics metrics,
                                ObjectProvider<LlmProvider> providers) {
         this.governor = governor;
         this.metrics = metrics;
-        // A snapshot, as the dispatcher takes: providers are registered at startup. ObjectProvider
-        // rather than a List parameter so a context with no provider configured still starts.
         this.providers = providers.orderedStream().toList();
+        this.modelLimits = List.of();
     }
 
     @Override public int order() { return FilterOrder.CONTEXT_WINDOW; }
@@ -91,8 +109,12 @@ public class ContextWindowFilter implements ChatFilter {
      * model-downgrade and route-resolution filters have already run, so the model here is the one
      * that will be sent.
      *
+     * <p>For each candidate the model's own window is used when a {@link ModelContextLimits} source
+     * knows it, since a provider declares one window for all its models and they differ widely.
+     * Otherwise the provider's declared window applies.
+     *
      * <p>Takes the smallest window among the candidates, since a request that fails over may land on
-     * any of them. A provider declaring a non-positive window states no limit and is skipped.
+     * any of them. A non-positive window states no limit and is skipped.
      */
     private int resolveMaxContextTokens(ChatRequest request) {
         int smallest = Integer.MAX_VALUE;
@@ -100,12 +122,32 @@ public class ContextWindowFilter implements ChatFilter {
             if (!supportsQuietly(provider, request)) {
                 continue;
             }
-            int declared = provider.capabilities().maxContextTokens();
-            if (declared > 0 && declared < smallest) {
-                smallest = declared;
+            int window = modelWindow(provider.name(), request.getModel())
+                    .orElseGet(() -> provider.capabilities().maxContextTokens());
+            if (window > 0 && window < smallest) {
+                smallest = window;
             }
         }
         return smallest == Integer.MAX_VALUE ? FALLBACK_MAX_CONTEXT_TOKENS : smallest;
+    }
+
+    /** The first source that knows the model, in order; empty when none does. */
+    private OptionalInt modelWindow(String provider, String model) {
+        for (ModelContextLimits source : modelLimits) {
+            OptionalInt window;
+            try {
+                window = source.contextTokens(provider, model);
+            } catch (RuntimeException e) {
+                // A lookup that fails must not fail the request; the provider's window still holds.
+                log.debug("Model limit source {} threw for {} on {}: {}",
+                        source.getClass().getSimpleName(), model, provider, e.getMessage());
+                continue;
+            }
+            if (window != null && window.isPresent() && window.getAsInt() > 0) {
+                return window;
+            }
+        }
+        return OptionalInt.empty();
     }
 
     /**

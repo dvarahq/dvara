@@ -33,6 +33,8 @@ public class GatewayProperties {
     private RateLimitConfig rateLimit = new RateLimitConfig();
     private ImageFetchConfig imageFetch = new ImageFetchConfig();
     private ResponseLimitsConfig responseLimits = new ResponseLimitsConfig();
+    /** Per-model context windows that override the window a provider declares for all its models. */
+    private List<ModelLimit> modelLimits = new ArrayList<>();
     // Encryption (dvara.encryption.*) and region (dvara.region.*) live in their own
     // @ConfigurationProperties classes, GatewayEncryptionProperties and GatewayRegionProperties,
     // so their prefixes stay outside the LLM-gateway-only dvara.llm-gateway namespace.
@@ -56,6 +58,20 @@ public class GatewayProperties {
         private OllamaConfig   ollama       = new OllamaConfig();
         private BedrockConfig  bedrock      = new BedrockConfig();
         private MockConfig     mock         = new MockConfig();
+    }
+
+    /**
+     * {@code dvara.llm-gateway.model-limits[n]}: one model's context window. The context-window check
+     * uses it in place of the window the provider declares for every model it serves.
+     */
+    @Data
+    public static class ModelLimit {
+        /** The model as the caller sends it. A trailing {@code *} matches every model with that prefix. */
+        private String model;
+        /** The provider this applies to ({@code openai}, {@code anthropic}, ...); empty means any provider. */
+        private String provider;
+        /** The model's context window in tokens. */
+        private int contextTokens;
     }
 
     @Data

@@ -32,7 +32,7 @@ import java.util.Optional;
 import java.util.function.Function;
 
 /**
- * Translates {@code gateway.yaml} provider and rate-limit entries plus env var shortcuts
+ * Translates {@code gateway.yaml} provider, rate-limit and model-limit entries plus env var shortcuts
  * into Spring properties <b>before</b> the application context starts.
  *
  * <p>The properties are inserted immediately below {@code systemEnvironment}: above this
@@ -81,6 +81,10 @@ public class GatewayConfigEnvironmentPostProcessor implements EnvironmentPostPro
 
             if (config.getRateLimits() != null) {
                 mapRateLimitsToProperties(config.getRateLimits(), props);
+            }
+
+            if (config.getModelLimits() != null) {
+                mapModelLimitsToProperties(config.getModelLimits(), props);
             }
         }
 
@@ -191,6 +195,20 @@ public class GatewayConfigEnvironmentPostProcessor implements EnvironmentPostPro
         if (rateLimits.getTokensBurst() != null) {
             props.put("dvara.llm-gateway.rate-limit.per-key.tokens-burst",
                     String.valueOf(rateLimits.getTokensBurst()));
+        }
+    }
+
+    /** Validated by the loader already, so every entry has a model and a positive window. */
+    private void mapModelLimitsToProperties(List<GatewayYamlConfig.ModelLimitEntry> limits,
+                                            Map<String, Object> props) {
+        for (int i = 0; i < limits.size(); i++) {
+            GatewayYamlConfig.ModelLimitEntry limit = limits.get(i);
+            String prefix = "dvara.llm-gateway.model-limits[" + i + "].";
+            props.put(prefix + "model", limit.getModel().strip());
+            props.put(prefix + "context-tokens", String.valueOf(limit.getContextTokens()));
+            if (limit.getProvider() != null && !limit.getProvider().isBlank()) {
+                props.put(prefix + "provider", limit.getProvider().strip());
+            }
         }
     }
 
