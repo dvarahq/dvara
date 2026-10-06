@@ -140,6 +140,9 @@ class GovernedSeamBeanCountTest {
         // can be refused before it is accepted. This build registers none, and the submit path
         // proceeds without a check.
         m.put(com.dvarahq.core.batch.BatchSubmitGate.class, List.of());
+        // Batch lines skip the filter pipeline too, so a deployment that refuses models checks a
+        // batch file's models here. None in this build: the gateway then does not read the lines.
+        m.put(com.dvarahq.core.batch.BatchModelCheck.class, List.of());
 
         return m;
     }

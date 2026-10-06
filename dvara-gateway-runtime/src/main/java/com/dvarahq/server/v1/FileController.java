@@ -16,6 +16,7 @@
 package com.dvarahq.server.v1;
 
 import com.dvarahq.server.service.BatchExecutionService;
+import com.dvarahq.server.web.ApiKeyAuthFilter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -53,15 +54,17 @@ public class FileController {
 
     @PostMapping(value = "/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Upload a batch input file",
-               description = "Uploads a JSONL file (governed: PII-scanned before forwarding) to the provider's Files API.")
+               description = "Uploads a JSONL file to the provider's Files API. Governed: PII-scanned before forwarding, and, in a build that checks models, refused if a line names a model that is not allowed.")
     public ResponseEntity<String> uploadFile(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "purpose", defaultValue = "batch") String purpose,
             @RequestParam(value = "provider", required = false) String provider,
             HttpServletRequest httpRequest) throws IOException {
 
-        String workspaceId = (String) httpRequest.getAttribute("workspaceId");
-        String raw = batchService.uploadFile(file.getBytes(), file.getOriginalFilename(), purpose, workspaceId, provider);
+        String workspaceId = ApiKeyAuthFilter.requiredWorkspaceId(httpRequest);
+        String apiKeyId = ApiKeyAuthFilter.requiredApiKeyId(httpRequest);
+        String raw = batchService.uploadFile(file.getBytes(), file.getOriginalFilename(), purpose, workspaceId,
+                apiKeyId, provider);
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(raw);
     }
     @GetMapping(value = "/files/{fileId}/content")
