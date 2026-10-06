@@ -28,6 +28,7 @@ import com.dvarahq.core.pii.PiiEnforcer;
 import com.dvarahq.core.provider.LlmProvider;
 import com.dvarahq.core.metering.WorkspaceUsageListener;
 import com.dvarahq.core.util.JsonMapper;
+import com.dvarahq.server.filter.WorkspaceStatusFilter;
 import com.dvarahq.server.metrics.GatewayMetrics;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -73,6 +74,12 @@ public class BatchExecutionService {
     private final BatchSubmitGate submitGate;
     /** Empty when nothing checks the models a batch names; the lines are then not read. */
     private final List<BatchModelCheck> modelChecks;
+    /**
+     * The pipeline's suspended-workspace check, asked directly because batch uploads and submits do
+     * not travel the pipeline. Null only when an application removed that filter, in which case
+     * nothing else checks suspension either.
+     */
+    private final WorkspaceStatusFilter workspaceStatus;
     private final BatchJobRepository batchJobRepository;
     private final BatchCostBooker costBooker;
     /** Empty when nothing wants to hear about a usage row. */
@@ -83,6 +90,7 @@ public class BatchExecutionService {
     public BatchExecutionService(ProviderDispatcher dispatcher, PiiEnforcer piiEnforcer,
                                  org.springframework.beans.factory.ObjectProvider<BatchSubmitGate> submitGate,
                                  org.springframework.beans.factory.ObjectProvider<BatchModelCheck> modelChecks,
+                                 org.springframework.beans.factory.ObjectProvider<WorkspaceStatusFilter> workspaceStatus,
                                  BatchJobRepository batchJobRepository,
                                  BatchCostBooker costBooker,
                                  org.springframework.beans.factory.ObjectProvider<WorkspaceUsageListener> usageListeners,
@@ -91,6 +99,7 @@ public class BatchExecutionService {
         this.piiEnforcer = piiEnforcer;
         this.submitGate = submitGate.getIfAvailable();
         this.modelChecks = modelChecks.orderedStream().toList();
+        this.workspaceStatus = workspaceStatus.getIfAvailable();
         this.batchJobRepository = batchJobRepository;
         this.costBooker = costBooker;
         this.usageListeners = usageListeners.orderedStream().toList();
@@ -112,9 +121,15 @@ public class BatchExecutionService {
      *
      * <p>A file uploaded for batches has its models checked when a {@link BatchModelCheck} is
      * registered. A file for another purpose is not: its lines are not batch requests.</p>
+     *
+     * <p>A suspended workspace cannot upload a file for batches. A file for another purpose is not
+     * refused here: it runs nothing, and a batch can only use a file uploaded for batches.</p>
      */
     public String uploadFile(byte[] content, String filename, String purpose, String workspaceId,
                              String apiKeyId, String providerHint) {
+        if ("batch".equals(purpose)) {
+            requireActive(workspaceId);
+        }
         String scanned = piiEnforcer.enforceBlob(new String(content, StandardCharsets.UTF_8), workspaceId);
         if ("batch".equals(purpose)) {
             checkModels(scanned, workspaceId, apiKeyId);
@@ -126,8 +141,8 @@ public class BatchExecutionService {
     // ---- submit -----------------------------------------------------------
 
     /**
-     * Gates the submit if a gate is registered, checks the input file's models again if a model check
-     * is registered, relays to the provider, and persists a tracking row.
+     * Refuses a suspended workspace, gates the submit if a gate is registered, checks the input file's
+     * models again if a model check is registered, relays to the provider, and persists a tracking row.
      *
      * <p>The models are checked again here, not only at upload, because a model can be turned off
      * after its file was accepted. The file is read back from the provider for that, so the check
@@ -135,6 +150,7 @@ public class BatchExecutionService {
      * will not hand the file back, the submit goes ahead on the check made at upload.</p>
      */
     public String createBatch(String requestJson, String workspaceId, String apiKeyId, String providerHint) {
+        requireActive(workspaceId);
         if (submitGate != null) {
             submitGate.check(workspaceId, apiKeyId);
         }
@@ -169,6 +185,17 @@ public class BatchExecutionService {
                 "provider_batch_id", nullSafe(job.getProviderBatchId()),
                 "input_file_id", nullSafe(job.getInputFileId())));
         return raw;
+    }
+
+    /**
+     * Upload and submit are the batch paths that start spending, so they are the ones a suspension
+     * stops. Retrieve, list, cancel and file download start nothing new; like other reads, they stay
+     * open to a suspended workspace, and cancel can only lower what it spends.
+     */
+    private void requireActive(String workspaceId) {
+        if (workspaceStatus != null) {
+            workspaceStatus.requireActive(workspaceId);
+        }
     }
 
     // ---- poll (metering trigger) ------------------------------------------

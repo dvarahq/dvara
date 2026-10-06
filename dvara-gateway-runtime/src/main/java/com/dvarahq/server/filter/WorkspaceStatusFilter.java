@@ -87,7 +87,19 @@ public class WorkspaceStatusFilter implements ChatFilter {
 
     @Override
     public ChatRequest preDispatch(ChatRequest request, FilterContext ctx) {
-        var workspaceId = ctx.getWorkspaceId();
+        requireActive(ctx.getWorkspaceId());
+        return request;
+    }
+
+    /**
+     * Refuses a suspended workspace exactly as a request through the pipeline is refused: the same
+     * {@link WorkspaceSuspendedException} and the same audit event. For paths that spend money
+     * without travelling the filter pipeline, such as a batch upload or submit, so a suspension
+     * covers them too.
+     *
+     * @throws WorkspaceSuspendedException if the workspace is suspended
+     */
+    public void requireActive(String workspaceId) {
         if (workspaceId == null || workspaceId.isBlank()) {
             // A request with no workspace was not authenticated, and a suspension it could not be
             // checked against must not be the reason it is served.
@@ -97,7 +109,7 @@ public class WorkspaceStatusFilter implements ChatFilter {
 
         var snapshot = snapshotFor(workspaceId);
         if (snapshot == null || snapshot.status() != WorkspaceStatus.SUSPENDED) {
-            return request;
+            return;
         }
 
         var reason = snapshot.reason();

@@ -234,7 +234,8 @@ key as its API key.
   policy, guardrail or rate limit on direct requests does not apply to them. An application can
   refuse models in a batch with a `BatchModelCheck` bean: the gateway asks it about each model a file
   names when the file is uploaded and again when a batch is submitted, and refuses the file naming
-  the line. Jobs are tracked in memory, so a restart forgets them.
+  the line. A suspended workspace cannot upload a batch file or submit a batch; it can still read,
+  download and cancel the batches it has. Jobs are tracked in memory, so a restart forgets them.
 
 **Routing and reliability**
 

@@ -26,6 +26,10 @@ import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.pii.PiiEnforcer;
 import com.dvarahq.core.provider.LlmProvider;
 import com.dvarahq.core.metering.WorkspaceUsageListener;
+import com.dvarahq.core.workspace.Workspace;
+import com.dvarahq.core.workspace.WorkspaceRepository;
+import com.dvarahq.core.workspace.WorkspaceStatus;
+import com.dvarahq.server.filter.WorkspaceStatusFilter;
 import com.dvarahq.server.metrics.GatewayMetrics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -57,6 +61,7 @@ class BatchExecutionServiceTest {
     private GatewayMetrics metrics;
     private LlmProvider provider;
     private BatchExecutionService service;
+    private WorkspaceRepository workspaces;
 
     private static final String OUTPUT_JSONL =
             "{\"custom_id\":\"1\",\"response\":{\"status_code\":200,\"body\":{\"model\":\"gpt-4o\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}}}\n"
@@ -77,8 +82,11 @@ class BatchExecutionServiceTest {
         when(provider.name()).thenReturn("openai");
         when(dispatcher.selectBatchProvider(any())).thenReturn(provider);
         when(piiEnforcer.enforceBlob(anyString(), any())).thenAnswer(inv -> inv.getArgument(0));
+        workspaces = mock(WorkspaceRepository.class);
+        when(workspaces.findById(any())).thenReturn(Optional.empty());
 
         service = new BatchExecutionService(dispatcher, piiEnforcer, provider(submitGate), TestProviders.of(null),
+                TestProviders.of(new WorkspaceStatusFilter(workspaces, TestProviders.of(auditWriter))),
                 batchJobRepository,
                 costBooker, TestProviders.of(usageListener), auditWriter, metrics);
     }
@@ -302,7 +310,7 @@ class BatchExecutionServiceTest {
         when(provider.createBatch(anyString()))
                 .thenReturn("{\"id\":\"batch_1\",\"status\":\"validating\",\"input_file_id\":\"file_1\"}");
         var ungated = new BatchExecutionService(dispatcher, piiEnforcer, provider(null), TestProviders.of(null),
-                batchJobRepository,
+                TestProviders.of(null), batchJobRepository,
                 costBooker, TestProviders.of(usageListener), auditWriter, metrics);
 
         ungated.createBatch("{}", "t1", "k1", null);
@@ -322,7 +330,7 @@ class BatchExecutionServiceTest {
 
     private BatchExecutionService checkedBy(BatchModelCheck check) {
         return new BatchExecutionService(dispatcher, piiEnforcer, provider(null), TestProviders.of(check),
-                batchJobRepository, costBooker, TestProviders.of(usageListener), auditWriter, metrics);
+                TestProviders.of(null), batchJobRepository, costBooker, TestProviders.of(usageListener), auditWriter, metrics);
     }
 
     /** A check that refuses one model the way a direct request for it is refused. */
@@ -474,6 +482,82 @@ class BatchExecutionServiceTest {
         service.createBatch("{\"input_file_id\":\"file_1\"}", "t1", "k1", null);
 
         verify(provider, never()).getFileContent(anyString());
+    }
+
+    // ---- suspended workspace ----------------------------------------------
+
+    private void suspend(String workspaceId) {
+        when(workspaces.findById(workspaceId)).thenReturn(Optional.of(Workspace.builder()
+                .id(workspaceId).name(workspaceId).status(WorkspaceStatus.SUSPENDED)
+                .metadata(Map.of("suspendedReason", "unpaid")).build()));
+    }
+
+    @Test
+    void uploadFile_suspendedWorkspace_isRefusedAsADirectRequestIs() {
+        suspend("t1");
+
+        assertThatThrownBy(() -> service.uploadFile("{}".getBytes(StandardCharsets.UTF_8), "in.jsonl",
+                "batch", "t1", "k1", null))
+                .isInstanceOfSatisfying(GatewayException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo("WORKSPACE_SUSPENDED");
+                    assertThat(e.getMessage()).contains("Workspace t1 has been suspended (reason: unpaid)");
+                });
+        verify(provider, never()).uploadFile(any(), any(), any());
+        verify(piiEnforcer, never()).enforceBlob(anyString(), any());
+        verify(auditWriter).write(argThat(e -> "WORKSPACE_SUSPENDED_BLOCK".equals(e.eventType())
+                && "t1".equals(e.workspaceId())));
+    }
+
+    @Test
+    void createBatch_suspendedWorkspace_isRefusedBeforeTheProvider() {
+        suspend("t1");
+
+        assertThatThrownBy(() -> service.createBatch("{\"input_file_id\":\"file_1\"}", "t1", "k1", null))
+                .isInstanceOfSatisfying(GatewayException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("WORKSPACE_SUSPENDED"));
+        verify(provider, never()).createBatch(anyString());
+        verify(batchJobRepository, never()).save(any());
+        verify(submitGate, never()).check(any(), any());
+    }
+
+    @Test
+    void suspendedWorkspace_canStillReadAndCancelItsBatches() {
+        // Retrieve, cancel and download start no new spend, and a request filter does not stop reads
+        // either. Cancel can only lower what the workspace spends.
+        suspend("t1");
+        BatchJob job = job("batch_1", "t1", false);
+        when(batchJobRepository.findByProviderBatchIdAndWorkspaceId("batch_1", "t1")).thenReturn(Optional.of(job));
+        when(batchJobRepository.findByFileIdAndWorkspaceId("file_1", "t1")).thenReturn(Optional.of(job));
+        when(provider.getBatch("batch_1")).thenReturn("{\"id\":\"batch_1\",\"status\":\"in_progress\"}");
+        when(provider.cancelBatch("batch_1")).thenReturn("{\"id\":\"batch_1\",\"status\":\"cancelling\"}");
+        when(provider.getFileContent("file_1")).thenReturn("x".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(service.getBatch("batch_1", "t1")).contains("in_progress");
+        assertThat(service.cancelBatch("batch_1", "t1")).contains("cancelling");
+        assertThat(service.getFileContent("file_1", "t1")).isNotEmpty();
+    }
+
+    @Test
+    void uploadFile_suspendedWorkspace_forAnotherPurpose_isNotRefusedHere() {
+        suspend("t1");
+        when(provider.uploadFile(any(), eq("train.jsonl"), eq("fine-tune"))).thenReturn("{\"id\":\"file_2\"}");
+
+        assertThat(service.uploadFile("{}".getBytes(StandardCharsets.UTF_8), "train.jsonl", "fine-tune",
+                "t1", "k1", null)).contains("file_2");
+    }
+
+    @Test
+    void activeWorkspace_uploadsAndSubmitsAsBefore() {
+        when(workspaces.findById("t1")).thenReturn(Optional.of(Workspace.builder()
+                .id("t1").name("t1").status(WorkspaceStatus.ACTIVE).build()));
+        when(provider.uploadFile(any(), eq("in.jsonl"), eq("batch"))).thenReturn("{\"id\":\"file_1\"}");
+        when(provider.createBatch(anyString()))
+                .thenReturn("{\"id\":\"batch_1\",\"status\":\"validating\",\"input_file_id\":\"file_1\"}");
+
+        service.uploadFile("{}".getBytes(StandardCharsets.UTF_8), "in.jsonl", "batch", "t1", "k1", null);
+        service.createBatch("{\"input_file_id\":\"file_1\"}", "t1", "k1", null);
+
+        verify(provider).createBatch("{\"input_file_id\":\"file_1\"}");
     }
 
     private static <T> org.springframework.beans.factory.ObjectProvider<T> provider(T value) {
