@@ -31,9 +31,9 @@ import java.util.Map;
  *
  * <p>DVARA translates this into the internal {@code ChatRequest} and runs the same governance
  * and metering pipeline as chat (via {@code ChatExecutionService}), so a Responses client gets a
- * governed answer from any provider. Only the text, image-input and structured-output core of the
- * Responses shape is honoured; function calling and the OpenAI-only features (server-side state,
- * hosted tools, reasoning, background mode) are rejected cleanly, never silently dropped.
+ * governed answer from any provider. The text, image-input, structured-output and function-calling
+ * core of the Responses shape is honoured; the OpenAI-only features (server-side state, built-in
+ * tools, reasoning, background mode) are rejected cleanly, never silently dropped.
  */
 @Data
 @Builder
@@ -66,6 +66,13 @@ public class ResponseRequest {
 
     private Map<String, Object> metadata;
 
+    /** Function tools ({@code {"type": "function", "name", "description", "parameters"}}); a built-in tool type is refused. */
+    private List<Object> tools;
+
+    /** {@code auto}, {@code none}, {@code required}, or {@code {"type": "function", "name"}}. */
+    @JsonProperty("tool_choice")
+    private Object toolChoice;
+
     // -------- Detected and rejected (stateful / OpenAI-only / unsupported) --------
     // INVARIANT: every field below must have a matching check in
     // ResponsesController.rejectUnsupported(...). A field declared here without one is
@@ -76,9 +83,6 @@ public class ResponseRequest {
     private Boolean store;
     private Object reasoning;
     private Boolean background;
-    private List<Object> tools;
-    @JsonProperty("tool_choice")
-    private Object toolChoice;
     private Object prompt;
     private List<String> include;
 

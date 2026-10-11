@@ -261,6 +261,15 @@ key as its API key.
   `GET /v1/models` with an `anthropic-version` header answers in Anthropic's model-list shape and lists
   only the Claude models Anthropic serves, so a client built for Anthropic is never offered another
   provider's model.
+- ✅ **OpenAI Responses API** — `POST /v1/responses`, whole or streamed, governed like chat on any
+  provider. Text, images, structured output (`text.format`) and function calling: `function` tools,
+  `tool_choice`, and `function_call` and `function_call_output` items in `input`. A call comes back as a
+  `function_call` output item, and streams with `response.output_item.added`,
+  `response.function_call_arguments.delta` and `.done`, and `response.output_item.done`. On a provider
+  that is not OpenAI the calls are translated, as on chat. The gateway runs no tool; your code does.
+  Built-in tools (`web_search`, `file_search`, `code_interpreter`, `computer_use`, `mcp` and the rest)
+  run at the provider, outside the gateway's checks, so they are refused. So are `store: true`,
+  `previous_response_id`, `background` and input item types the gateway does not read.
 - ✅ **Response cache** — exact-match, in memory, per process. Off until
   `dvara.llm-gateway.cache.in-memory.enabled` is `true`.
 
