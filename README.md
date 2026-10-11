@@ -317,6 +317,21 @@ with each model's own context window where one is known (see [Model context wind
 | Qwen | ✅ | — | — | — | — |
 | Ollama | ✅ | ✅ | ✅ | ✅ | — |
 
+A token limit can be sent as `max_tokens` or `max_completion_tokens`; the gateway holds it as one
+limit and sends each provider the field its model takes. OpenAI's reasoning models (the o-series and
+GPT-5 and later) refuse `max_tokens`, so OpenAI and Azure OpenAI are sent `max_completion_tokens` for
+them, and `max_tokens` for every other model. On Azure OpenAI the model is the deployment name, so name
+a reasoning deployment after its model (`azure/gpt-5-mini`). Sending both names with different values
+is refused with `400`. The workspace's default response cap
+(`dvara.llm-gateway.guardrail.default-max-response-tokens`, `4096`, `0` turns it off) is that same
+limit when the caller sets none; on a reasoning model it also counts the tokens spent reasoning.
+
+When a provider refuses a request with `400`, the error the caller gets carries the provider's own
+reason after the gateway's message, on one line and at most 300 characters:
+`OpenAI API error 400: unsupported_parameter: Unsupported parameter: 'max_tokens' is not supported with
+this model. Use 'max_completion_tokens' instead.` Nothing else of the provider's answer is returned, and
+other statuses keep the gateway's message alone.
+
 A mock provider is included for tests and demos; it needs no account. It also takes batches: an
 uploaded file reads back as what was uploaded, every batch completes on its first poll, and its output
 file holds two canned lines with usage. It keeps the newest 256 uploaded files in memory, so a restart
@@ -380,7 +395,7 @@ policies:
 Without the two `metadata` keys, PII and guardrail detections are logged and the request goes
 through; `REDACT` and `BLOCK` are the strict choices. A route's `model` takes a trailing `*`; a
 policy `allowlist` or `denylist` matches model names exactly, so list each name. A `max_tokens`
-condition applies only to a request that sets `max_tokens`. A rule's `action` is `DENY` or
+condition applies only to a request that sets `max_tokens` or `max_completion_tokens`. A rule's `action` is `DENY` or
 `WARN_AGENT`.
 
 A policy applies to the model the gateway actually sends, not only the model the caller named. When a

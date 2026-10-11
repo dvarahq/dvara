@@ -22,6 +22,7 @@ import com.dvarahq.core.provider.ProviderCapabilities;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
@@ -30,9 +31,11 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 /**
  * Checks what is specific to DeepSeek: the model prefix, the capability declaration and the
@@ -108,5 +111,24 @@ class DeepSeekProviderTest {
         server.expect(requestTo(containsString("/models")))
               .andRespond(withServerError());
         assertThat(provider.listModels()).isEmpty();
+    }
+
+    @Test
+    void chat_keepsMaxTokens_whateverTheModelIsCalled() {
+        // Only OpenAI and Azure OpenAI translate the token limit; another OpenAI-compatible server keeps
+        // the field every such server knows.
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.max_tokens").value(50))
+              .andExpect(jsonPath("$.max_completion_tokens").doesNotExist())
+              .andRespond(withSuccess("""
+                      {"id":"c1","object":"chat.completion","created":1,"model":"deepseek-reasoner",
+                       "choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],
+                       "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+                      """, MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("deepseek-reasoner")
+                .messages(List.of(MultimodalMessage.user("hi"))).maxTokens(50).build());
+
+        server.verify();
     }
 }

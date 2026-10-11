@@ -113,10 +113,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("Anthropic", res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Anthropic API error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("Anthropic", res, "Anthropic API error");
                 })
                 .body(AnthropicResponse.class);
 
@@ -142,10 +139,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
                 .body(sent)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("Anthropic", res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Anthropic API error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("Anthropic", res, "Anthropic API error");
                 })
                 .body(String.class);
         ObjectNode response = AnthropicMessagesBody.parseResponse(answer);
@@ -238,10 +232,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("Anthropic", res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Anthropic token count error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("Anthropic", res, "Anthropic token count error");
                 })
                 .body(Map.class);
         if (answer == null || !(answer.get("input_tokens") instanceof Number tokens)) {

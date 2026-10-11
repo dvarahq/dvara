@@ -36,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
@@ -328,6 +329,42 @@ class AzureOpenAiProviderTest {
 
         assertThatThrownBy(() -> provider.listModels())
                 .isInstanceOf(Exception.class);
+        server.verify();
+    }
+
+    // -------------------------------------------------------------------------
+    // Token limit: Azure's reasoning deployments take max_completion_tokens
+    // -------------------------------------------------------------------------
+
+    private static final String TOKEN_OK = """
+            {"id":"c1","object":"chat.completion","created":1,"model":"gpt-5-mini",
+             "choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],
+             "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+            """;
+
+    @Test
+    void chat_gpt5Deployment_isSentMaxCompletionTokens() {
+        server.expect(requestTo(containsString("/deployments/gpt-5-mini/chat/completions")))
+              .andExpect(jsonPath("$.max_completion_tokens").value(200))
+              .andExpect(jsonPath("$.max_tokens").doesNotExist())
+              .andRespond(withSuccess(TOKEN_OK, MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("azure/gpt-5-mini")
+                .messages(List.of(MultimodalMessage.user("hi"))).maxTokens(200).build());
+
+        server.verify();
+    }
+
+    @Test
+    void chat_gpt4oDeployment_keepsMaxTokens() {
+        server.expect(requestTo(containsString("/deployments/gpt-4o/chat/completions")))
+              .andExpect(jsonPath("$.max_tokens").value(200))
+              .andExpect(jsonPath("$.max_completion_tokens").doesNotExist())
+              .andRespond(withSuccess(TOKEN_OK, MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("azure/gpt-4o")
+                .messages(List.of(MultimodalMessage.user("hi"))).maxTokens(200).build());
+
         server.verify();
     }
 }

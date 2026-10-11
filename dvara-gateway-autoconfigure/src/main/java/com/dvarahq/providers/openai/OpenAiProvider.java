@@ -17,7 +17,7 @@ package com.dvarahq.providers.openai;
 
 import com.dvarahq.providers.support.ProviderErrors;
 
-import com.dvarahq.core.exception.GatewayException;
+import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.EmbeddingRequest;
 import com.dvarahq.core.model.EmbeddingResponse;
 import com.dvarahq.core.provider.ProviderCapabilities;
@@ -72,6 +72,11 @@ public class OpenAiProvider extends AbstractOpenAiCompatibleProvider {
         return "OpenAI";
     }
 
+    @Override
+    protected String maxTokensField(ChatRequest request) {
+        return OpenAiTokenLimit.fieldFor(request.getModel());
+    }
+
     // -------------------------------------------------------------------------
     // Embeddings — OpenAI-only in the current provider set
     // -------------------------------------------------------------------------
@@ -95,10 +100,7 @@ public class OpenAiProvider extends AbstractOpenAiCompatibleProvider {
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("OpenAI", res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "OpenAI embedding error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("OpenAI", res, "OpenAI embedding error");
                 })
                 .body(OaiEmbeddingResponse.class);
 

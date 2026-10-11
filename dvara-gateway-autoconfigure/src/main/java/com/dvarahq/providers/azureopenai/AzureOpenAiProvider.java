@@ -19,6 +19,7 @@ import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.provider.ProviderCapabilities;
 import com.dvarahq.core.secret.SecretProvider;
 import com.dvarahq.providers.openai.AbstractOpenAiCompatibleProvider;
+import com.dvarahq.providers.openai.OpenAiTokenLimit;
 import com.dvarahq.providers.support.CredentialInterceptor;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -97,6 +98,13 @@ public class AzureOpenAiProvider extends AbstractOpenAiCompatibleProvider {
         // Azure expects the deployment in the URL path; including a `model`
         // field in the body is rejected by the upstream as a validation error.
         return false;
+    }
+
+    @Override
+    protected String maxTokensField(ChatRequest request) {
+        // Azure's reasoning deployments refuse max_tokens as OpenAI's do. The model here is the
+        // deployment name, so the rule holds when a deployment is named after its model.
+        return OpenAiTokenLimit.fieldFor(request.getModel());
     }
 
     // Batch API: Azure's Files + Batches endpoints are resource-scoped

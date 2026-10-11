@@ -170,12 +170,9 @@ public class OllamaProvider extends AbstractLlmProvider {
                             "The Ollama endpoint answered with a redirect, which is not followed");
                 })
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("Ollama", res);
                     // Named with the model: "does not support tools" is a property of the model (#30 A1).
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Ollama error " + res.getStatusCode().value() + " for model "
-                                + stripPrefix(request.getModel())
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("Ollama", res, "Ollama error",
+                            " for model " + stripPrefix(request.getModel()));
                 })
                 .body(OllamaResponse.class);
 
@@ -212,11 +209,8 @@ public class OllamaProvider extends AbstractLlmProvider {
                             "The Ollama endpoint answered with a redirect, which is not followed");
                 })
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("Ollama", res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Ollama embedding error " + res.getStatusCode().value() + " for model "
-                                + stripPrefix(request.getModel())
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("Ollama", res, "Ollama embedding error",
+                            " for model " + stripPrefix(request.getModel()));
                 })
                 .body(OllamaEmbeddingResponse.class);
 

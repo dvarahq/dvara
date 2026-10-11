@@ -21,18 +21,22 @@ import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.dvarahq.core.exception.GatewayException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.client.ClientHttpResponse;
 
 /**
- * A provider's own reason for refusing a call, for the gateway's log (#34).
+ * A provider's own reason for refusing a call: for the gateway's log and, on a {@code 400}, for the caller.
  *
- * <p>The caller still gets the gateway's own short message — a provider's error body can echo the
- * request, so it is never returned (#47). But an operator must be able to tell a bad image URL from a
- * bad parameter from a content refusal, and before this the reason reached no one: finding the cause of
- * an {@code OpenAI API error 400} took a call straight to the provider. So the provider's
- * {@code message} and {@code code} are logged, on one line and capped, at WARN.
+ * <p>An operator must be able to tell a bad image URL from a bad parameter from a content refusal, so
+ * the provider's {@code message} and {@code code} are logged, on one line and capped, at WARN.
+ *
+ * <p>The caller gets the gateway's own short message. When the provider answered {@code 400}, the
+ * request itself was wrong and only the provider can say how ("use max_completion_tokens"), so its
+ * {@code code} and {@code message} are added, on one line and capped. Nothing else of the body is
+ * returned, since a body can echo the request. No other status carries the reason: a {@code 401} or
+ * {@code 403} is about the gateway's own credential, not the caller's request.
  */
 public final class ProviderErrors {
 
@@ -48,6 +52,8 @@ public final class ProviderErrors {
     private static final Pattern CODE = field("code");
     private static final Pattern TYPE = field("type");
     private static final Pattern STATUS = field("status");
+    /** A provider key quoted back in a message, such as {@code sk-...}. */
+    private static final Pattern SECRET = Pattern.compile("\\bsk-[A-Za-z0-9_*\\-]{8,}");
 
     private ProviderErrors() {
     }
@@ -67,15 +73,57 @@ public final class ProviderErrors {
         log.warn("{} refused the call with {}: {}", provider, status, reason(res));
     }
 
+    /**
+     * Logs why {@code provider} refused the call, as {@link #logRefusal} does, and returns the error for the
+     * caller: {@code what}, the status and its hint, then {@code detail} (may be empty). On a {@code 400} the
+     * provider's own reason follows, when its body names one. Reads the body once, and never throws.
+     */
+    public static GatewayException refusal(String provider, ClientHttpResponse res, String what, String detail) {
+        int status;
+        try {
+            status = res.getStatusCode().value();
+        } catch (IOException | RuntimeException e) {
+            status = 502;
+        }
+        String body = body(res);
+        log.warn("{} refused the call with {}: {}", provider, status, body == null ? "(no readable body)" : reason(body));
+        String message = what + " " + status + detail + GatewayException.describeHttpStatus(status);
+        String forCaller = status == 400 && body != null ? callerReason(body) : null;
+        return GatewayException.upstream(status, forCaller == null ? message : message + ": " + forCaller);
+    }
+
+    /** {@link #refusal(String, ClientHttpResponse, String, String)} with nothing after the status. */
+    public static GatewayException refusal(String provider, ClientHttpResponse res, String what) {
+        return refusal(provider, res, what, "");
+    }
+
+    /**
+     * What of a refusal the caller may see: the provider's {@code code} and {@code message}, or nothing when
+     * the body has no {@code message}. Never the raw body. Anything shaped like an API key is masked.
+     */
+    static String callerReason(String body) {
+        Matcher m = MESSAGE.matcher(body);
+        if (!m.find()) {
+            return null;
+        }
+        String message = unescape(m.group(1));
+        String code = code(body);
+        String reason = oneLine(code == null ? message : code + ": " + message);
+        return SECRET.matcher(reason).replaceAll("***");
+    }
+
+    private static String body(ClientHttpResponse res) {
+        try (InputStream in = res.getBody()) {
+            return new String(in.readNBytes(READ_LIMIT), StandardCharsets.UTF_8);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
     /** The provider's {@code code} and {@code message}, or the start of the body; one line, capped. */
     static String reason(ClientHttpResponse res) {
-        String body;
-        try (InputStream in = res.getBody()) {
-            body = new String(in.readNBytes(READ_LIMIT), StandardCharsets.UTF_8);
-        } catch (IOException | RuntimeException e) {
-            return "(no readable body)";
-        }
-        return reason(body);
+        String body = body(res);
+        return body == null ? "(no readable body)" : reason(body);
     }
 
     static String reason(String body) {

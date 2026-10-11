@@ -88,10 +88,7 @@ public class CohereProvider extends AbstractLlmProvider {
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("Cohere", res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Cohere API error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("Cohere", res, "Cohere API error");
                 })
                 .body(CohereChatResponse.class);
 

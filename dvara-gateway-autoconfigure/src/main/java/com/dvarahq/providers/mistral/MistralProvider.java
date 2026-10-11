@@ -83,10 +83,7 @@ public class MistralProvider extends AbstractLlmProvider {
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("Mistral", res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Mistral API error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("Mistral", res, "Mistral API error");
                 })
                 .body(MistralChatResponse.class);
 
