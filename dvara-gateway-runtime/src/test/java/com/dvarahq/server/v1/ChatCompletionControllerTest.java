@@ -295,6 +295,51 @@ class ChatCompletionControllerTest {
     }
 
     // -------------------------------------------------------------------------
+    // Token limit under either of OpenAI's names
+    // -------------------------------------------------------------------------
+
+    /** max_completion_tokens was dropped, so the call went out with no limit of the caller's. */
+    @Test
+    void maxCompletionTokens_isTheRequestsTokenLimit() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("chatcmpl-abc", "gpt-5-mini", "Hi"));
+
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\": \"gpt-5-mini\", \"max_completion_tokens\": 512,"
+                                + " \"messages\": [{\"role\":\"user\",\"content\":\"hi\"}]}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<ChatRequest> sent = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(requestPipeline).preDispatch(sent.capture(), any(FilterContext.class));
+        assertThat(sent.getValue().getMaxTokens()).isEqualTo(512);
+    }
+
+    @Test
+    void bothNames_withTheSameValue_areOneLimit() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("chatcmpl-abc", "gpt-4o", "Hi"));
+
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\": \"gpt-4o\", \"max_tokens\": 100, \"max_completion_tokens\": 100,"
+                                + " \"messages\": [{\"role\":\"user\",\"content\":\"hi\"}]}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<ChatRequest> sent = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(requestPipeline).preDispatch(sent.capture(), any(FilterContext.class));
+        assertThat(sent.getValue().getMaxTokens()).isEqualTo(100);
+    }
+
+    @Test
+    void bothNames_withDifferentValues_areRefused() throws Exception {
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\": \"gpt-4o\", \"max_tokens\": 100, \"max_completion_tokens\": 200,"
+                                + " \"messages\": [{\"role\":\"user\",\"content\":\"hi\"}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value(
+                        "max_tokens and max_completion_tokens set different limits; send one of them"));
+
+        verify(dispatcher, never()).chat(any());
+    }
+
+    // -------------------------------------------------------------------------
     // Provider errors
     // -------------------------------------------------------------------------
 

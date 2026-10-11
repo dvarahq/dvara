@@ -105,10 +105,7 @@ public class BedrockProvider extends AbstractLlmProvider {
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("Bedrock", res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Bedrock API error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("Bedrock", res, "Bedrock API error");
                 })
                 .body(ConverseResponse.class);
 

@@ -47,6 +47,13 @@ public class ChatCompletionRequest {
     @JsonProperty("max_tokens")
     private Integer maxTokens;
 
+    /**
+     * OpenAI's newer name for the token limit, the only one its reasoning models take. Either name is
+     * accepted; the provider is sent the one its model needs.
+     */
+    @JsonProperty("max_completion_tokens")
+    private Integer maxCompletionTokens;
+
     @JsonProperty("top_p")
     private Double topP;
 

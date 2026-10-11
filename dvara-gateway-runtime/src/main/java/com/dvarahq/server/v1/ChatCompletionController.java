@@ -445,6 +445,7 @@ public class ChatCompletionController {
             throw new GatewayException("UNSUPPORTED_CAPABILITY",
                     "parallel_tool_calls=false is not supported on /v1/chat/completions");
         }
+        Integer maxTokens = tokenLimit(req);
         List<MultimodalMessage> messages = req.getMessages().stream()
                 .map(m -> MultimodalMessage.builder()
                         .role(m.getRole())
@@ -458,7 +459,7 @@ public class ChatCompletionController {
                 .model(req.getModel())
                 .messages(messages)
                 .stream(Boolean.TRUE.equals(req.getStream()))
-                .maxTokens(req.getMaxTokens())
+                .maxTokens(maxTokens)
                 .temperature(req.getTemperature())
                 .topP(req.getTopP())
                 .frequencyPenalty(req.getFrequencyPenalty())
@@ -471,6 +472,21 @@ public class ChatCompletionController {
                 .toolChoice(req.getToolChoice())
                 .metadata(req.getMetadata())
                 .build();
+    }
+
+    /**
+     * The request's token limit, under either of OpenAI's names. It is held as one limit, so a policy on
+     * {@code max_tokens} and the default response cap apply to both, and each provider is sent the field
+     * its model takes. Two different values are refused: the gateway cannot tell which one was meant.
+     */
+    static Integer tokenLimit(ChatCompletionRequest req) {
+        Integer maxTokens = req.getMaxTokens();
+        Integer maxCompletionTokens = req.getMaxCompletionTokens();
+        if (maxTokens != null && maxCompletionTokens != null && !maxTokens.equals(maxCompletionTokens)) {
+            throw new GatewayException("INVALID_REQUEST",
+                    "max_tokens and max_completion_tokens set different limits; send one of them");
+        }
+        return maxCompletionTokens != null ? maxCompletionTokens : maxTokens;
     }
 
     /**

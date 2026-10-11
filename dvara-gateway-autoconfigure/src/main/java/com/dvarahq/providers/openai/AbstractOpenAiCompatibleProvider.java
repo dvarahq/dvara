@@ -111,6 +111,15 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         return true;
     }
 
+    /**
+     * The body field the request's token limit is sent under. Default {@code max_tokens}, which every
+     * OpenAI-compatible server knows. OpenAI and Azure OpenAI override it: their reasoning models refuse
+     * {@code max_tokens} and take {@code max_completion_tokens} ({@link OpenAiTokenLimit}).
+     */
+    protected String maxTokensField(ChatRequest request) {
+        return "max_tokens";
+    }
+
     // -------------------------------------------------------------------------
     // Chat
     // -------------------------------------------------------------------------
@@ -125,10 +134,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal(upstreamLabel(), res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            upstreamLabel() + " API error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal(upstreamLabel(), res, upstreamLabel() + " API error");
                 })
                 .body(OaiChatResponse.class);
 
@@ -185,10 +191,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .body(parts.build())
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal(upstreamLabel(), res);
-                    throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " file upload error "
-                            + res.getStatusCode().value()
-                            + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal(upstreamLabel(), res, upstreamLabel() + " file upload error");
                 })
                 .body(String.class);
     }
@@ -201,10 +204,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .body(requestJson)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal(upstreamLabel(), res);
-                    throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " batch submit error "
-                            + res.getStatusCode().value()
-                            + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal(upstreamLabel(), res, upstreamLabel() + " batch submit error");
                 })
                 .body(String.class);
     }
@@ -215,10 +215,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .uri(batchUri(), batchId)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal(upstreamLabel(), res);
-                    throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " batch fetch error "
-                            + res.getStatusCode().value()
-                            + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal(upstreamLabel(), res, upstreamLabel() + " batch fetch error");
                 })
                 .body(String.class);
     }
@@ -229,10 +226,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .uri(batchCancelUri(), batchId)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal(upstreamLabel(), res);
-                    throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " batch cancel error "
-                            + res.getStatusCode().value()
-                            + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal(upstreamLabel(), res, upstreamLabel() + " batch cancel error");
                 })
                 .body(String.class);
     }
@@ -243,10 +237,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .uri(fileContentUri(), fileId)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal(upstreamLabel(), res);
-                    throw GatewayException.upstream(res.getStatusCode().value(), upstreamLabel() + " file download error "
-                            + res.getStatusCode().value()
-                            + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal(upstreamLabel(), res, upstreamLabel() + " file download error");
                 })
                 .body(byte[].class);
     }
@@ -271,9 +262,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .body(body)
                 .exchange((req, res) -> {
                     if (res.getStatusCode().isError()) {
-                        throw GatewayException.upstream(res.getStatusCode().value(),
-                                upstreamLabel() + " streaming error " + res.getStatusCode().value()
-                                    + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                        throw ProviderErrors.refusal(upstreamLabel(), res, upstreamLabel() + " streaming error");
                     }
                     // The body stream is the transport handle, released through StreamTransport:
                     // ClientHttpResponse.close() drains the body first and would wait for a stalled server, and
@@ -296,7 +285,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         Map<String, Object> body = new LinkedHashMap<>();
         if (includeModelInBody()) body.put("model", request.getModel());
         body.put("messages", messages);
-        if (request.getMaxTokens()   != null) body.put("max_tokens",   request.getMaxTokens());
+        if (request.getMaxTokens()   != null) body.put(maxTokensField(request), request.getMaxTokens());
         if (request.getTemperature() != null) body.put("temperature",  request.getTemperature());
         if (request.getTopP()        != null) body.put("top_p",        request.getTopP());
         if (request.getFrequencyPenalty() != null) body.put("frequency_penalty", request.getFrequencyPenalty());

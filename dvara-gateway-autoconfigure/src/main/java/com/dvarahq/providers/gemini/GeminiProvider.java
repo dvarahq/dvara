@@ -102,10 +102,7 @@ public class GeminiProvider extends AbstractLlmProvider {
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    ProviderErrors.logRefusal("Gemini", res);
-                    throw GatewayException.upstream(res.getStatusCode().value(),
-                            "Gemini API error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                    throw ProviderErrors.refusal("Gemini", res, "Gemini API error");
                 })
                 .body(GeminiResponse.class);
 

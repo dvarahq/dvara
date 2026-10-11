@@ -17,6 +17,7 @@ package com.dvarahq.providers.support;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dvarahq.core.exception.GatewayException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.client.MockClientHttpResponse;
@@ -64,5 +65,56 @@ class ProviderErrorsTest {
                 "{\"error\":{\"message\":\"bad\",\"code\":\"x\"}}".getBytes(), HttpStatus.BAD_REQUEST);
         assertThat(ProviderErrors.reason(res)).isEqualTo("x: bad");
         ProviderErrors.logRefusal("OpenAI", res);   // a consumed body logs, and never throws
+    }
+
+    // ---- what the caller sees ----
+
+    private static MockClientHttpResponse response(HttpStatus status, String body) {
+        return new MockClientHttpResponse(body.getBytes(), status);
+    }
+
+    @Test
+    void a400_carriesTheProvidersCodeAndMessage() {
+        GatewayException ex = ProviderErrors.refusal("Groq", response(HttpStatus.BAD_REQUEST,
+                "{\"error\":{\"message\":\"'messages' must contain at least one message\",\"type\":\"invalid_request_error\"}}"),
+                "Groq API error");
+        assertThat(ex.getMessage()).isEqualTo("Groq API error 400: invalid_request_error: 'messages' must contain at least one message");
+        assertThat(ex.getCode()).isEqualTo("PROVIDER_REJECTED_REQUEST");
+        assertThat(ex.getUpstreamStatus()).isEqualTo(400);
+    }
+
+    @Test
+    void a400_keepsWhatComesAfterTheStatus_beforeTheReason() {
+        GatewayException ex = ProviderErrors.refusal("Ollama", response(HttpStatus.BAD_REQUEST,
+                "{\"error\":{\"message\":\"registry.ollama.ai/library/gemma does not support tools\"}}"),
+                "Ollama error", " for model gemma");
+        assertThat(ex.getMessage()).isEqualTo("Ollama error 400 for model gemma: registry.ollama.ai/library/gemma does not support tools");
+    }
+
+    @Test
+    void a400_withNoMessage_returnsNoneOfTheBody() {
+        GatewayException ex = ProviderErrors.refusal("OpenAI",
+                response(HttpStatus.BAD_REQUEST, "<html>bad request: {secret prompt}</html>"), "OpenAI API error");
+        assertThat(ex.getMessage()).isEqualTo("OpenAI API error 400");
+    }
+
+    @Test
+    void otherStatuses_returnNoneOfTheBody() {
+        String body = "{\"error\":{\"message\":\"Incorrect API key provided: sk-proj-abcdefgh1234.\",\"code\":\"invalid_api_key\"}}";
+        assertThat(ProviderErrors.refusal("OpenAI", response(HttpStatus.UNAUTHORIZED, body), "OpenAI API error").getMessage())
+                .isEqualTo("OpenAI API error 401 (invalid API key - check your provider credentials)");
+        assertThat(ProviderErrors.refusal("OpenAI", response(HttpStatus.UNPROCESSABLE_ENTITY, body), "OpenAI API error").getMessage())
+                .isEqualTo("OpenAI API error 422");
+        assertThat(ProviderErrors.refusal("OpenAI", response(HttpStatus.INTERNAL_SERVER_ERROR, body), "OpenAI API error").getMessage())
+                .isEqualTo("OpenAI API error 500 (provider internal server error)");
+    }
+
+    @Test
+    void theCallersReason_isCapped_andMasksAKey() {
+        assertThat(ProviderErrors.callerReason("{\"message\":\"key sk-proj-abcdefgh12345678 is not allowed here\"}"))
+                .isEqualTo("key *** is not allowed here");
+        assertThat(ProviderErrors.callerReason("{\"message\":\"" + "y".repeat(1000) + "\"}"))
+                .hasSize(ProviderErrors.REASON_LIMIT + 1).endsWith("…");
+        assertThat(ProviderErrors.callerReason("not json at all")).isNull();
     }
 }

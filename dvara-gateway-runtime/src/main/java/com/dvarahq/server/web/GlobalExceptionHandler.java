@@ -285,7 +285,7 @@ public class GlobalExceptionHandler {
             type = "priority_throttle_error";
         } else if ("PROVIDER_REJECTED_REQUEST".equals(code)) {
             // The provider rejected the request itself (#53): a 400 the caller can fix, not a 502 it
-            // should retry. The message is the gateway's own; the provider's reason is in the log (#51).
+            // should retry. The message is the gateway's own, followed by the provider's own reason.
             status = HttpStatus.BAD_REQUEST;
             type = "invalid_request_error";
         } else if ("PROVIDER_ERROR".equals(code) && Integer.valueOf(429).equals(ex.getUpstreamStatus())) {
