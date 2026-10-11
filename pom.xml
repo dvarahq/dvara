@@ -11,7 +11,7 @@
 
     <groupId>com.dvarahq</groupId>
     <artifactId>dvara-platform</artifactId>
-    <version>1.8.19-SNAPSHOT</version>
+    <version>1.8.20-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>dvara-platform</name>
     <description>DVARA AI Governance Platform - the open-source LLM Gateway</description>
