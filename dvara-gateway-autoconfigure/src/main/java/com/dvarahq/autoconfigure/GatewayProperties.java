@@ -78,6 +78,8 @@ public class GatewayProperties {
     public static class ProviderConfig {
         private String apiKey;
         private String baseUrl;
+        /** Azure OpenAI only: the {@code api-version} sent with a Responses API call; none when blank. */
+        private String responsesApiVersion;
     }
 
     /**

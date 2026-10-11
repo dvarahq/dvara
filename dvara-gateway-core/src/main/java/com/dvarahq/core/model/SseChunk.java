@@ -65,4 +65,10 @@ public class SseChunk {
      */
     @com.fasterxml.jackson.annotation.JsonIgnore
     private AnthropicEvent anthropicEvent;
+    /**
+     * The OpenAI Responses API event this chunk was read from, or null. Only an OpenAI provider sets it, for a
+     * Responses API request it sends on as it came.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private ResponsesEvent responsesEvent;
 }

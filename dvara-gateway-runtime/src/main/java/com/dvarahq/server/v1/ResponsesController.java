@@ -29,6 +29,7 @@ import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
 import com.dvarahq.core.model.MultimodalMessage;
+import com.dvarahq.core.model.OpenAiResponsesBody;
 import com.dvarahq.core.model.ResponseFormat;
 import com.dvarahq.core.model.SseChunk;
 import com.dvarahq.core.model.ToolCallDelta;
@@ -78,6 +79,12 @@ import java.util.stream.Collectors;
  * DTO translation and the Responses SSE emit loop; every governance and metering concern is
  * delegated to the shared {@link ChatExecutionService}, so Responses runs the same pipeline,
  * metering, audit and response cache as {@code /v1/chat/completions} across every provider.
+ *
+ * <p>The body is also kept as it came ({@link OpenAiResponsesBody}). On a route to OpenAI or Azure OpenAI the
+ * provider sends it to its own Responses API, with only the governed edits written back, and the answer is
+ * returned as the provider sent it: whole, or event by event ({@link Relay}). Encrypted reasoning, custom and
+ * namespace tools and fields the gateway does not model reach the provider that way. Every other provider is
+ * sent the translation.
  *
  * <p>Text and image input, structured output ({@code text.format}), {@code top_p} and function
  * calling ({@code function} tools, {@code tool_choice}, {@code function_call} and
@@ -143,9 +150,14 @@ public class ResponsesController {
     @ApiResponse(responseCode = "200", description = "Response object or SSE stream")
     @ApiResponse(responseCode = "400", description = "Invalid request or unsupported feature")
     @ApiResponse(responseCode = "502", description = "Upstream provider error")
-    public Object responses(@Valid @RequestBody ResponseRequest request,
+    public Object responses(@RequestBody(required = false) byte[] rawBody,
                             HttpServletRequest httpRequest,
                             HttpServletResponse httpResponse) {
+        com.fasterxml.jackson.databind.node.ObjectNode raw = OpenAiResponsesBody.parse(rawBody);
+        ResponseRequest request = OpenAiResponsesBody.bind(raw, ResponseRequest.class);
+        if (request.getModel() == null || request.getModel().isBlank()) {
+            throw new GatewayException("INVALID_REQUEST", "model is required");
+        }
 
         String traceId = (String) httpRequest.getAttribute(TraceIdFilter.ATTR);
         boolean stream = Boolean.TRUE.equals(request.getStream());
@@ -154,6 +166,13 @@ public class ResponsesController {
 
         rejectUnsupported(request);
         ChatRequest internal = toInternal(request);
+        // The body as it came, for a route to OpenAI or Azure OpenAI to send to its own /responses; every other
+        // provider is sent the translation. Null only if the two do not line up, and then every route translates.
+        OpenAiResponsesBody passthrough = ResponsesSlots.body(raw, internal.getMessages());
+        if (passthrough == null) {
+            log.warn("A Responses API request could not be kept as it came; it is translated on every route");
+        }
+        internal = internal.toBuilder().openAiResponses(passthrough).build();
         ResponsesTools.Names names = ResponsesTools.read(request.getTools()).names();
 
         if (stream) {
@@ -177,10 +196,29 @@ public class ResponsesController {
                 response.getGatewayHeaders().forEach(builder::header);
             }
             ContextResponseHeaders.apply(builder, ctx, policyDecision);
+            String asSent = asOpenAiSentIt(passthrough, response);
+            if (asSent != null) {
+                return builder.contentType(MediaType.APPLICATION_JSON).body(asSent);
+            }
             return builder.body(toResponseResult(response, names));
         } finally {
             executionService.releasePriority(ctx);
         }
+    }
+
+    /**
+     * The provider's own response, with the governed text written back, when an OpenAI provider answered this
+     * request through its Responses API and the governed answer still lines up with it; null when the answer
+     * is to be rendered from the gateway's own response (another provider, a cache hit, a changed shape).
+     */
+    private static String asOpenAiSentIt(OpenAiResponsesBody passthrough, ChatResponse response) {
+        if (passthrough == null || passthrough.upstreamResponse() == null
+                || response.getChoices() == null || response.getChoices().isEmpty()) {
+            return null;
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode out = OpenAiResponsesBody.governedResponse(
+                passthrough.upstreamResponse(), response.getChoices().get(0).getMessage());
+        return out == null ? null : OpenAiResponsesBody.write(out);
     }
 
     // -------------------------------------------------------------------------
@@ -245,15 +283,28 @@ public class ResponsesController {
             Exception failure = null;
             ChatExecutionService.Attribution who = attribution;
             try {
-                Map<String, Object> respInProgress = responseObject(responseId, model, "in_progress", List.of(), createdAt);
-                emit(emitter, "response.created", seq, mapOf("response", respInProgress));
-                emit(emitter, "response.in_progress", seq, mapOf("response", respInProgress));
-
                 chunks = executionService.openStream(streamRequest, workspaceId);
                 upstream.set(chunks);
                 who = who.withUpstreamFrom(httpRequest);   // provider + credential, now known
 
+                // A provider that answered through its own Responses API puts its events on the chunks; they are
+                // sent as they came, unless the streaming guard holds content back to deliver it governed, in
+                // which case the answer is rendered here and only the items the gateway does not read are kept.
+                boolean held = chunks instanceof com.dvarahq.core.model.HeldDelivery h && h.holdsContent();
+                Relay relay = new Relay(emitter, seq);
                 StreamItems items = new StreamItems(emitter, seq, names);
+                Runnable ownStart = () -> {
+                    if (!items.started && !relay.started) {
+                        items.started = true;
+                        Map<String, Object> respInProgress = responseObject(responseId, model, "in_progress", List.of(), createdAt);
+                        try {
+                            emit(emitter, "response.created", seq, mapOf("response", respInProgress));
+                            emit(emitter, "response.in_progress", seq, mapOf("response", respInProgress));
+                        } catch (Exception e) {
+                            throw new IllegalStateException(e);
+                        }
+                    }
+                };
                 boolean sawDone = false;
                 while (!completed.get() && chunks.hasNext()) {   // cancellation first; see ChatCompletionController
                     SseChunk chunk = chunks.next();
@@ -267,7 +318,6 @@ public class ResponsesController {
                     }
                     if (chunk.getDelta() != null && !chunk.getDelta().isEmpty()) {
                         output.append(chunk.getDelta());
-                        items.text(chunk.getDelta());
                     }
                     // A function call is output too: it counts in the estimate when the upstream
                     // reports no usage, as on chat.
@@ -279,7 +329,36 @@ public class ResponsesController {
                             if (call.argumentsFragment() != null) {
                                 output.append(call.argumentsFragment());
                             }
-                            items.toolCall(call);
+                        }
+                    }
+                    com.dvarahq.core.model.ResponsesEvent event = chunk.getResponsesEvent();
+                    if (event != null && !held && !items.started) {
+                        relay.send(event);
+                    } else if (event != null && held) {
+                        // Withheld content arrives later as the guard's own chunks; an item the gateway does not
+                        // read, such as encrypted reasoning, is kept from the event that finishes it.
+                        Map<String, Object> kept = Relay.unreadItem(event);
+                        if (kept != null) {
+                            ownStart.run();
+                            items.opaque(kept);
+                        }
+                    } else {
+                        if (relay.started) {
+                            // The guard's own chunk in a relayed stream: only its terminal matters here.
+                            if (chunk.isDone()) {
+                                sawDone = true;
+                                break;
+                            }
+                            continue;
+                        }
+                        ownStart.run();
+                        if (chunk.getDelta() != null && !chunk.getDelta().isEmpty()) {
+                            items.text(chunk.getDelta());
+                        }
+                        if (chunk.getToolCalls() != null) {
+                            for (ToolCallDelta call : chunk.getToolCalls()) {
+                                items.toolCall(call);
+                            }
                         }
                     }
                     if (chunk.isDone()) {
@@ -293,13 +372,18 @@ public class ResponsesController {
                             "The upstream stream ended before it finished; the answer is incomplete");
                 }
 
-                List<Map<String, Object>> finished = items.finish();
-                Map<String, Object> respCompleted = responseObject(responseId, model, "completed", finished, createdAt);
-                // The provider's own count, when it reported one; a client keeps its context budget from it.
-                if (reportedUsage.get() != null) {
-                    respCompleted.put("usage", ResponseResult.Usage.from(reportedUsage.get()));
+                if (relay.started) {
+                    relay.completeIfNeeded(reportedUsage.get());
+                } else {
+                    ownStart.run();
+                    List<Map<String, Object>> finished = items.finish();
+                    Map<String, Object> respCompleted = responseObject(responseId, model, "completed", finished, createdAt);
+                    // The provider's own count, when it reported one; a client keeps its context budget from it.
+                    if (reportedUsage.get() != null) {
+                        respCompleted.put("usage", ResponseResult.Usage.from(reportedUsage.get()));
+                    }
+                    emit(emitter, "response.completed", seq, mapOf("response", respCompleted));
                 }
-                emit(emitter, "response.completed", seq, mapOf("response", respCompleted));
             } catch (Exception e) {
                 if (completed.get()) {
                     log.debug("Responses stream for trace {} ended after the client left: {}", traceId, e.getMessage());
@@ -426,6 +510,18 @@ public class ResponsesController {
             }
         }
 
+        /** Whether this stream's own response.created has been sent. */
+        boolean started;
+
+        /** An item the gateway does not read, such as encrypted reasoning, kept whole. */
+        void opaque(Map<String, Object> item) throws Exception {
+            finishMessage();
+            int index = nextIndex++;
+            emit(emitter, "response.output_item.added", seq, mapOf("output_index", index, "item", item));
+            emit(emitter, "response.output_item.done", seq, mapOf("output_index", index, "item", item));
+            finished.put(index, item);
+        }
+
         StreamItems(SseEmitter emitter, AtomicInteger seq, ResponsesTools.Names names) {
             this.emitter = emitter;
             this.seq = seq;
@@ -515,6 +611,86 @@ public class ResponsesController {
             emit(emitter, "response.output_item.done", seq, mapOf("output_index", messageIndex, "item", itemDone));
             finished.put(messageIndex, itemDone);
             messageId = null;
+        }
+    }
+
+    /**
+     * A provider's own Responses API events, sent to the caller as they came. Their sequence numbers are the
+     * provider's; this stream's counter follows them, so an event the gateway adds (a failure, or a completion
+     * the guard's own terminal stands in for) comes after them.
+     */
+    private static final class Relay {
+        private final SseEmitter emitter;
+        private final AtomicInteger seq;
+        boolean started;
+        private boolean completedSent;
+        private Map<String, Object> response;
+        private final java.util.TreeMap<Integer, Object> doneItems = new java.util.TreeMap<>();
+
+        Relay(SseEmitter emitter, AtomicInteger seq) {
+            this.emitter = emitter;
+            this.seq = seq;
+        }
+
+        void send(com.dvarahq.core.model.ResponsesEvent event) throws Exception {
+            started = true;
+            Map<String, Object> data = JsonMapper.instance().readValue(event.data(),
+                    new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() { });
+            if (data.get("sequence_number") instanceof Number n) {
+                seq.set(Math.max(seq.get(), n.intValue() + 1));
+            }
+            switch (event.type()) {
+                case "response.created" -> response = asMap(data.get("response"));
+                case "response.output_item.done" -> {
+                    if (data.get("output_index") instanceof Number n) {
+                        doneItems.put(n.intValue(), data.get("item"));
+                    }
+                }
+                case "response.completed", "response.incomplete" -> completedSent = true;
+                default -> { }
+            }
+            emitter.send(SseEmitter.event().name(event.type()).data(event.data(), MediaType.APPLICATION_JSON));
+        }
+
+        /** A completion built from what was relayed, when the provider's own was not sent. */
+        void completeIfNeeded(com.dvarahq.core.model.ChatResponse.Usage usage) throws Exception {
+            if (completedSent) {
+                return;
+            }
+            Map<String, Object> done = response == null ? new LinkedHashMap<>() : new LinkedHashMap<>(response);
+            done.put("status", "completed");
+            done.put("output", new ArrayList<>(doneItems.values()));
+            if (usage != null) {
+                done.put("usage", ResponseResult.Usage.from(usage));
+            }
+            LinkedHashMap<String, Object> event = new LinkedHashMap<>();
+            event.put("type", "response.completed");
+            event.put("sequence_number", seq.getAndIncrement());
+            event.put("response", done);
+            emitter.send(SseEmitter.event().name("response.completed")
+                    .data(JsonMapper.instance().writeValueAsString(event), MediaType.APPLICATION_JSON));
+            completedSent = true;
+        }
+
+        /** The item a {@code response.output_item.done} event finishes, when it is not one the gateway reads. */
+        static Map<String, Object> unreadItem(com.dvarahq.core.model.ResponsesEvent event) {
+            if (!"response.output_item.done".equals(event.type())) {
+                return null;
+            }
+            try {
+                Map<String, Object> item = asMap(JsonMapper.instance().readValue(event.data(),
+                        new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() { }).get("item"));
+                String type = item == null ? null : String.valueOf(item.get("type"));
+                return item == null || java.util.Set.of("message", "function_call", "custom_tool_call").contains(type)
+                        ? null : item;
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        private static Map<String, Object> asMap(Object o) {
+            return o instanceof Map<?, ?> m ? (Map<String, Object>) m : null;
         }
     }
 

@@ -87,6 +87,11 @@ public class OpenAiProvider extends AbstractOpenAiCompatibleProvider {
         return true;
     }
 
+    @Override
+    protected String responsesUri() {
+        return "/responses";
+    }
+
     // -------------------------------------------------------------------------
     // Embeddings — OpenAI-only in the current provider set
     // -------------------------------------------------------------------------

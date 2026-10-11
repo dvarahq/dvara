@@ -185,4 +185,27 @@ class DeepSeekProviderTest {
 
         server.verify();
     }
+
+    /** A provider with no Responses API is sent the translation even when the request carries a body. */
+    @Test
+    void aResponsesBody_isNotSentHere_theTranslationIs() {
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo(
+                        org.hamcrest.Matchers.containsString("/chat/completions")))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.messages[0].content").value("hi"))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess("""
+                        {"id":"c","object":"chat.completion","created":1,"model":"deepseek-chat",
+                         "choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}]}
+                        """, org.springframework.http.MediaType.APPLICATION_JSON));
+        var raw = com.dvarahq.core.model.OpenAiResponsesBody.parse("{\"model\":\"deepseek-chat\",\"input\":\"hi\"}".getBytes());
+        var view = List.of(com.dvarahq.core.model.MultimodalMessage.user("hi"));
+
+        provider.chat(ChatRequest.builder().model("deepseek-chat").messages(view)
+                .openAiResponses(new com.dvarahq.core.model.OpenAiResponsesBody(raw, view,
+                        List.of(new com.dvarahq.core.model.OpenAiResponsesBody.Slot(0,
+                                com.dvarahq.core.model.OpenAiResponsesBody.Kind.TEXT, 0, "/input"))))
+                .build());
+
+        server.verify();
+    }
 }

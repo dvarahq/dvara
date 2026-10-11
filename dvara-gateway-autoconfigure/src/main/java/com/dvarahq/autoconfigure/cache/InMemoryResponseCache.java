@@ -150,6 +150,10 @@ public final class InMemoryResponseCache implements ResponseCache {
         // Both change the answer; the prompt cache key does not.
         append(sb, String.valueOf(request.getReasoningEffort()));
         append(sb, String.valueOf(request.getVerbosity()));
+        // A Responses API body sent on as it came carries what the messages above leave out (encrypted
+        // reasoning, tools in their own shape), so the whole body is part of the call.
+        append(sb, request.getOpenAiResponses() == null ? ""
+                : com.dvarahq.core.model.OpenAiResponsesBody.write(request.getOpenAiResponses().raw()));
         return sha256(sb.toString());
     }
 
