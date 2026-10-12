@@ -102,6 +102,49 @@ class AnthropicProviderTest {
         server.verify();
     }
 
+    /**
+     * Anthropic's current models refuse temperature and top_p together, and a translated request (Gemini CLI
+     * always sends temperature 1, topP 0.95) carries both: temperature goes, top_p is left out.
+     */
+    @Test
+    void chat_temperatureAndTopPTogether_sendsOnlyTemperature() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(jsonPath("$.temperature").value(1.0))
+              .andExpect(jsonPath("$.top_p").doesNotExist())
+              .andRespond(withSuccess(anthropicSuccessBody("msg-1", "end_turn", "hi", 1, 1), MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("claude-haiku-4-5")
+                .messages(List.of(MultimodalMessage.user("Hi"))).temperature(1.0).topP(0.95).build());
+        server.verify();
+    }
+
+    @Test
+    void chat_topPAlone_isSent() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(jsonPath("$.top_p").value(0.95))
+              .andExpect(jsonPath("$.temperature").doesNotExist())
+              .andRespond(withSuccess(anthropicSuccessBody("msg-1", "end_turn", "hi", 1, 1), MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("claude-haiku-4-5")
+                .messages(List.of(MultimodalMessage.user("Hi"))).topP(0.95).build());
+        server.verify();
+    }
+
+    /** A refused stream keeps Anthropic's reason, so the caller learns what to change. */
+    @Test
+    void streamChat_aRefusalKeepsAnthropicsReason() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                      .withBadRequest().contentType(MediaType.APPLICATION_JSON).body("""
+                      {"type":"error","error":{"type":"invalid_request_error","message":"`temperature` and `top_p` cannot both be specified for this model. Please use only one."}}
+                      """));
+
+        assertThatThrownBy(() -> provider.streamChat(ChatRequest.builder().model("claude-haiku-4-5")
+                .messages(List.of(MultimodalMessage.user("Hi"))).stream(true).build()))
+                .hasMessageContaining("Anthropic streaming error 400")
+                .hasMessageContaining("cannot both be specified");
+    }
+
     @Test
     void chat_seed_isRefusedNotDropped() {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> provider.chat(ChatRequest.builder()

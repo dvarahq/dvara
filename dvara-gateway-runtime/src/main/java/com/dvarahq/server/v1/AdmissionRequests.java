@@ -17,6 +17,7 @@ package com.dvarahq.server.v1;
 
 import com.dvarahq.core.model.AnthropicMessagesBody;
 import com.dvarahq.core.model.ChatRequest;
+import com.dvarahq.core.model.GeminiGenerateContentBody;
 import com.dvarahq.core.util.JsonMapper;
 import com.dvarahq.server.v1.dto.ChatCompletionRequest;
 import com.dvarahq.server.v1.dto.EmbeddingRequest;
@@ -63,6 +64,10 @@ public final class AdmissionRequests {
                 AnthropicMessagesBody messages = AnthropicMessagesBody.parse(body);
                 return Optional.of(AnthropicMessages.toInternal(
                         messages.bind(MessagesRequest.class), null, messages));
+            }
+            if (GeminiGenerateContent.generates(path)) {
+                return Optional.of(GeminiGenerateContent.toInternal(GeminiGenerateContent.modelOf(path),
+                        GeminiGenerateContentBody.parse(body), false));
             }
             if (path.endsWith("/v1/embeddings")) {
                 return Optional.of(EmbeddingController.governanceView(

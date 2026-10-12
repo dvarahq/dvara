@@ -1,0 +1,264 @@
+{
+  "_note": "Captured from Gemini CLI 0.63.0 (gemini -p, headless, YOLO) with GOOGLE_GEMINI_BASE_URL set to the gateway's /v1/gemini, through a local recording proxy. The third request of a tool-using session, cut to its first five turns. Paths, the session context, long tool output, the system instruction and long thought signatures are shortened, and four of the thirteen function declarations are kept; every field, part kind, id, signature placement, header and the generation settings are as sent. The repeated functionResponse parts are as the CLI sent them.",
+  "method": "POST",
+  "path": "/v1/gemini/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
+  "headers": {
+    "User-Agent": "GeminiCLI-tui/0.63.0/gemini-3.8-flash (darwin; arm64; terminal)",
+    "x-goog-api-client": "google-genai-sdk/1.30.0 gl-node/v25.1.0",
+    "Content-Type": "application/json",
+    "accept": "*/*"
+  },
+  "body": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "<session_context>\nThis is the Gemini CLI. We are setting up the context for our chat.\nMy operating system is: darwin\n</session_context>"
+          },
+          {
+            "text": "Create a file hello.py that prints hello, then run it with python3 and tell me the output."
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "functionCall": {
+              "id": "call_567176",
+              "args": {
+                "content": "print(\"hello\")\n",
+                "file_path": "hello.py"
+              },
+              "name": "write_file"
+            },
+            "thoughtSignature": "skip_thought_signature_validator"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "functionResponse": {
+              "name": "write_file",
+              "response": {
+                "output": "Successfully created and wrote to new file: /home/dev/project/hello.py. Here is the updated code:\nprint(\"hello\")\n"
+              },
+              "id": "call_567176"
+            }
+          },
+          {
+            "functionResponse": {
+              "name": "write_file",
+              "response": {
+                "output": "Successfully created and wrote to new file: /home/dev/project/hello.py. Here is the updated code:\nprint(\"hello\")\n"
+              },
+              "id": "call_567176"
+            }
+          },
+          {
+            "functionResponse": {
+              "name": "write_file",
+              "response": {
+                "output": "Successfully created and wrote to new file: /home/dev/project/hello.py. Here is the updated code:\nprint(\"hello\")\n"
+              },
+              "id": "call_567176"
+            }
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "text": "Created `hello.py` with `print(\"hello\")`. Running the script using `python3` to verify the output."
+          },
+          {
+            "functionCall": {
+              "id": "call_1650967",
+              "args": {
+                "description": "Execute hello.py using python3 to observe output",
+                "command": "python3 hello.py"
+              },
+              "name": "run_shell_command"
+            },
+            "thoughtSignature": "skip_thought_signature_validator"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "functionResponse": {
+              "name": "run_shell_command",
+              "response": {
+                "output": "<untrusted_context>\nOutput: hello\nProcess Group PGID: 89248\n</untrusted_context>"
+              },
+              "id": "call_1650967"
+            }
+          },
+          {
+            "functionResponse": {
+              "name": "run_shell_command",
+              "response": {
+                "output": "<untrusted_context>\nOutput: hello\nProcess Group PGID: 89248\n</untrusted_context>"
+              },
+              "id": "call_1650967"
+            }
+          },
+          {
+            "functionResponse": {
+              "name": "run_shell_command",
+              "response": {
+                "output": "<untrusted_context>\nOutput: hello\nProcess Group PGID: 89248\n</untrusted_context>"
+              },
+              "id": "call_1650967"
+            }
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are Gemini CLI, an autonomous CLI agent specializing in software engineering tasks. You are currently operating in **YOLO** mode. Your primary goal is to help users safely and effectively.\n\n# Core Mandates\n\n## Security & System Integrity\n- **Credential Protection:** Never log, print, or commit secrets, API keys, or sensitive credentials. Rigorously protect `.env` files, `.git`, and system conf"
+        }
+      ],
+      "role": "user"
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "name": "list_directory",
+            "description": "Lists the names of files and subdirectories directly within a specified directory path. Can optionally ignore entries matching provided glob patterns.",
+            "parametersJsonSchema": {
+              "type": "object",
+              "properties": {
+                "dir_path": {
+                  "description": "The path to the directory to list",
+                  "type": "string"
+                },
+                "ignore": {
+                  "description": "List of glob patterns to ignore",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "file_filtering_options": {
+                  "description": "Optional: Whether to respect ignore patterns from .gitignore or .geminiignore",
+                  "type": "object",
+                  "properties": {
+                    "respect_git_ignore": {
+                      "description": "Optional: Whether to respect .gitignore patterns when listing files. Only available in git repositories. Defaults to true.",
+                      "type": "boolean"
+                    },
+                    "respect_gemini_ignore": {
+                      "description": "Optional: Whether to respect .geminiignore patterns when listing files. Defaults to true.",
+                      "type": "boolean"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "dir_path"
+              ]
+            }
+          },
+          {
+            "name": "read_file",
+            "description": "Reads and returns the content of a specified file. To maintain context efficiency, you MUST use 'start_line' and 'end_line' for targeted, surgical reads of specific sections. For your safety, the tool will automatically truncate output exceeding 2000 lines, 2000 characters per line, or 20MB in size; however, triggering these limits is considered token-inefficient. Always retrieve only the minimum content necessary for your next step. Handles text, images (PNG, JPG, GIF, WEBP, SVG, BMP), audio files (MP3, WAV, AIFF, AAC, OGG, FLAC), and PDF files.",
+            "parametersJsonSchema": {
+              "type": "object",
+              "properties": {
+                "file_path": {
+                  "description": "The path to the file to read.",
+                  "type": "string"
+                },
+                "start_line": {
+                  "description": "Optional: The 1-based line number to start reading from.",
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "end_line": {
+                  "description": "Optional: The 1-based line number to end reading at (inclusive).",
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "file_path"
+              ]
+            }
+          },
+          {
+            "name": "write_file",
+            "description": "Writes the complete content to a file, automatically creating missing parent directories. Overwrites existing files. The user has the ability to modify 'content' before it is saved. Best for new or small files; use 'replace' for targeted edits to large files to minimize token usage and simplify reviews.",
+            "parametersJsonSchema": {
+              "type": "object",
+              "properties": {
+                "file_path": {
+                  "description": "Path to the file.",
+                  "type": "string"
+                },
+                "content": {
+                  "description": "The complete content to write. Provide the full file; do not use placeholders like '// ... rest of code'.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_path",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "run_shell_command",
+            "description": "This tool executes a given shell command as `bash -c <command>`. Command can start background processes using `&`. Command is executed as a subprocess that leads its own process group. Command process group can be terminated as `kill -- -PGID` or signaled as `kill -s SIGNAL -- -PGID`.\n\n      Efficiency Guidelines:\n      - Quiet Flags: Always prefer silent or quiet flags (e.g., `npm install --silent`, `git --no-pager`) to reduce output volume while still capturing necessary information.\n      - Pagination: Always disable terminal pagination to ensure commands terminate (e.g., use `git --no-pager`, `systemctl --no-pager`, or set `PAGER=cat`).\n\n      The following information is returned:\n\n      Output: Combined stdout/stderr. Can be `(empty)` or partial on error and for any unwaited background processes.\n      Exit Code: Only included if non-zero (command failed).\n      Error: Only included if a process-level error occurred (e.g., spawn failure).\n      Signal: Only included if process was terminated by a signal.\n      Background PIDs: Only included if background processes were started.\n      Process Group PGID: Only included if available.",
+            "parametersJsonSchema": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "description": "Exact bash command to execute as `bash -c <command>`"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Brief description of the command for the user. Be specific and concise. Ideally a single sentence. Can be up to 3 sentences for clarity. No line breaks."
+                },
+                "dir_path": {
+                  "type": "string",
+                  "description": "(OPTIONAL) The path of the directory to run the command in. If not provided, the project root directory is used. Must be a directory within the workspace and must already exist."
+                },
+                "is_background": {
+                  "type": "boolean",
+                  "description": "Set to true if this command should be run in the background (e.g. for long-running servers or watchers). The command will be started, allowed to run for a brief moment to check for immediate errors, and then moved to the background."
+                },
+                "delay_ms": {
+                  "type": "integer",
+                  "description": "Optional. Delay in milliseconds to wait after starting the process in the background. Useful to allow the process to start and generate initial output before returning."
+                }
+              },
+              "required": [
+                "command"
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "generationConfig": {
+      "temperature": 1,
+      "topP": 0.95,
+      "topK": 64,
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingLevel": "HIGH"
+      }
+    }
+  }
+}

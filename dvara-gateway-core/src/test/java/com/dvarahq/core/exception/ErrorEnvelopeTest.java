@@ -57,6 +57,28 @@ class ErrorEnvelopeTest {
     }
 
     @Test
+    void theGeminiDoorwayAnswersInGooglesEnvelope_withTheCodeAndTraceInAnErrorInfo() {
+        assertThat(ErrorEnvelope.gemini("/v1/gemini/v1beta/models/gemini-3.8-flash:generateContent")).isTrue();
+        assertThat(ErrorEnvelope.gemini("/v1/geminix")).isFalse();
+
+        Map<String, Object> body = ErrorEnvelope.body("/v1/gemini/v1beta/models/m:generateContent", 401,
+                "no key", "api_key_required", "authentication_error", "trace-9", null);
+
+        assertThat(body).containsOnlyKeys("error");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) body.get("error");
+        assertThat(error).containsEntry("code", 401).containsEntry("message", "no key")
+                .containsEntry("status", "UNAUTHENTICATED");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> info = ((java.util.List<Map<String, Object>>) error.get("details")).get(0);
+        assertThat(info).containsEntry("@type", "type.googleapis.com/google.rpc.ErrorInfo")
+                .containsEntry("reason", "api_key_required")
+                .containsEntry("metadata", Map.of("trace_id", "trace-9"));
+        assertThat(ErrorEnvelope.googleStatus(429)).isEqualTo("RESOURCE_EXHAUSTED");
+        assertThat(ErrorEnvelope.googleStatus(403)).isEqualTo("PERMISSION_DENIED");
+    }
+
+    @Test
     void theAnthropicTypeFollowsTheStatus() {
         assertThat(ErrorEnvelope.anthropicType(401)).isEqualTo("authentication_error");
         assertThat(ErrorEnvelope.anthropicType(403)).isEqualTo("permission_error");

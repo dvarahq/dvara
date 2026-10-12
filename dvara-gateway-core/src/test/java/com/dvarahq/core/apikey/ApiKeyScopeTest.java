@@ -110,4 +110,12 @@ class ApiKeyScopeTest {
         assertThat(ApiKeyScope.permits(java.util.List.of("embeddings:write"), "/v1/messages")).isFalse();
         assertThat(ApiKeyScope.permits(java.util.List.of("completions:write"), "/v1/messages")).isTrue();
     }
+
+    @Test
+    void theGeminiDoorway_takesTheCompletionsScope() {
+        String path = "/v1/gemini/v1beta/models/gemini-3.8-flash:streamGenerateContent";
+        assertThat(ApiKeyScope.forPath(path)).contains(ApiKeyScope.COMPLETIONS_WRITE);
+        assertThat(ApiKeyScope.permits(java.util.List.of("embeddings:write"), path)).isFalse();
+        assertThat(ApiKeyScope.permits(java.util.List.of("completions:write"), path)).isTrue();
+    }
 }
