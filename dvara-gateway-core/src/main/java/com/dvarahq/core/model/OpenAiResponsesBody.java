@@ -251,7 +251,10 @@ public final class OpenAiResponsesBody {
         return namespace == null || namespace.isEmpty() ? name : ToolDefinition.namespaced(namespace, name);
     }
 
-    /** A Responses API usage object as the gateway's, its cached input and reasoning tokens included; null for none. */
+    /**
+     * A Responses API usage object as the gateway's, its cache reads, cache writes and reasoning tokens included;
+     * null for none.
+     */
     public static ChatResponse.Usage usage(JsonNode usage) {
         if (usage == null || usage.isNull() || usage.isMissingNode()) {
             return null;
@@ -259,8 +262,10 @@ public final class OpenAiResponsesBody {
         int input = usage.path("input_tokens").asInt(0);
         int output = usage.path("output_tokens").asInt(0);
         int total = usage.path("total_tokens").asInt(input + output);
+        // Cache reads and writes are both parts of input_tokens, as OpenAI counts them.
         return new ChatResponse.Usage(input, output, total,
-                usage.path("input_tokens_details").path("cached_tokens").asInt(0), 0,
+                usage.path("input_tokens_details").path("cached_tokens").asInt(0),
+                usage.path("input_tokens_details").path("cache_write_tokens").asInt(0),
                 usage.path("output_tokens_details").path("reasoning_tokens").asInt(0));
     }
 

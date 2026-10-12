@@ -390,4 +390,20 @@ class OpenAiCompatibleStreamDecoderTest {
         assertThat(usage.getAsSent()).containsEntry("completion_tokens_details",
                 java.util.Map.of("reasoning_tokens", 0, "audio_tokens", 0));
     }
+
+    @Test
+    @DisplayName("cache writes in the usage block are metered, as part of the prompt tokens")
+    void cacheWritesAreMetered() {
+        List<SseChunk> chunks = drain("""
+                data: {"id":"c9","model":"gpt-5.4-mini","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}]}
+
+                data: {"id":"c9","model":"gpt-5.4-mini","choices":[],"usage":{"prompt_tokens":10663,"completion_tokens":2,"total_tokens":10665,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":10660}}}
+
+                data: [DONE]
+                """);
+
+        var usage = chunks.get(chunks.size() - 1).getUsage();
+        assertThat(usage.getCacheWriteTokens()).isEqualTo(10660);
+        assertThat(usage.getPromptTokens()).isEqualTo(10663);
+    }
 }
