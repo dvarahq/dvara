@@ -189,7 +189,7 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
         }
         String uri = request.getRequestURI();
         return uri.contains("/chat/completions") || uri.endsWith("/v1/responses") || uri.endsWith("/v1/messages")
-                || uri.endsWith("/v1/embeddings");
+                || uri.endsWith("/v1/embeddings") || com.dvarahq.server.v1.GeminiGenerateContent.generates(uri);
     }
 
     /**

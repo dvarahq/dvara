@@ -123,6 +123,13 @@ public class ChatRequest {
     private OpenAiResponsesBody openAiResponses;
 
     /**
+     * The body a caller of Gemini's {@code generateContent} API sent, kept so a Gemini provider can send it
+     * on as it came, with only the governed edits. Null for every other doorway.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private GeminiGenerateContentBody gemini;
+
+    /**
      * Whether only an Anthropic provider can serve this request: see {@link #anthropicOnly()}.
      */
     public boolean needsAnthropic() {

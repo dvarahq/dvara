@@ -71,13 +71,14 @@ StreamStopCheck endedSessions(EndedSessions ended) {
 ```
 
 The gateway asks every check once per chunk, before writing it, on `/v1/chat/completions`,
-`/v1/responses` and `/v1/messages`. Keep a check cheap: read memory, never call the network.
+`/v1/responses`, `/v1/messages` and Gemini's `:streamGenerateContent`. Keep a check cheap: read
+memory, never call the network.
 When a check answers with a stop:
 
 - the chunk in hand is not sent;
 - the client gets one last error event in its API's shape: `data: {"error":{...}}` with no
   `[DONE]` on chat completions, `response.failed` on the Responses API, an `error` event on the
-  Messages API;
+  Messages API, and a last `data: {"error":{...}}` in Google's error shape on Gemini's API;
 - the provider connection is closed;
 - the access log, the metrics and the audit record show the stop's code, and the tokens already
   sent are metered and billed.

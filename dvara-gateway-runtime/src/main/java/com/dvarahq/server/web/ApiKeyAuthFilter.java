@@ -266,6 +266,9 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
      * The key from {@code Authorization: Bearer}, or else from {@code x-api-key}, the header the
      * Anthropic SDKs and Claude Code send. The same key either way; the header changes nothing about
      * what it may do.
+     *
+     * <p>Then from {@code x-goog-api-key}, the header the Google GenAI SDKs and Gemini CLI send. A key in the
+     * URL ({@code ?key=}, which Google's own API also takes) is never read: a URL ends up in logs.</p>
      */
     private String extractBearerToken(HttpServletRequest request) {
         String auth = request.getHeader("Authorization");
@@ -278,6 +281,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         String apiKeyHeader = request.getHeader("x-api-key");
         if (apiKeyHeader != null && !apiKeyHeader.isBlank()) {
             return apiKeyHeader.trim();
+        }
+        String googleKey = request.getHeader("x-goog-api-key");
+        if (googleKey != null && !googleKey.isBlank()) {
+            return googleKey.trim();
         }
         return null;
     }

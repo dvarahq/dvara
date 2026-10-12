@@ -65,10 +65,26 @@ public class SseChunk {
      */
     @com.fasterxml.jackson.annotation.JsonIgnore
     private AnthropicEvent anthropicEvent;
+
     /**
      * The OpenAI Responses API event this chunk was read from, or null. Only an OpenAI provider sets it, for a
      * Responses API request it sends on as it came.
      */
     @com.fasterxml.jackson.annotation.JsonIgnore
     private ResponsesEvent responsesEvent;
+
+    /**
+     * The data of the Gemini stream event this chunk was read from, exactly as received, or null. Only a Gemini
+     * provider sets it, for a request whose body it sends on as it came; a chunk made anywhere else carries none.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String geminiData;
+
+    /**
+     * The parts of a Gemini stream event that the gateway does not read, such as {@code executableCode} or
+     * {@code inlineData}, as a JSON array, or null. A Gemini provider sends them on a chunk of their own, ahead
+     * of the event's content and with none of it, so a stream whose content is held still delivers them.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String geminiParts;
 }

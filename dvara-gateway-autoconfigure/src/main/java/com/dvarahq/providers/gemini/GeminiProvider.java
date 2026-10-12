@@ -22,6 +22,9 @@ import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
+import com.dvarahq.core.model.GeminiGenerateContentBody;
+import com.dvarahq.core.model.ThinkingDelta;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.dvarahq.core.model.MultimodalMessage;
 import com.dvarahq.core.model.ToolDefinition;
 import com.dvarahq.core.model.ResponseFormat;
@@ -52,6 +55,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.OptionalInt;
 import java.util.stream.Collectors;
 
 public class GeminiProvider extends AbstractLlmProvider {
@@ -91,6 +95,10 @@ public class GeminiProvider extends AbstractLlmProvider {
 
     @Override
     public ChatResponse chat(ChatRequest request) {
+        GeminiGenerateContentBody passthrough = request.getGemini();
+        if (passthrough != null) {
+            return chatAsSent(request, passthrough);
+        }
         Map<String, Object> body = buildBody(request);
 
         String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
@@ -109,13 +117,58 @@ public class GeminiProvider extends AbstractLlmProvider {
         return mapToInternal(resp, request.getModel());
     }
 
+    /**
+     * A {@code generateContent} request sent on as the caller sent it, with only the governed edits, and
+     * Gemini's response kept as it came for the caller. The response read here, part for part, is what the
+     * gateway's output checks govern.
+     */
+    private ChatResponse chatAsSent(ChatRequest request, GeminiGenerateContentBody passthrough) {
+        String sent = passthrough.governedJson(request);
+        String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
+        recordFingerprint(apiKey);
+        String answer = restClient.post()
+                .uri("/v1beta/models/{model}:generateContent?key={key}", request.getModel(), apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(sent)
+                .retrieve()
+                .onStatus(status -> status.isError(), (req, res) -> {
+                    throw ProviderErrors.refusal("Gemini", res, "Gemini API error");
+                })
+                .body(String.class);
+        ObjectNode response = GeminiGenerateContentBody.parseResponse(answer);
+        MultimodalMessage message = GeminiGenerateContentBody.responseMessage(response, new LinkedHashMap<>());
+        String finish = mapFinishReason(response.path("candidates").path(0).path("finishReason").asText(null));
+        if (message.getToolCalls() != null && (finish == null || "stop".equals(finish))) {
+            finish = "tool_calls";
+        }
+        GeminiResponse.UsageMetadata usage = null;
+        if (response.hasNonNull("usageMetadata")) {
+            usage = JsonMapper.instance().convertValue(response.get("usageMetadata"), GeminiResponse.UsageMetadata.class);
+        }
+        ChatResponse out = ChatResponse.builder()
+                .id(response.path("responseId").asText("gemini-" + Instant.now().toEpochMilli()))
+                .object("chat.completion")
+                .created(Instant.now().getEpochSecond())
+                .model(request.getModel())
+                .choices(List.of(ChatResponse.Choice.builder()
+                        .index(0)
+                        .message(message)
+                        .finishReason(finish)
+                        .build()))
+                .usage(usage == null ? null : usage.toUsage())
+                .build();
+        passthrough.upstreamResponse(response);
+        return out;
+    }
+
     // -------------------------------------------------------------------------
     // Streaming
     // -------------------------------------------------------------------------
 
     @Override
     public Iterator<SseChunk> streamChat(ChatRequest request) {
-        Map<String, Object> body = buildBody(request);
+        GeminiGenerateContentBody passthrough = request.getGemini();
+        Object body = passthrough != null ? passthrough.governedJson(request) : buildBody(request);
 
         String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
         recordFingerprint(apiKey);
@@ -126,18 +179,55 @@ public class GeminiProvider extends AbstractLlmProvider {
                 .body(body)
                 .exchange((req, res) -> {
                     if (res.getStatusCode().isError()) {
-                        throw GatewayException.upstream(res.getStatusCode().value(),
-                                "Gemini streaming error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                        throw ProviderErrors.refusal("Gemini", res, "Gemini streaming error");
                     }
                     // The body stream is the transport handle, released through StreamTransport:
                     // ClientHttpResponse.close() drains the body first and would wait for a stalled server, and
                     // what returns a parked read differs per HTTP client; StreamTransport knows both.
                     java.io.InputStream responseBody = res.getBody();
                     BufferedReader reader = new BufferedReader(new InputStreamReader(responseBody, StandardCharsets.UTF_8));
-                    return new GeminiSseIterator(() -> StreamTransport.release(res, responseBody), reader, request.getModel());
+                    return new GeminiSseIterator(() -> StreamTransport.release(res, responseBody), reader,
+                            request.getModel(), passthrough != null);
                 }, false);
     }
+
+    /**
+     * Gemini's own count of the request's input tokens ({@code :countTokens}). No model runs and nothing is
+     * billed. The count is of the request as {@code generateContent} would send it: its contents, system
+     * instruction and tools.
+     */
+    @Override
+    public OptionalInt countInputTokens(ChatRequest request) {
+        GeminiGenerateContentBody passthrough = request.getGemini();
+        ObjectNode generate;
+        if (passthrough != null) {
+            generate = passthrough.governedBody(request, COUNT_FIELDS);
+        } else {
+            generate = JsonMapper.instance().valueToTree(buildBody(request));
+            generate.retain(COUNT_FIELDS);
+        }
+        generate.put("model", "models/" + request.getModel());
+        ObjectNode body = JsonMapper.instance().createObjectNode();
+        body.set("generateContentRequest", generate);
+        String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
+        recordFingerprint(apiKey);
+        Map<?, ?> answer = restClient.post()
+                .uri("/v1beta/models/{model}:countTokens?key={key}", request.getModel(), apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(GeminiGenerateContentBody.write(body))
+                .retrieve()
+                .onStatus(status -> status.isError(), (req, res) -> {
+                    throw ProviderErrors.refusal("Gemini", res, "Gemini token count error");
+                })
+                .body(Map.class);
+        if (answer == null || !(answer.get("totalTokens") instanceof Number tokens)) {
+            return OptionalInt.empty();
+        }
+        return OptionalInt.of(tokens.intValue());
+    }
+
+    /** What a token count is given: the parts of the request that are input. */
+    private static final List<String> COUNT_FIELDS = List.of("contents", "systemInstruction", "tools", "toolConfig");
 
     // -------------------------------------------------------------------------
     // Shared body builder
@@ -314,7 +404,9 @@ public class GeminiProvider extends AbstractLlmProvider {
         if (resp.getCandidates() != null && !resp.getCandidates().isEmpty()) {
             GeminiResponse.Candidate candidate = resp.getCandidates().get(0);
             if (candidate.getContent() != null && candidate.getContent().getParts() != null) {
+                // A thought part is the model's reasoning, not its answer.
                 text = candidate.getContent().getParts().stream()
+                        .filter(p -> !p.isThought())
                         .map(GeminiResponse.Part::getText)
                         .filter(t -> t != null)
                         .collect(Collectors.joining());
@@ -430,20 +522,37 @@ public class GeminiProvider extends AbstractLlmProvider {
         private int toolCalls;
         private final String callIdPrefix = "gemini-call-"
                 + Long.toHexString(java.util.concurrent.ThreadLocalRandom.current().nextLong()) + "-";
+        /**
+         * Whether each chunk carries the event it was read from, for a caller that is sent Gemini's stream as
+         * it came; thought parts are then read as thinking, so the stream's checks see them too.
+         */
+        private final boolean passthrough;
+        /** An event's content, sent after the chunk that carries the event's unread parts. */
+        private SseChunk queued;
 
         GeminiSseIterator(BufferedReader reader, String model) {
             this(() -> { }, reader, model);
         }
 
         GeminiSseIterator(AutoCloseable transport, BufferedReader reader, String model) {
+            this(transport, reader, model, false);
+        }
+
+        GeminiSseIterator(AutoCloseable transport, BufferedReader reader, String model, boolean passthrough) {
             this.transport = transport;
             this.reader = reader;
             this.model = model;
+            this.passthrough = passthrough;
         }
 
         @Override
         public boolean hasNext() {
             if (next != null) return true;
+            if (queued != null) {
+                next = queued;
+                queued = null;
+                return true;
+            }
             if (done) return false;
             next = advance();
             return next != null;
@@ -468,6 +577,7 @@ public class GeminiProvider extends AbstractLlmProvider {
                     GeminiResponse chunk = JsonMapper.instance().readValue(data, GeminiResponse.class);
 
                     StringBuilder text = null;
+                    StringBuilder thought = null;
                     String finishReason = null;
                     List<ToolCallDelta> calls = null;
 
@@ -475,7 +585,10 @@ public class GeminiProvider extends AbstractLlmProvider {
                         GeminiResponse.Candidate candidate = chunk.getCandidates().get(0);
                         if (candidate.getContent() != null && candidate.getContent().getParts() != null) {
                             for (GeminiResponse.Part part : candidate.getContent().getParts()) {
-                                if (part.getText() != null) {
+                                if (part.getText() != null && part.isThought()) {
+                                    // The model's reasoning, not its answer.
+                                    thought = thought == null ? new StringBuilder(part.getText()) : thought.append(part.getText());
+                                } else if (part.getText() != null) {
                                     // parts[] is ordered and may mix text and calls; every text part
                                     // is the answer, in order, not only the first.
                                     text = text == null ? new StringBuilder(part.getText()) : text.append(part.getText());
@@ -505,16 +618,30 @@ public class GeminiProvider extends AbstractLlmProvider {
                         done = true;
                     }
 
-                    return SseChunk.builder()
+                    SseChunk content = SseChunk.builder()
                             .id("gemini-stream")
                             .model(model)
                             .delta(text == null ? null : text.toString())
                             .toolCalls(calls)
+                            .thinking(passthrough && thought != null ? ThinkingDelta.text(0, thought.toString()) : null)
+                            .geminiData(passthrough ? data : null)
                             .finishReason(finishReason)
                             // Every chunk carries the running usage; the last one's is the call's.
                             .usage(isDone && chunk.getUsageMetadata() != null ? chunk.getUsageMetadata().toUsage() : null)
                             .done(isDone)
                             .build();
+                    if (passthrough) {
+                        // Parts the gateway does not read go ahead on a chunk with no content, which a
+                        // stream guard passes on at once even when it holds the content.
+                        com.fasterxml.jackson.databind.node.ArrayNode unread = GeminiGenerateContentBody.unreadParts(
+                                GeminiGenerateContentBody.parseResponse(data));
+                        if (!unread.isEmpty()) {
+                            queued = content;
+                            return SseChunk.builder().id("gemini-stream").model(model)
+                                    .geminiParts(GeminiGenerateContentBody.write(unread)).build();
+                        }
+                    }
+                    return content;
                 }
                 // Reaching the end here means no chunk carried a finish reason: a cut-off stream.
                 done = true;
@@ -567,6 +694,8 @@ public class GeminiProvider extends AbstractLlmProvider {
         @Data @JsonIgnoreProperties(ignoreUnknown = true)
         static class Part {
             private String text;
+            /** True on a part that carries the model's reasoning rather than its answer. */
+            private boolean thought;
             private FunctionCall functionCall;
 
             @Data @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)

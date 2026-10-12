@@ -755,4 +755,157 @@ class GeminiProviderTest {
         assertThat(chunks.get(0).getFinishReason()).isEqualTo("length");
         assertThat(chunks.get(0).isDone()).isTrue();
     }
+
+    // -------------------------------------------------------------------------
+    // A generateContent body sent on as it came
+    // -------------------------------------------------------------------------
+
+    private static final String CLI_BODY = """
+            {"contents": [{"role": "user", "parts": [{"text": "My card is 4111 1111 1111 1111"}]},
+                          {"role": "model", "parts": [{"text": "Noted.", "thought": true, "thoughtSignature": "c2ln"}]},
+                          {"role": "user", "parts": [{"text": "again"}]}],
+             "systemInstruction": {"parts": [{"text": "You are a CLI agent."}]},
+             "tools": [{"functionDeclarations": [{"name": "read_file", "parametersJsonSchema": {"type": "object"}}]}],
+             "generationConfig": {"thinkingConfig": {"includeThoughts": true}}}
+            """;
+
+    private static ChatRequest passthroughRequest(boolean stream, java.util.function.UnaryOperator<List<MultimodalMessage>> edit) {
+        com.dvarahq.core.model.GeminiGenerateContentBody body = com.dvarahq.core.model.GeminiGenerateContentBody
+                .parse(CLI_BODY.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return ChatRequest.builder().model("gemini-3.8-flash").messages(edit.apply(body.messages()))
+                .stream(stream).gemini(body).build();
+    }
+
+    /** The caller's body goes to Gemini whole, with only the governed text changed. */
+    @Test
+    void chat_aGenerateContentBodyIsSentOnAsItCame_withTheGovernedText() {
+        server.expect(requestTo(containsString("/v1beta/models/gemini-3.8-flash:generateContent")))
+              .andExpect(jsonPath("$.contents[0].parts[0].text").value("My card is [CARD]"))
+              .andExpect(jsonPath("$.contents[1].parts[0].thoughtSignature").value("c2ln"))
+              .andExpect(jsonPath("$.tools[0].functionDeclarations[0].parametersJsonSchema.type").value("object"))
+              .andExpect(jsonPath("$.generationConfig.thinkingConfig.includeThoughts").value(true))
+              .andRespond(withSuccess("""
+                      {"candidates": [{"content": {"role": "model", "parts": [
+                          {"text": "Weighing it.", "thought": true, "thoughtSignature": "c2lnMg=="},
+                          {"text": "Done."}]}, "finishReason": "STOP"}],
+                       "usageMetadata": {"promptTokenCount": 40, "candidatesTokenCount": 2, "thoughtsTokenCount": 7,
+                                         "cachedContentTokenCount": 30, "totalTokenCount": 49},
+                       "responseId": "resp-1"}
+                      """, MediaType.APPLICATION_JSON));
+
+        ChatRequest request = passthroughRequest(false, view -> {
+            List<MultimodalMessage> out = new ArrayList<>(view);
+            out.set(1, MultimodalMessage.user("My card is [CARD]"));
+            return out;
+        });
+        ChatResponse response = provider.chat(request);
+
+        server.verify();
+        assertThat(response.getChoices().get(0).getMessage().getContent()).containsExactly(
+                new ContentBlock.ThinkingBlock("Weighing it.", "c2lnMg=="), new ContentBlock.TextBlock("Done."));
+        assertThat(response.getChoices().get(0).getFinishReason()).isEqualTo("stop");
+        // Thinking is billed as output; cached content is part of the prompt.
+        assertThat(response.getUsage().getCompletionTokens()).isEqualTo(9);
+        assertThat(response.getUsage().getReasoningTokens()).isEqualTo(7);
+        assertThat(response.getUsage().getCachedInputTokens()).isEqualTo(30);
+        assertThat(request.getGemini().upstreamResponse().path("responseId").asText()).isEqualTo("resp-1");
+    }
+
+    /** Each streamed chunk carries Gemini's own event; a thought is read as thinking, never as the answer. */
+    @Test
+    void streamChat_aGenerateContentBody_chunksCarryGeminisEvents_andThoughtsAreThinking() {
+        String sse = """
+                data: {"candidates":[{"content":{"parts":[{"text":"Weighing it.","thought":true}],"role":"model"}}]}
+
+                data: {"candidates":[{"content":{"parts":[{"text":"Done."}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":1,"thoughtsTokenCount":3,"totalTokenCount":9}}
+
+                """;
+        server.expect(requestTo(containsString("/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse")))
+              .andExpect(jsonPath("$.contents[1].parts[0].thoughtSignature").value("c2ln"))
+              .andRespond(withSuccess(sse, MediaType.TEXT_EVENT_STREAM));
+
+        Iterator<SseChunk> iterator = provider.streamChat(passthroughRequest(true, view -> view));
+        List<SseChunk> chunks = new ArrayList<>();
+        while (iterator.hasNext()) {
+            chunks.add(iterator.next());
+        }
+
+        assertThat(chunks).hasSize(2);
+        assertThat(chunks.get(0).getDelta()).as("a thought is not the answer").isNull();
+        assertThat(chunks.get(0).getThinking().text()).isEqualTo("Weighing it.");
+        assertThat(chunks.get(0).getGeminiData()).contains("\"thought\":true");
+        assertThat(chunks.get(1).getDelta()).isEqualTo("Done.");
+        assertThat(chunks.get(1).getGeminiData()).contains("\"finishReason\":\"STOP\"");
+        assertThat(chunks.get(1).getUsage().getReasoningTokens()).isEqualTo(3);
+    }
+
+    /**
+     * Parts the gateway does not read come on a chunk of their own, ahead of the event's content and with none
+     * of it, so a guard that holds the content still lets them through.
+     */
+    @Test
+    void streamChat_aGenerateContentBody_unreadPartsComeAheadOnTheirOwnChunk() {
+        String sse = """
+                data: {"candidates":[{"content":{"parts":[{"text":"Running it."},{"executableCode":{"language":"PYTHON","code":"print(1)"}}],"role":"model"},"finishReason":"STOP"}]}
+
+                """;
+        server.expect(requestTo(containsString(":streamGenerateContent")))
+              .andRespond(withSuccess(sse, MediaType.TEXT_EVENT_STREAM));
+
+        Iterator<SseChunk> iterator = provider.streamChat(passthroughRequest(true, view -> view));
+        List<SseChunk> chunks = new ArrayList<>();
+        while (iterator.hasNext()) {
+            chunks.add(iterator.next());
+        }
+
+        assertThat(chunks).hasSize(2);
+        assertThat(chunks.get(0).getGeminiParts()).isEqualTo("[{\"executableCode\":{\"language\":\"PYTHON\",\"code\":\"print(1)\"}}]");
+        assertThat(chunks.get(0).getDelta()).isNull();
+        assertThat(chunks.get(0).isDone()).isFalse();
+        assertThat(chunks.get(1).getDelta()).isEqualTo("Running it.");
+        assertThat(chunks.get(1).isDone()).isTrue();
+    }
+
+    /** A refused stream keeps Google's reason: a model that is gone says so. */
+    @Test
+    void streamChat_aRefusalKeepsGooglesReason() {
+        server.expect(requestTo(containsString(":streamGenerateContent")))
+              .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                      .withStatus(org.springframework.http.HttpStatus.NOT_FOUND).contentType(MediaType.APPLICATION_JSON)
+                      .body("{\"error\":{\"code\":404,\"message\":\"This model models/gemini-2.5-flash is no longer "
+                              + "available to new users.\",\"status\":\"NOT_FOUND\"}}"));
+
+        assertThatThrownBy(() -> provider.streamChat(ChatRequest.builder().model("gemini-2.5-flash")
+                .messages(List.of(MultimodalMessage.user("Hi"))).stream(true).build()))
+                .isInstanceOfSatisfying(GatewayException.class, e -> assertThat(e.getUpstreamStatus()).isEqualTo(404))
+                .hasMessageContaining("no longer available to new users");
+    }
+
+    /** A request built from the gateway's own messages carries no Gemini event on its chunks. */
+    @Test
+    void streamChat_aTranslatedRequest_chunksCarryNoGeminiEvent() {
+        server.expect(requestTo(containsString(":streamGenerateContent")))
+              .andRespond(withSuccess("""
+                      data: {"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP"}]}
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        Iterator<SseChunk> iterator = provider.streamChat(ChatRequest.builder()
+                .model("gemini-2.0-flash").messages(List.of(MultimodalMessage.user("Hi"))).stream(true).build());
+
+        assertThat(iterator.next().getGeminiData()).isNull();
+    }
+
+    /** Gemini counts the tokens of the request as generateContent would send it. */
+    @Test
+    void countInputTokens_asksGeminiToCountTheGovernedRequest() {
+        server.expect(requestTo(containsString("/v1beta/models/gemini-3.8-flash:countTokens")))
+              .andExpect(jsonPath("$.generateContentRequest.model").value("models/gemini-3.8-flash"))
+              .andExpect(jsonPath("$.generateContentRequest.systemInstruction.parts[0].text").value("You are a CLI agent."))
+              .andExpect(jsonPath("$.generateContentRequest.generationConfig").doesNotExist())
+              .andRespond(withSuccess("{\"totalTokens\": 31}", MediaType.APPLICATION_JSON));
+
+        assertThat(provider.countInputTokens(passthroughRequest(false, view -> view))).hasValue(31);
+        server.verify();
+    }
 }

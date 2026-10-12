@@ -23,9 +23,12 @@ import java.util.Map;
  *
  * <p>A client reads errors in the shape its API defines. The Anthropic Messages doorway
  * ({@code /v1/messages} and everything under it) answers in Anthropic's envelope,
- * {@code {"type":"error","error":{"type":...,"message":...,"code":...},"request_id":...}}; every other
- * doorway in OpenAI's, {@code {"error":{"message":...,"type":...,"code":...,"trace_id":...}}}. The status and
- * the code are the same either way, so a refusal means the same thing on every doorway.</p>
+ * {@code {"type":"error","error":{"type":...,"message":...,"code":...},"request_id":...}}. The Gemini
+ * {@code generateContent} doorway ({@code /v1/gemini/} and everything under it) answers in Google's,
+ * {@code {"error":{"code":<status>,"message":...,"status":"INVALID_ARGUMENT","details":[...]}}}, with the
+ * gateway's code and trace id in an {@code ErrorInfo} detail. Every other doorway answers in OpenAI's,
+ * {@code {"error":{"message":...,"type":...,"code":...,"trace_id":...}}}. The status and the code are the
+ * same either way, so a refusal means the same thing on every doorway.</p>
  *
  * <p>A servlet filter that refuses a request builds its body here, so that a refusal made before any
  * controller runs (a missing key, a rate limit, an address that is not allowed) is in the right shape too.</p>
@@ -38,6 +41,28 @@ public final class ErrorEnvelope {
     /** Whether {@code uri} is on the Anthropic Messages doorway. */
     public static boolean anthropic(String uri) {
         return uri != null && (uri.equals("/v1/messages") || uri.startsWith("/v1/messages/"));
+    }
+
+    /** Whether {@code uri} is on the Gemini {@code generateContent} doorway. */
+    public static boolean gemini(String uri) {
+        return uri != null && (uri.equals("/v1/gemini") || uri.startsWith("/v1/gemini/"));
+    }
+
+    /** Google's canonical error status for an HTTP status. */
+    public static String googleStatus(int status) {
+        return switch (status) {
+            case 400, 413, 422 -> "INVALID_ARGUMENT";
+            case 401 -> "UNAUTHENTICATED";
+            case 402, 403 -> "PERMISSION_DENIED";
+            case 404 -> "NOT_FOUND";
+            case 409 -> "ABORTED";
+            case 429 -> "RESOURCE_EXHAUSTED";
+            case 499 -> "CANCELLED";
+            case 501 -> "UNIMPLEMENTED";
+            case 502, 503, 529 -> "UNAVAILABLE";
+            case 504 -> "DEADLINE_EXCEEDED";
+            default -> "INTERNAL";
+        };
     }
 
     /** Anthropic's error type for an HTTP status. */
@@ -78,6 +103,27 @@ public final class ErrorEnvelope {
             if (traceId != null && !traceId.isEmpty()) {
                 body.put("request_id", traceId);
             }
+            return body;
+        }
+        if (gemini(uri)) {
+            error.put("code", status);
+            error.put("message", message == null ? "" : message);
+            error.put("status", googleStatus(status));
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            if (traceId != null && !traceId.isEmpty()) {
+                metadata.put("trace_id", traceId);
+            }
+            Map<String, Object> info = new LinkedHashMap<>();
+            info.put("@type", "type.googleapis.com/google.rpc.ErrorInfo");
+            info.put("reason", code == null ? googleStatus(status) : code);
+            info.put("domain", "dvara");
+            info.put("metadata", metadata);
+            error.put("details", java.util.List.of(info));
+            if (extra != null) {
+                extra.forEach(error::putIfAbsent);
+            }
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", error);
             return body;
         }
         error.put("message", message);

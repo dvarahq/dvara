@@ -32,11 +32,12 @@ import org.springframework.http.client.ClientHttpResponse;
  * <p>An operator must be able to tell a bad image URL from a bad parameter from a content refusal, so
  * the provider's {@code message} and {@code code} are logged, on one line and capped, at WARN.
  *
- * <p>The caller gets the gateway's own short message. When the provider answered {@code 400}, the
- * request itself was wrong and only the provider can say how ("use max_completion_tokens"), so its
- * {@code code} and {@code message} are added, on one line and capped. Nothing else of the body is
- * returned, since a body can echo the request. No other status carries the reason: a {@code 401} or
- * {@code 403} is about the gateway's own credential, not the caller's request.
+ * <p>The caller gets the gateway's own short message. When the provider answered with a {@code 4xx} about the
+ * request (a bad parameter, a model that is gone, a limit), only the provider can say what is wrong ("use
+ * max_completion_tokens", "this model is no longer available to new users"), so its {@code code} and
+ * {@code message} are added, on one line and capped. Nothing else of the body is returned, since a body can
+ * echo the request. A {@code 401} or {@code 403} carries no reason: it is about the gateway's own
+ * credential, not the caller's request, and neither does a {@code 5xx}.
  */
 public final class ProviderErrors {
 
@@ -88,8 +89,13 @@ public final class ProviderErrors {
         String body = body(res);
         log.warn("{} refused the call with {}: {}", provider, status, body == null ? "(no readable body)" : reason(body));
         String message = what + " " + status + detail + GatewayException.describeHttpStatus(status);
-        String forCaller = status == 400 && body != null ? callerReason(body) : null;
+        String forCaller = tellsTheCaller(status) && body != null ? callerReason(body) : null;
         return GatewayException.upstream(status, forCaller == null ? message : message + ": " + forCaller);
+    }
+
+    /** Whether a refusal with {@code status} is about the caller's request, so its reason is the caller's. */
+    static boolean tellsTheCaller(int status) {
+        return status >= 400 && status < 500 && status != 401 && status != 403;
     }
 
     /** {@link #refusal(String, ClientHttpResponse, String, String)} with nothing after the status. */

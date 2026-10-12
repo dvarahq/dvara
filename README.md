@@ -307,6 +307,38 @@ key as its API key.
   `reasoning.summary`, `include: ["reasoning.encrypted_content"]`, `stream_options`, and `reasoning` items
   in `input`, which are left out. A `developer` message is a system message. `client_metadata` is accepted
   and not sent. When the provider reports usage, `response.completed` carries it.
+- ✅ **Gemini `generateContent` API** — for a client built for it such as Gemini CLI or the Google GenAI
+  SDKs. Set `GOOGLE_GEMINI_BASE_URL` to the gateway's address followed by `/v1/gemini` (for example
+  `https://gateway.example.com/v1/gemini`) and `GEMINI_API_KEY` to a gateway API key; the client then calls
+  `POST /v1/gemini/v1beta/models/{model}:generateContent`, `:streamGenerateContent?alt=sse` and
+  `:countTokens`, with the key in the `x-goog-api-key` header (`Authorization: Bearer` works too). A key in
+  the URL (`?key=`) is not read, since URLs end up in logs. Gemini CLI 0.63 run headless (`gemini -p`) also
+  needs `"security": {"auth": {"selectedType": "gemini-api-key"}}` in `~/.gemini/settings.json`, or it exits
+  with "Invalid auth method selected". Use a current Gemini CLI: very old releases (0.1.x) send a first request
+  straight to Google with the key in the URL, whatever the base URL. Pick a model the route serves, such as
+  `gemini -m gemini-3.8-flash`, or a route name for another provider.
+  Governed like chat, on any provider, with the model in the path routed like any model name. On a route to
+  Gemini the request goes through as the client sent it — every field and part, call ids, thought
+  signatures, `thinkingConfig` and `safetySettings` included — and the response comes back as Gemini sent it,
+  changed only where governance changes it. Thinking and cached tokens are metered from `usageMetadata`. On
+  another provider the request is translated: `systemInstruction` is a system message, function declarations
+  are tools, `functionCall` and `functionResponse` parts are tool calls and their results, and the answer,
+  plain or streamed, is written back in Gemini's shape; what only tunes Gemini (`thinkingConfig`, `topK`,
+  `safetySettings`, thought parts) is left out, and a provider that takes only one of `temperature` and `topP`
+  (Anthropic) is sent `temperature`. When governance holds or rebuilds an answer, parts it does not read
+  (`executableCode`, `codeExecutionResult`, `inlineData`) are still delivered.
+  Built-in tools that Google runs itself (`googleSearch`, `urlContext`, `codeExecution`,
+  `googleSearchRetrieval` and the like) are refused on every route, Gemini included, because what they fetch
+  or run is never checked. Gemini CLI asks for them only from its web search and web fetch tools; deny those
+  with a policy rule, for example in `~/.gemini/policies/gateway.toml`:
+  `[[rule]]`, `toolName = ["google_web_search", "web_fetch"]`, `decision = "deny"` (older releases used
+  `"tools": {"exclude": [...]}` in `settings.json`, which 0.63 marks deprecated). `cachedContent` and more than
+  one candidate are refused too. A refusal, including one a provider makes before its stream starts, comes
+  back as an error status with JSON in Google's error shape and the provider's own reason. Gemini CLI sends
+  no output limit, so the default response cap (`dvara.llm-gateway.guardrail.default-max-response-tokens`)
+  becomes its `maxOutputTokens`; Gemini counts thinking inside that limit, so raise the cap if long agent
+  turns stop at `MAX_TOKENS`. Gemini CLI signed in with a Google account does not use a custom base URL, so it
+  cannot be pointed here.
 - ✅ **Response cache** — exact-match, in memory, per process. Off until
   `dvara.llm-gateway.cache.in-memory.enabled` is `true`.
 
@@ -372,11 +404,12 @@ is refused with `400`. The workspace's default response cap
 (`dvara.llm-gateway.guardrail.default-max-response-tokens`, `4096`, `0` turns it off) is that same
 limit when the caller sets none; on a reasoning model it also counts the tokens spent reasoning.
 
-When a provider refuses a request with `400`, the error the caller gets carries the provider's own
-reason after the gateway's message, on one line and at most 300 characters:
+When a provider refuses a request with a `4xx` other than `401` and `403` (a bad parameter, a model that
+is no longer offered, a limit), the error the caller gets carries the provider's own reason after the
+gateway's message, on one line and at most 300 characters:
 `OpenAI API error 400: unsupported_parameter: Unsupported parameter: 'max_tokens' is not supported with
 this model. Use 'max_completion_tokens' instead.` Nothing else of the provider's answer is returned, and
-other statuses keep the gateway's message alone.
+`401`, `403` and `5xx` keep the gateway's message alone.
 
 A mock provider is included for tests and demos; it needs no account. It also takes batches: an
 uploaded file reads back as what was uploaded, every batch completes on its first poll, and its output

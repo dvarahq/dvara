@@ -128,6 +128,38 @@ class ApiKeyAuthFilterTest {
         verify(request).setAttribute(ApiKeyAuthFilter.WORKSPACE_ID_ATTR, "acme");
     }
 
+    /** The Google GenAI SDKs and Gemini CLI send the key as x-goog-api-key; it is the same key. */
+    @Test
+    void xGoogApiKeyHeader_isAcceptedAsTheKey() throws Exception {
+        var filter = new ApiKeyAuthFilter(repository);
+        when(request.getRequestURI()).thenReturn("/v1/gemini/v1beta/models/gemini-3.8-flash:streamGenerateContent");
+        when(request.getHeader("x-goog-api-key")).thenReturn(VALID_KEY);
+        when(repository.findByKeyHash(VALID_KEY_HASH)).thenReturn(Optional.of(
+                ApiKey.builder().id("key-1").workspaceId("acme").status(ApiKeyStatus.ACTIVE).build()));
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(chain).doFilter(request, response);
+        verify(request).setAttribute(ApiKeyAuthFilter.WORKSPACE_ID_ATTR, "acme");
+    }
+
+    /** A key in the URL is never read, not even on the Gemini doorway, whose own API takes one: URLs are logged. */
+    @Test
+    void keyQueryParameter_isNotAKey_evenOnTheGeminiDoorway() throws Exception {
+        var filter = new ApiKeyAuthFilter(repository);
+        when(request.getRequestURI()).thenReturn("/v1/gemini/v1beta/models/gemini-3.8-flash:generateContent");
+        when(request.getQueryString()).thenReturn("key=" + VALID_KEY);
+        when(request.getParameter("key")).thenReturn(VALID_KEY);
+        when(repository.findByKeyHash(VALID_KEY_HASH)).thenReturn(Optional.of(
+                ApiKey.builder().id("key-1").workspaceId("acme").status(ApiKeyStatus.ACTIVE).build()));
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(response).setStatus(401);
+        verify(chain, never()).doFilter(any(), any());
+        assertThat(responseBody.toString()).contains("UNAUTHENTICATED").doesNotContain(VALID_KEY);
+    }
+
     /** An unknown x-api-key is refused like an unknown bearer key. */
     @Test
     void unknownXApiKey_rejects401() throws Exception {

@@ -220,6 +220,8 @@ public class ChatExecutionService {
         // beta features) changes the answer but is not part of what the cache keys on, so such a request
         // neither reads nor fills it.
         boolean uncacheable = internalRequest.getAnthropic() != null && !internalRequest.getAnthropic().carriesNothing();
+        // The same holds for a Gemini body sent on as it came (thinkingConfig, safetySettings, tools at Google).
+        uncacheable = uncacheable || internalRequest.getGemini() != null;
         boolean bypassCache = uncacheable || "no-cache".equalsIgnoreCase(httpRequest.getHeader("X-Cache-Control"));
 
         // PII-stripped form used as the cache key on BOTH get and put so lookup and store hash

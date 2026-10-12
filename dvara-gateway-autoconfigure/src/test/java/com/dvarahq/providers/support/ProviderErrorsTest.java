@@ -103,10 +103,27 @@ class ProviderErrorsTest {
         String body = "{\"error\":{\"message\":\"Incorrect API key provided: sk-proj-abcdefgh1234.\",\"code\":\"invalid_api_key\"}}";
         assertThat(ProviderErrors.refusal("OpenAI", response(HttpStatus.UNAUTHORIZED, body), "OpenAI API error").getMessage())
                 .isEqualTo("OpenAI API error 401 (invalid API key - check your provider credentials)");
-        assertThat(ProviderErrors.refusal("OpenAI", response(HttpStatus.UNPROCESSABLE_ENTITY, body), "OpenAI API error").getMessage())
-                .isEqualTo("OpenAI API error 422");
         assertThat(ProviderErrors.refusal("OpenAI", response(HttpStatus.INTERNAL_SERVER_ERROR, body), "OpenAI API error").getMessage())
                 .isEqualTo("OpenAI API error 500 (provider internal server error)");
+    }
+
+    /** Any 4xx about the request carries the provider's reason: only it can say the model is gone. */
+    @Test
+    void a404_carriesTheProvidersReason() {
+        GatewayException ex = ProviderErrors.refusal("Gemini", response(HttpStatus.NOT_FOUND, """
+                {"error":{"code":404,"message":"This model models/gemini-2.5-flash is no longer available to new users.","status":"NOT_FOUND"}}
+                """), "Gemini streaming error");
+        assertThat(ex.getMessage()).startsWith("Gemini streaming error 404")
+                .endsWith("NOT_FOUND: This model models/gemini-2.5-flash is no longer available to new users.");
+        assertThat(ex.getUpstreamStatus()).isEqualTo(404);
+    }
+
+    @Test
+    void a422_carriesTheReason_withAKeyMasked() {
+        GatewayException ex = ProviderErrors.refusal("OpenAI", response(HttpStatus.UNPROCESSABLE_ENTITY,
+                "{\"error\":{\"message\":\"Bad value near sk-proj-abcdefgh12345678\",\"code\":\"invalid_value\"}}"),
+                "OpenAI API error");
+        assertThat(ex.getMessage()).isEqualTo("OpenAI API error 422: invalid_value: Bad value near ***");
     }
 
     @Test

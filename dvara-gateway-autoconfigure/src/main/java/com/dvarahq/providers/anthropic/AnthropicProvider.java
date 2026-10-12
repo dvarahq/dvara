@@ -61,6 +61,7 @@ import java.util.stream.Collectors;
 
 public class AnthropicProvider extends AbstractLlmProvider {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AnthropicProvider.class);
     private static final String ANTHROPIC_VERSION = "2023-06-01";
     private static final int    DEFAULT_MAX_TOKENS = 1024;
     private static final String JSON_SYSTEM_SUFFIX = "\n\nRespond with valid JSON only. Do not include any text outside the JSON object.";
@@ -186,9 +187,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
                 .body(body)
                 .exchange((req, res) -> {
                     if (res.getStatusCode().isError()) {
-                        throw GatewayException.upstream(res.getStatusCode().value(),
-                                "Anthropic streaming error " + res.getStatusCode().value()
-                                + GatewayException.describeHttpStatus(res.getStatusCode().value()));
+                        throw ProviderErrors.refusal("Anthropic", res, "Anthropic streaming error");
                     }
                     // The body stream is the transport handle, released through StreamTransport:
                     // ClientHttpResponse.close() drains the body first and would wait for a stalled server, and
@@ -287,7 +286,13 @@ public class AnthropicProvider extends AbstractLlmProvider {
         if (systemPrompt != null)         body.put("system",      systemPrompt);
         body.put("messages", messages);
         if (request.getTemperature() != null) body.put("temperature", request.getTemperature());
-        if (request.getTopP()        != null) body.put("top_p",       request.getTopP());
+        // Anthropic's current models refuse temperature and top_p together. A request translated from
+        // another API (Gemini CLI always sends both) keeps temperature, the setting clients tune.
+        if (request.getTopP() != null && request.getTemperature() == null) {
+            body.put("top_p", request.getTopP());
+        } else if (request.getTopP() != null) {
+            log.debug("Anthropic takes temperature or top_p, not both; top_p {} is left out", request.getTopP());
+        }
         if (request.getStop()        != null) body.put("stop_sequences", request.getStop());
         // Anthropic's end-user id lives in metadata.user_id.
         if (request.getUser()        != null) body.put("metadata", Map.of("user_id", request.getUser()));
