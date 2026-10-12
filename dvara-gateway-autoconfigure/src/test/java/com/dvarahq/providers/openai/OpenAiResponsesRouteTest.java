@@ -238,4 +238,44 @@ class OpenAiResponsesRouteTest {
         assertThat(input).startsWith("*** Begin Patch").contains("hello.py");
         assertThat(sse).contains(com.dvarahq.core.util.JsonMapper.instance().writeValueAsString(input));
     }
+
+    /** OpenAI's own error event on a spent account: the caller's status is 429, with OpenAI's code and message. */
+    @Test
+    void anErrorEvent_isAFailureWithTheProvidersCodeStatusAndEvent() {
+        String error = "{\"type\":\"error\",\"sequence_number\":2,\"error\":{\"type\":\"insufficient_quota\","
+                + "\"code\":\"credit_balance_exhausted\",\"message\":\"You have no credits remaining.\",\"param\":null}}";
+        server.expect(requestTo("https://api.openai.com/v1/responses"))
+                .andRespond(withSuccess("""
+                        data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_1","status":"in_progress","output":[]}}
+
+                        data: %s
+
+                        """.formatted(error), MediaType.TEXT_EVENT_STREAM));
+
+        Iterator<SseChunk> it = provider.streamChat(request("gpt-6-astra"));
+        it.next();
+        assertThatThrownBy(it::hasNext)
+                .isInstanceOfSatisfying(com.dvarahq.core.exception.ProviderStreamFailure.class, f -> {
+                    assertThat(f.getUpstreamStatus()).isEqualTo(429);
+                    assertThat(f.providerCode()).isEqualTo("credit_balance_exhausted");
+                    assertThat(f.getMessage()).contains("credit_balance_exhausted: You have no credits remaining.");
+                    assertThat(f.event().data()).isEqualTo(error);
+                });
+    }
+
+    @Test
+    void aFailedResponse_readsTheErrorUnderTheResponse() {
+        server.expect(requestTo("https://api.openai.com/v1/responses"))
+                .andRespond(withSuccess("""
+                        data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_1","status":"failed","error":{"code":"server_error","message":"The server had an error."}}}
+
+                        """, MediaType.TEXT_EVENT_STREAM));
+
+        Iterator<SseChunk> it = provider.streamChat(request("gpt-6-astra"));
+        assertThatThrownBy(it::hasNext)
+                .isInstanceOfSatisfying(com.dvarahq.core.exception.ProviderStreamFailure.class, f -> {
+                    assertThat(f.getUpstreamStatus()).isEqualTo(502);
+                    assertThat(f.getMessage()).contains("server_error: The server had an error.");
+                });
+    }
 }

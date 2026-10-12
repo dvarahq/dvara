@@ -270,21 +270,69 @@ public class ResponsesController {
         ChatExecutionService.Attribution attribution = ChatExecutionService.Attribution.capture(httpRequest);
         com.dvarahq.server.service.StreamStops.Probe stopProbe = streamStops.probe(httpRequest, model);
 
-        Thread.startVirtualThread(ChatExecutionService.withRequestContext(() -> {
-            long streamStart = System.nanoTime();
-            Iterator<SseChunk> chunks = null;
-            Exception failure = null;
-            ChatExecutionService.Attribution who = attribution;
+        // The upstream is opened, and its opening events read, before the answer starts: a provider that refuses
+        // the call, or ends its stream with an error before any output, gives the caller the status that error
+        // stands for (429 for a spent quota) and the provider's reason, not a 200 stream that ends failed.
+        long openStart = System.nanoTime();
+        Iterator<SseChunk> opened = null;
+        List<SseChunk> leading = new ArrayList<>();
+        try {
+            opened = executionService.openStream(streamRequest, workspaceId);
+            upstream.set(opened);
+            while (opened.hasNext()) {
+                SseChunk first = opened.next();
+                leading.add(first);
+                if (!opening(first)) {
+                    break;
+                }
+            }
+        } catch (RuntimeException refused) {
+            if (opened instanceof AutoCloseable guard) {
+                try {
+                    guard.close();
+                } catch (Exception closeEx) {
+                    log.debug("Closing the refused stream for trace {}: {}", traceId, closeEx.getMessage());
+                }
+            }
             try {
-                chunks = executionService.openStream(streamRequest, workspaceId);
-                upstream.set(chunks);
-                who = who.withUpstreamFrom(httpRequest);   // provider + credential, now known
+                executionService.persistStreamingUsage(httpRequest, streamRequest, "", ctx,
+                        (System.nanoTime() - openStart) / 1_000_000L, true, null, settlement,
+                        attribution.withUpstreamFrom(httpRequest));
+            } catch (Exception persistEx) {
+                log.warn("Failed to record the refused stream for trace {}: {}", traceId, persistEx.getMessage());
+            }
+            executionService.releasePriority(ctx);
+            throw refused;
+        }
+        Iterator<SseChunk> openedStream = opened;
+        Iterator<SseChunk> resumed = new Iterator<>() {
+            private final Iterator<SseChunk> read = leading.iterator();
+
+            @Override
+            public boolean hasNext() {
+                return read.hasNext() || openedStream.hasNext();
+            }
+
+            @Override
+            public SseChunk next() {
+                return read.hasNext() ? read.next() : openedStream.next();
+            }
+        };
+        ChatExecutionService.Attribution openedBy = attribution.withUpstreamFrom(httpRequest);
+
+        Thread.startVirtualThread(ChatExecutionService.withRequestContext(() -> {
+            long streamStart = openStart;
+            Iterator<SseChunk> chunks = openedStream;
+            Exception failure = null;
+            ChatExecutionService.Attribution who = openedBy;
+            Relay relay = new Relay(emitter, seq);
+            try {
+                Iterator<SseChunk> reading = resumed;
 
                 // A provider that answered through its own Responses API puts its events on the chunks; they are
                 // sent as they came, unless the streaming guard holds content back to deliver it governed, in
                 // which case the answer is rendered here and only the items the gateway does not read are kept.
                 boolean held = chunks instanceof com.dvarahq.core.model.HeldDelivery h && h.holdsContent();
-                Relay relay = new Relay(emitter, seq);
                 StreamItems items = new StreamItems(emitter, seq, names);
                 Runnable ownStart = () -> {
                     if (!items.started && !relay.started) {
@@ -300,8 +348,8 @@ public class ResponsesController {
                 };
                 boolean sawDone = false;
                 Object providerUsage = null;
-                while (!completed.get() && chunks.hasNext()) {   // cancellation first; see ChatCompletionController
-                    SseChunk chunk = chunks.next();
+                while (!completed.get() && reading.hasNext()) {   // cancellation first; see ChatCompletionController
+                    SseChunk chunk = reading.next();
                     // Before the chunk is written: a stream that must end does not send it.
                     stopProbe.checkpoint();
                     // the exact usage arrives on the final chunk. Hold the last non-null
@@ -428,6 +476,21 @@ public class ResponsesController {
                 if (!completed.get()) {
                     // A stop ends the response with its own code; anything else is the provider's failure.
                     String errorCode = "provider_error";
+                    if (failure instanceof com.dvarahq.core.exception.ProviderStreamFailure provider
+                            && provider.event() != null && relay.started) {
+                        // The provider's own failure, as it sent it, after its own events.
+                        try {
+                            relay.send(provider.event());
+                            emitter.complete();
+                        } catch (Exception ignored) {
+                            // emitter already closed
+                        }
+                        return;
+                    }
+                    if (failure instanceof com.dvarahq.core.exception.ProviderStreamFailure provider
+                            && provider.providerCode() != null) {
+                        errorCode = provider.providerCode();
+                    }
                     if (failure instanceof com.dvarahq.server.service.StreamStops.StreamStoppedException stopped) {
                         errorCode = stopped.stop().code();
                         log.info("Responses stream for trace {} stopped: {}", traceId, errorCode);
@@ -708,6 +771,14 @@ public class ResponsesController {
         private static Map<String, Object> asMap(Object o) {
             return o instanceof Map<?, ?> m ? (Map<String, Object>) m : null;
         }
+    }
+
+    /** An opening event of a provider's Responses API stream, which carries no output. */
+    private static boolean opening(SseChunk chunk) {
+        com.dvarahq.core.model.ResponsesEvent event = chunk.getResponsesEvent();
+        return event != null && !chunk.isDone() && (chunk.getDelta() == null || chunk.getDelta().isEmpty())
+                && chunk.getToolCalls() == null
+                && ("response.created".equals(event.type()) || "response.in_progress".equals(event.type()));
     }
 
     private void emit(SseEmitter emitter, String type, AtomicInteger seq, Map<String, Object> fields) throws Exception {

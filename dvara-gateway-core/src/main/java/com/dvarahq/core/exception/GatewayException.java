@@ -73,7 +73,7 @@ public class GatewayException extends RuntimeException {
         this.upstreamStatus = null;
     }
 
-    private GatewayException(String code, String message, int upstreamStatus) {
+    protected GatewayException(String code, String message, int upstreamStatus) {
         super(message);
         this.code = code;
         this.retryAfterSeconds = null;

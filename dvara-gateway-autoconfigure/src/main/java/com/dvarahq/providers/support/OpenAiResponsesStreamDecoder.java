@@ -165,15 +165,55 @@ public final class OpenAiResponsesStreamDecoder implements Iterator<SseChunk>, A
                     .id(event.path("response").path("id").asText(null))
                     .finishReason("length")
                     .usage(OpenAiResponsesBody.usage(event.path("response").get("usage")));
-            case "response.failed", "error" -> {
-                JsonNode error = "error".equals(type) ? event : event.path("response").path("error");
-                String message = error.path("message").asText("");
-                throw new GatewayException("PROVIDER_ERROR", upstreamLabel + " stream failed"
-                        + (message.isEmpty() ? "" : ": " + message));
-            }
+            case "response.failed", "error" -> throw failure(type, event, data);
             default -> { }
         }
         return chunk.build();
+    }
+
+    /**
+     * The provider's failure as the caller's error: the status its code stands for, and the provider's own code
+     * and message. OpenAI puts the error at {@code response.error} on {@code response.failed}, and on an
+     * {@code error} event either at the top level or under {@code error}.
+     */
+    private com.dvarahq.core.exception.ProviderStreamFailure failure(String type, JsonNode event, String data) {
+        JsonNode error = "response.failed".equals(type) ? event.path("response").path("error")
+                : event.path("error").isObject() ? event.path("error") : event;
+        String code = text(error, "code");
+        if (code == null) {
+            code = text(error, "type");
+        }
+        String message = text(error, "message");
+        String reason = code == null ? message : message == null ? code : code + ": " + message;
+        int status = statusFor(code);
+        String said = reason == null ? upstreamLabel + " ended the stream with an error" + GatewayException.describeHttpStatus(status)
+                : upstreamLabel + " ended the stream with an error" + GatewayException.describeHttpStatus(status) + ": "
+                        + ProviderErrors.masked(reason);
+        return new com.dvarahq.core.exception.ProviderStreamFailure(status, said, code, new ResponsesEvent(type, data));
+    }
+
+    private static String text(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() || value.asText().isBlank() ? null : value.asText();
+    }
+
+    /**
+     * The HTTP status a provider's error code stands for, so a client can tell waiting out a limit (429) from a
+     * request it must change (400) and a fault at the provider (502).
+     */
+    static int statusFor(String code) {
+        if (code == null) {
+            return 502;
+        }
+        String c = code.toLowerCase(java.util.Locale.ROOT);
+        if (c.contains("rate_limit") || c.contains("quota") || c.contains("credit") || c.contains("billing")) {
+            return 429;
+        }
+        if (c.startsWith("invalid") || c.contains("context_length") || c.contains("unsupported")
+                || c.contains("not_found") || c.contains("too_large")) {
+            return 400;
+        }
+        return 502;
     }
 
     private static String name(JsonNode item) {

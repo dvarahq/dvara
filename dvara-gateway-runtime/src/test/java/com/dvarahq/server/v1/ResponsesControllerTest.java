@@ -802,27 +802,31 @@ class ResponsesControllerTest {
     }
 
     /**
-     * A cancelled Responses request records no error and still runs its tail. Unlike the chat
-     * doorway's twin, this does not check that cancellation is tested before hasNext(): this
-     * doorway emits two events before the loop, and on a completed emitter those fail first, so
-     * the loop is not reached either way. The loop is the same code as chat's and is checked there.
+     * A Responses request cancelled once its stream is open records no error and still runs its tail. The stream
+     * is opened, and its opening events read, before the answer starts, so a provider's early error can be the
+     * caller's status; the cancellation can only come after that read. The emit loop is the same code as chat's,
+     * whose twin checks that cancellation is tested before each read.
      */
     @Test
-    void streaming_anAlreadyCancelledRequestNeverReadsUpstream() throws Exception {
-        java.util.concurrent.CountDownLatch opening = new java.util.concurrent.CountDownLatch(1);
+    void streaming_aRequestCancelledOnceOpen_recordsNoErrorAndRunsItsTail() throws Exception {
         java.util.concurrent.CountDownLatch clientLeft = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch tailRan = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.atomic.AtomicInteger hasNextCalls = new java.util.concurrent.atomic.AtomicInteger();
         class Upstream implements java.util.Iterator<SseChunk>, AutoCloseable {
-            @Override public boolean hasNext() { hasNextCalls.incrementAndGet(); return false; }
+            @Override public boolean hasNext() {
+                if (hasNextCalls.incrementAndGet() > 1) {
+                    try {
+                        clientLeft.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return false;
+            }
             @Override public SseChunk next() { throw new AssertionError("read upstream after cancellation"); }
             @Override public void close() { tailRan.countDown(); }
         }
-        when(dispatcher.streamChat(any())).thenAnswer(inv -> {
-            opening.countDown();
-            clientLeft.await(5, java.util.concurrent.TimeUnit.SECONDS);
-            return new Upstream();
-        });
+        when(dispatcher.streamChat(any())).thenAnswer(inv -> new Upstream());
 
         MvcResult mvcResult = mockMvc.perform(post("/v1/responses")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -831,12 +835,11 @@ class ResponsesControllerTest {
                                 """))
                 .andExpect(request().asyncStarted())
                 .andReturn();
-        assertThat(opening.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
         mvcResult.getRequest().getAsyncContext().complete();
         clientLeft.countDown();
 
         assertThat(tailRan.await(5, java.util.concurrent.TimeUnit.SECONDS)).as("the tail still ran").isTrue();
-        assertThat(hasNextCalls.get()).as("cancellation is checked before any upstream read").isZero();
+        assertThat(hasNextCalls.get()).as("the opening read, and at most one more").isLessThanOrEqualTo(2);
         assertThat(mvcResult.getRequest().getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_ERROR_CODE)).isNull();
     }
 
@@ -956,5 +959,83 @@ class ResponsesControllerTest {
 
         assertThat(mvcResult.getRequest().getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_TOKENS_CACHED)).isEqualTo("5760");
         assertThat(mvcResult.getRequest().getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_TOKENS_REASONING)).isEqualTo("64");
+    }
+
+    // -------- a provider's own error, on a route to OpenAI's Responses API --------
+
+    /** What OpenAI sent a Codex CLI session whose account had no credits left (captured live, redacted). */
+    private static final String CREDITS_GONE = "{\"type\":\"response.failed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_1\","
+            + "\"status\":\"failed\",\"error\":{\"code\":\"credit_balance_exhausted\",\"message\":\"You have no credits remaining.\"}}}";
+
+    private static SseChunk opening(String type, int seq) {
+        return SseChunk.builder().model("gpt-6-astra").responsesEvent(new com.dvarahq.core.model.ResponsesEvent(type,
+                "{\"type\":\"" + type + "\",\"sequence_number\":" + seq + ",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\",\"output\":[]}}")).build();
+    }
+
+    private static java.util.Iterator<SseChunk> failingAfter(List<SseChunk> first) {
+        return new java.util.Iterator<>() {
+            int i;
+            @Override public boolean hasNext() {
+                if (i < first.size()) return true;
+                throw new com.dvarahq.core.exception.ProviderStreamFailure(429,
+                        "OpenAI ended the stream with an error: credit_balance_exhausted: You have no credits remaining.",
+                        "credit_balance_exhausted", new com.dvarahq.core.model.ResponsesEvent("response.failed", CREDITS_GONE));
+            }
+            @Override public SseChunk next() { return first.get(i++); }
+        };
+    }
+
+    @Test
+    void anErrorBeforeAnyOutput_isTheCallersStatus_withTheProvidersReason() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(failingAfter(List.of(
+                opening("response.created", 0), opening("response.in_progress", 1))));
+
+        mockMvc.perform(post("/v1/responses").contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content("""
+                                {"model": "gpt-6-astra", "stream": true, "input": "hi"}
+                                """))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("credit_balance_exhausted")))
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("You have no credits remaining.")));
+    }
+
+    @Test
+    void anErrorAfterOutput_isTheProvidersOwnFailureEvent() throws Exception {
+        SseChunk text = SseChunk.builder().model("gpt-6-astra").delta("Hi")
+                .responsesEvent(new com.dvarahq.core.model.ResponsesEvent("response.output_text.delta",
+                        "{\"type\":\"response.output_text.delta\",\"sequence_number\":2,\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\"}"))
+                .build();
+        when(dispatcher.streamChat(any())).thenReturn(failingAfter(List.of(
+                opening("response.created", 0), opening("response.in_progress", 1), text)));
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(fixture("tool-turn.json"));
+
+        com.fasterxml.jackson.databind.JsonNode last = events.get(events.size() - 1);
+        assertThat(last.get("type").asText()).isEqualTo("response.failed");
+        assertThat(last.at("/response/error/code").asText()).isEqualTo("credit_balance_exhausted");
+        assertThat(last.at("/response/error/message").asText()).isEqualTo("You have no credits remaining.");
+    }
+
+    @Test
+    void anErrorOnATranslatedRoute_carriesTheProvidersCode() throws Exception {
+        java.util.Iterator<SseChunk> failing = new java.util.Iterator<>() {
+            int i;
+            @Override public boolean hasNext() {
+                if (i == 0) return true;
+                throw new com.dvarahq.core.exception.ProviderStreamFailure(429, "credit_balance_exhausted: none left",
+                        "credit_balance_exhausted", null);
+            }
+            @Override public SseChunk next() { i++; return SseChunk.builder().model("m").delta("Hi").build(); }
+        };
+        when(dispatcher.streamChat(any())).thenReturn(failing);
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents("""
+                {"model": "m", "stream": true, "input": "hi"}
+                """);
+
+        com.fasterxml.jackson.databind.JsonNode last = events.get(events.size() - 1);
+        assertThat(last.get("type").asText()).isEqualTo("response.failed");
+        assertThat(last.at("/response/error/code").asText()).isEqualTo("credit_balance_exhausted");
     }
 }
