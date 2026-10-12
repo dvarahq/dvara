@@ -298,8 +298,13 @@ key as its API key.
   `web_search = "disabled"`. So are `store: true`, `previous_response_id`, `background`, a `service_tier`
   other than `auto` or `default`, file parts, and input item types the gateway does not read.
   On `/v1/chat/completions`, `reasoning_effort` goes to OpenAI and Azure OpenAI as sent, so a model's own
-  refusal (for example of function tools with an effort) reaches the client; other providers are not sent
-  it, which is logged at DEBUG.
+  refusal (for example of function tools with an effort) reaches the client. On Anthropic, and so on
+  `/v1/cursor` with a `-thinking-<effort>` model, it turns on extended thinking with a budget of 1024
+  (`low`), 4096 (`medium`), 16384 (`high`) or 32000 (`xhigh`) tokens, added to `max_tokens` so the answer
+  keeps its room; `none` and `minimal` ask for none. Thinking takes no temperature but 1 and no `top_p`
+  below 0.95, so a request with one of those and an effort is refused. A Claude model without extended
+  thinking, and any other provider, is not sent the effort, which is logged at DEBUG. Thinking tokens are
+  the reasoning part of the usage.
   On `/v1/chat/completions` a `custom` tool (`{"type": "custom", "custom": {name, description, format}}`) is
   sent to OpenAI as it is and to any other provider as a function with one `input` string; its calls come
   back as `{"type": "custom", "custom": {name, input}}`, whole or, in a stream, with the input in one

@@ -634,4 +634,80 @@ class AnthropicProviderTest {
         server.verify();
         assertThat(provider.canDisableParallelToolCalls()).isTrue();
     }
+
+    // -------- reasoning effort from another API as extended thinking --------
+
+    private static ChatRequest effort(String model, String effort) {
+        return ChatRequest.builder().model(model).messages(List.of(MultimodalMessage.user("Think it through.")))
+                .reasoningEffort(effort).build();
+    }
+
+    @Test
+    void chat_reasoningEffort_isExtendedThinking_withRoomLeftForTheAnswer() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(jsonPath("$.thinking.type").value("enabled"))
+              .andExpect(jsonPath("$.thinking.budget_tokens").value(4096))
+              .andExpect(jsonPath("$.max_tokens").value(4096 + 2000))
+              .andRespond(withSuccess(anthropicSuccessBody("msg-t", "end_turn", "ok", 5, 1), MediaType.APPLICATION_JSON));
+
+        provider.chat(effort("claude-sonnet-4-5", "medium").toBuilder().maxTokens(2000).build());
+
+        server.verify();
+        assertThat(provider.takesReasoningEffort()).isTrue();
+    }
+
+    @Test
+    void chat_eachEffortHasItsBudget() {
+        for (var level : java.util.Map.of("low", 1024, "high", 16384, "xhigh", 32000).entrySet()) {
+            server.expect(requestTo(containsString("/v1/messages")))
+                  .andExpect(jsonPath("$.thinking.budget_tokens").value(level.getValue()))
+                  .andRespond(withSuccess(anthropicSuccessBody("msg-t", "end_turn", "ok", 5, 1), MediaType.APPLICATION_JSON));
+            provider.chat(effort("claude-opus-4-1", level.getKey()));
+            server.verify();
+            server.reset();
+        }
+    }
+
+    @Test
+    void chat_aModelWithoutThinking_isSentNoThinking() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(jsonPath("$.thinking").doesNotExist())
+              .andRespond(withSuccess(anthropicSuccessBody("msg-t", "end_turn", "ok", 5, 1), MediaType.APPLICATION_JSON));
+
+        provider.chat(effort("claude-3-5-haiku-20241022", "high"));
+
+        server.verify();
+    }
+
+    @Test
+    void chat_effortWithATemperatureThinkingCannotTake_isRefused() {
+        assertThatThrownBy(() -> provider.chat(effort("claude-sonnet-4-5", "high").toBuilder().temperature(0.2).build()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("temperature");
+        assertThatThrownBy(() -> provider.chat(effort("claude-sonnet-4-5", "high").toBuilder().topP(0.5).build()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("top_p");
+    }
+
+    @Test
+    void chat_anEffortThinkingDoesNotKnow_isRefused() {
+        assertThatThrownBy(() -> provider.chat(effort("claude-sonnet-4-5", "extreme")))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("extreme");
+    }
+
+    @Test
+    void chat_thinkingTokensAreTheReasoningPartOfTheUsage() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andRespond(withSuccess("""
+                      {"id":"msg-u","type":"message","role":"assistant","model":"claude-sonnet-4-5","stop_reason":"end_turn",
+                       "content":[{"type":"thinking","thinking":"Let me see.","signature":"sig"},{"type":"text","text":"42"}],
+                       "usage":{"input_tokens":10,"output_tokens":300,"output_tokens_details":{"thinking_tokens":280}}}
+                      """, MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(effort("claude-sonnet-4-5", "low"));
+
+        assertThat(response.getUsage().getReasoningTokens()).isEqualTo(280);
+        assertThat(response.getChoices().get(0).getMessage().textContent()).contains("42");
+    }
 }

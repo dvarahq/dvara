@@ -339,6 +339,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
 
         if (!tools.isEmpty()) body.put("tools", tools);
 
+        thinkFor(request, body);
+
         // What a Messages API caller sent that the gateway does not model goes on as it came. The fields
         // set above are the gateway's, so none of these can replace one.
         if (request.getAnthropic() != null) {
@@ -410,6 +412,66 @@ public class AnthropicProvider extends AbstractLlmProvider {
     private static boolean carriesThinking(MultimodalMessage msg) {
         return msg.getContent() != null && msg.getContent().stream().anyMatch(
                 b -> b instanceof ContentBlock.ThinkingBlock || b instanceof ContentBlock.RedactedThinkingBlock);
+    }
+
+    /**
+     * The thinking budget, in tokens, for OpenAI's reasoning effort: Anthropic's minimum for {@code low}, and a
+     * few times more for each level up, short of the size Anthropic advises sending as a batch instead.
+     */
+    static final Map<String, Integer> THINKING_BUDGETS = Map.of(
+            "low", 1024, "medium", 4096, "high", 16384, "xhigh", 32000);
+
+    /** Claude models with extended thinking: Claude 3.7 Sonnet and every model from Claude 4 on. */
+    private static final java.util.regex.Pattern THINKING_MODEL = java.util.regex.Pattern.compile(
+            "(^|[/.:])claude-(3-7-|(opus|sonnet|haiku)-[4-9]|[4-9])");
+
+    /** Whether the model has extended thinking. */
+    static boolean thinks(String model) {
+        return model != null && THINKING_MODEL.matcher(model).find();
+    }
+
+    /**
+     * A reasoning effort from a request in another API (Chat Completions, Cursor) as Anthropic's extended
+     * thinking: {@code thinking: {type: enabled, budget_tokens}}. {@code max_tokens} becomes the budget plus the
+     * answer's own limit, so thinking does not eat the answer. Thinking takes no temperature but 1 and no top_p
+     * below 0.95, so a request with one is refused rather than served without what it asked for. An effort of
+     * {@code none} or {@code minimal} asks for no thinking. A model without extended thinking is sent no
+     * thinking, and that is logged. A Messages API request's own {@code thinking} goes on as it came instead.
+     */
+    private void thinkFor(ChatRequest request, Map<String, Object> body) {
+        String effort = request.getReasoningEffort();
+        if (effort == null || (request.getAnthropic() != null && request.getAnthropic().thinking() != null)) {
+            return;
+        }
+        if ("none".equals(effort) || "minimal".equals(effort)) {
+            log.debug("Reasoning effort {} asks for no thinking; none is sent to Anthropic", effort);
+            return;
+        }
+        Integer budget = THINKING_BUDGETS.get(effort);
+        if (budget == null) {
+            throw new GatewayException("INVALID_REQUEST", "reasoning_effort " + effort
+                    + " is not one Anthropic's extended thinking can take; use low, medium, high or xhigh.");
+        }
+        if (!thinks(request.getModel())) {
+            log.debug("Model {} has no extended thinking; reasoning effort {} is not sent to it", request.getModel(), effort);
+            return;
+        }
+        if (request.getTemperature() != null && request.getTemperature() != 1.0) {
+            throw new GatewayException("UNSUPPORTED_CAPABILITY", "reasoning_effort turns on Anthropic's extended "
+                    + "thinking, which takes no temperature but 1; send one or the other.");
+        }
+        if (request.getTopP() != null && request.getTopP() < 0.95) {
+            throw new GatewayException("UNSUPPORTED_CAPABILITY", "reasoning_effort turns on Anthropic's extended "
+                    + "thinking, which takes no top_p below 0.95; send one or the other.");
+        }
+        int answer = request.getMaxTokens() != null ? request.getMaxTokens() : DEFAULT_MAX_TOKENS;
+        body.put("max_tokens", budget + answer);
+        body.put("thinking", Map.of("type", "enabled", "budget_tokens", budget));
+    }
+
+    @Override
+    public boolean takesReasoningEffort() {
+        return true;
     }
 
     /** A thinking or redacted-thinking block in Anthropic's shape. */
@@ -578,9 +640,10 @@ public class AnthropicProvider extends AbstractLlmProvider {
                 ))
                 // Null where the upstream reported nothing: a zeroed block would claim the call
                 // consumed nothing, which the metering path cannot tell from a real zero.
-                .usage(ar.getUsage() == null ? null
-                        : usage(ar.getUsage().getInputTokens(), ar.getUsage().getCacheReadInputTokens(),
-                                ar.getUsage().getCacheCreationInputTokens(), ar.getUsage().getOutputTokens()))
+                .usage(ar.getUsage() == null ? null : withThinking(
+                        usage(ar.getUsage().getInputTokens(), ar.getUsage().getCacheReadInputTokens(),
+                                ar.getUsage().getCacheCreationInputTokens(), ar.getUsage().getOutputTokens()),
+                        ar.getUsage().getOutputTokensDetails()))
                 .gatewayHeaders(gatewayHeaders)
                 .build();
     }
@@ -618,6 +681,14 @@ public class AnthropicProvider extends AbstractLlmProvider {
      * cache. They are input all the same, so the gateway's input count adds them back, and they are
      * reported as the breakdown of that count.
      */
+    /** The usage with the thinking tokens, when Anthropic reported them, as the reasoning part of the output. */
+    private static ChatResponse.Usage withThinking(ChatResponse.Usage usage, JsonNode outputDetails) {
+        if (outputDetails != null) {
+            usage.setReasoningTokens(outputDetails.path("thinking_tokens").asInt(0));
+        }
+        return usage;
+    }
+
     static ChatResponse.Usage usage(int input, int cacheRead, int cacheWrite, int output) {
         int prompt = input + cacheRead + cacheWrite;
         return ChatResponse.Usage.builder()
@@ -1013,6 +1084,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
             @JsonProperty("output_tokens") private int outputTokens;
             @JsonProperty("cache_read_input_tokens")     private int cacheReadInputTokens;
             @JsonProperty("cache_creation_input_tokens") private int cacheCreationInputTokens;
+            /** The thinking part of {@code output_tokens}, when Anthropic reports it. */
+            @JsonProperty("output_tokens_details") private JsonNode outputTokensDetails;
         }
     }
 
