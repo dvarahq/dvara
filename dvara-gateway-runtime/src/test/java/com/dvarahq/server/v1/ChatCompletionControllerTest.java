@@ -1855,4 +1855,19 @@ class ChatCompletionControllerTest {
         assertThat(body).contains("\"prompt_tokens_details\":{\"cached_tokens\":1024}")
                 .contains("\"completion_tokens_details\":{\"reasoning_tokens\":448}");
     }
+
+    /** SDKs send Accept: text/event-stream with a streamed request; a refusal must still reach them as JSON. */
+    @Test
+    void aRefusedStreamedRequest_isItsJsonError_whenTheClientAcceptsOnlyEventStreams() throws Exception {
+        mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content("""
+                                {"model": "gpt-4o", "stream": true, "n": 2,
+                                 "messages": [{"role": "user", "content": "hi"}]}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.error.code").value("unsupported_capability"));
+    }
 }

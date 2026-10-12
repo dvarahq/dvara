@@ -555,4 +555,20 @@ class MessagesControllerTest {
                 .usage(usage)
                 .build();
     }
+
+    /** SDKs send Accept: text/event-stream with a streamed request; a refusal must still reach them as JSON. */
+    @Test
+    void aRefusedStreamedRequest_isItsJsonError_whenTheClientAcceptsOnlyEventStreams() throws Exception {
+        mockMvc.perform(post("/v1/messages").header("anthropic-version", "2099-01-01")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content("""
+                                {"model": "claude-sonnet-4-5", "max_tokens": 10, "stream": true,
+                                 "messages": [{"role": "user", "content": "hi"}]}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                        .contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.type").value("error"));
+    }
 }

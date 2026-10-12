@@ -441,4 +441,19 @@ class ResponsesControllerTest {
         assertThat(body).contains("response.failed");
         assertThat(body).doesNotContain("response.completed");
     }
+
+    /** SDKs send Accept: text/event-stream with a streamed request; a refusal must still reach them as JSON. */
+    @Test
+    void aRefusedStreamedRequest_isItsJsonError_whenTheClientAcceptsOnlyEventStreams() throws Exception {
+        mockMvc.perform(post("/v1/responses")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content("""
+                                {"model": "gpt-4o", "stream": true, "input": "hi", "store": true}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.error.code").value("unsupported_capability"));
+    }
+
 }
