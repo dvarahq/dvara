@@ -298,7 +298,13 @@ key as its API key.
   `web_search = "disabled"`. So are `store: true`, `previous_response_id`, `background`, a `service_tier`
   other than `auto` or `default`, file parts, and input item types the gateway does not read.
   On `/v1/chat/completions`, `reasoning_effort` goes to OpenAI and Azure OpenAI as sent, so a model's own
-  refusal (for example of function tools with an effort) reaches the client. On Anthropic, and so on
+  refusal reaches the client. A chat request that has function tools and an effort other than `none`,
+  which OpenAI's Chat Completions refuses on its newest models, is sent to the provider's Responses API
+  instead and answered in the Chat Completions shape, whole or streamed: text, function and custom tool
+  calls, finish reasons, usage with cached and reasoning tokens, and the provider's own error. `stop`,
+  `seed` and the penalties have no place in the Responses API, so such a request with one of them is
+  refused. Encrypted reasoning cannot come back over Chat Completions, so each chat turn starts without the
+  reasoning of the turn before; a client that wants it kept uses `/v1/responses`. On Anthropic, and so on
   `/v1/cursor` with a `-thinking-<effort>` model, it turns on extended thinking with a budget of 1024
   (`low`), 4096 (`medium`), 16384 (`high`) or 32000 (`xhigh`) tokens, added to `max_tokens` so the answer
   keeps its room; `none` and `minimal` ask for none. Thinking takes no temperature but 1 and no `top_p`
