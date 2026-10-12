@@ -20,7 +20,10 @@
             <includeMdcKeyName>tokens_prompt</includeMdcKeyName>
             <includeMdcKeyName>tokens_completion</includeMdcKeyName>
             <includeMdcKeyName>tokens_total</includeMdcKeyName>
+            <includeMdcKeyName>tokens_cached</includeMdcKeyName>
+            <includeMdcKeyName>tokens_reasoning</includeMdcKeyName>
             <includeMdcKeyName>error_code</includeMdcKeyName>
+            <includeMdcKeyName>priority_tier</includeMdcKeyName>
             <includeMdcKeyName>span_id</includeMdcKeyName>
             <includeMdcKeyName>traceId</includeMdcKeyName>
             <includeMdcKeyName>spanId</includeMdcKeyName>

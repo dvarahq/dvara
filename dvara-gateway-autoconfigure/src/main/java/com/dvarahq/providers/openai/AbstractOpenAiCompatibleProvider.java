@@ -159,6 +159,17 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         return null;
     }
 
+    @Override
+    public boolean takesResponsesApi() {
+        return responsesUri() != null;
+    }
+
+    /** OpenAI's {@code parallel_tool_calls}, sent where the tuning fields are. */
+    @Override
+    public boolean canDisableParallelToolCalls() {
+        return takesOpenAiTuning();
+    }
+
     protected Object[] responsesUriVars(ChatRequest request) {
         return new Object[0];
     }
@@ -371,8 +382,10 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         if (request.getStop() != null) body.put("stop", request.getStop());
         if (request.getSeed() != null) body.put("seed", request.getSeed());
         if (request.getUser() != null) body.put("user", request.getUser());
+        if (takesReasoningEffort() && request.getReasoningEffort() != null) {
+            body.put("reasoning_effort", request.getReasoningEffort());
+        }
         if (takesOpenAiTuning()) {
-            if (request.getReasoningEffort() != null) body.put("reasoning_effort", request.getReasoningEffort());
             if (request.getVerbosity() != null) body.put("verbosity", request.getVerbosity());
             if (request.getPromptCacheKey() != null) body.put("prompt_cache_key", request.getPromptCacheKey());
         }
@@ -441,6 +454,9 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .collect(Collectors.toList()));
         if (request.getToolChoice() != null) {
             body.put("tool_choice", request.getToolChoice());
+        }
+        if (Boolean.FALSE.equals(request.getParallelToolCalls()) && canDisableParallelToolCalls()) {
+            body.put("parallel_tool_calls", false);
         }
     }
 

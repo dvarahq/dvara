@@ -173,7 +173,7 @@ public class ResponsesController {
             log.warn("A Responses API request could not be kept as it came; it is translated on every route");
         }
         internal = internal.toBuilder().openAiResponses(passthrough).build();
-        ResponsesTools.Names names = ResponsesTools.read(request.getTools()).names();
+        ResponsesTools.Names names = readTools(request).names();
 
         if (stream) {
             return handleStreaming(internal, names, traceId, httpRequest, httpResponse);
@@ -306,6 +306,7 @@ public class ResponsesController {
                     }
                 };
                 boolean sawDone = false;
+                Object providerUsage = null;
                 while (!completed.get() && chunks.hasNext()) {   // cancellation first; see ChatCompletionController
                     SseChunk chunk = chunks.next();
                     // Before the chunk is written: a stream that must end does not send it.
@@ -334,6 +335,8 @@ public class ResponsesController {
                     com.dvarahq.core.model.ResponsesEvent event = chunk.getResponsesEvent();
                     if (event != null && !held && !items.started) {
                         relay.send(event);
+                    } else if (event != null && held && chunk.isDone()) {
+                        providerUsage = Relay.usage(event);
                     } else if (event != null && held) {
                         // Withheld content arrives later as the guard's own chunks; an item the gateway does not
                         // read, such as encrypted reasoning, is kept from the event that finishes it.
@@ -379,7 +382,9 @@ public class ResponsesController {
                     List<Map<String, Object>> finished = items.finish();
                     Map<String, Object> respCompleted = responseObject(responseId, model, "completed", finished, createdAt);
                     // The provider's own count, when it reported one; a client keeps its context budget from it.
-                    if (reportedUsage.get() != null) {
+                    if (providerUsage != null) {
+                        respCompleted.put("usage", providerUsage);   // as the provider sent it
+                    } else if (reportedUsage.get() != null) {
                         respCompleted.put("usage", ResponseResult.Usage.from(reportedUsage.get()));
                     }
                     emit(emitter, "response.completed", seq, mapOf("response", respCompleted));
@@ -476,6 +481,7 @@ public class ResponsesController {
         private final Map<Integer, Call> calls = new LinkedHashMap<>();
 
         private final class Call {
+            final boolean search;
             final boolean custom;
             final String itemId;
             final int outputIndex;
@@ -484,8 +490,9 @@ public class ResponsesController {
             final StringBuilder arguments = new StringBuilder();
 
             Call(int outputIndex, String callId, String travelling) {
+                this.search = names.isToolSearch(travelling);
                 this.custom = names.isCustom(travelling);
-                this.itemId = (custom ? "ctc_" : "fc_") + shortId();
+                this.itemId = (search ? "tsc_" : custom ? "ctc_" : "fc_") + shortId();
                 this.outputIndex = outputIndex;
                 this.callId = callId;
                 this.travelling = travelling;
@@ -497,7 +504,10 @@ public class ResponsesController {
 
             Map<String, Object> item(String status) {
                 boolean done = "completed".equals(status);
-                Map<String, Object> item = custom
+                Map<String, Object> item = search
+                        ? mapOf("type", "tool_search_call", "id", itemId, "call_id", callId, "execution", "client",
+                                "arguments", done ? parseArguments(arguments.toString()) : Map.of(), "status", status)
+                        : custom
                         ? mapOf("type", "custom_tool_call", "id", itemId, "call_id", callId, "name", names.name(travelling),
                                 "input", done ? input() : "", "status", status)
                         : mapOf("type", "function_call", "id", itemId, "call_id", callId, "name", names.name(travelling),
@@ -551,7 +561,7 @@ public class ResponsesController {
             if (fragment != null && !fragment.isEmpty()) {
                 call.arguments.append(fragment);
                 // A custom call's input arrives wrapped as JSON arguments, so it is sent whole when the call ends.
-                if (!call.custom) {
+                if (!call.custom && !call.search) {
                     emit(emitter, "response.function_call_arguments.delta", seq,
                             mapOf("item_id", call.itemId, "output_index", call.outputIndex, "delta", fragment));
                 }
@@ -565,7 +575,9 @@ public class ResponsesController {
             }
             finishMessage();
             for (Call call : calls.values()) {
-                if (call.custom) {
+                if (call.search) {
+                    // A tool search's arguments are an object, sent whole on the item.
+                } else if (call.custom) {
                     String input = call.input();
                     if (!input.isEmpty()) {
                         emit(emitter, "response.custom_tool_call_input.delta", seq,
@@ -672,6 +684,17 @@ public class ResponsesController {
             completedSent = true;
         }
 
+        /** The usage object of a {@code response.completed} or {@code response.incomplete} event, as sent; else null. */
+        static Object usage(com.dvarahq.core.model.ResponsesEvent event) {
+            try {
+                Map<String, Object> response = asMap(JsonMapper.instance().readValue(event.data(),
+                        new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() { }).get("response"));
+                return response == null ? null : response.get("usage");
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
         /** The item a {@code response.output_item.done} event finishes, when it is not one the gateway reads. */
         static Map<String, Object> unreadItem(com.dvarahq.core.model.ResponsesEvent event) {
             if (!"response.output_item.done".equals(event.type())) {
@@ -731,9 +754,6 @@ public class ResponsesController {
                             + "output would be absent from the response. Only " + INCLUDE_ACCEPTED + " is accepted.");
                 }
             }
-        }
-        if (Boolean.FALSE.equals(r.getParallelToolCalls())) {
-            throw unsupported("parallel_tool_calls=false is not supported on /v1/responses");
         }
         if (r.getServiceTier() != null && !"auto".equals(r.getServiceTier()) && !"default".equals(r.getServiceTier())) {
             throw unsupported("service_tier " + r.getServiceTier() + " is not supported on /v1/responses; "
@@ -796,8 +816,10 @@ public class ResponsesController {
         if (messages.isEmpty()) {
             throw new GatewayException("INVALID_REQUEST", "input is required");
         }
-        List<com.dvarahq.core.model.ToolDefinition> tools = ResponsesTools.read(r.getTools()).tools();
+        ResponsesTools.Read read = readTools(r);
+        List<com.dvarahq.core.model.ToolDefinition> tools = read.tools();
         return ChatRequest.builder()
+                .responsesApiOnly(read.responsesApiOnly())
                 .model(r.getModel())
                 .messages(messages)
                 .stream(Boolean.TRUE.equals(r.getStream()))
@@ -809,11 +831,26 @@ public class ResponsesController {
                 .user(endUser(r))
                 .tools(tools)
                 .toolChoice(ResponsesTools.toolChoice(r.getToolChoice(), tools != null))
+                .parallelToolCalls(r.getParallelToolCalls())
                 .reasoningEffort(reasoningEffort(r.getReasoning()))
                 .verbosity(verbosity(r.getText()))
                 .promptCacheKey(r.getPromptCacheKey() == null || r.getPromptCacheKey().isBlank()
                         ? null : r.getPromptCacheKey())
                 .build();
+    }
+
+    /** The request's tools, with the tools its input items add: {@code additional_tools} and tool search results. */
+    static ResponsesTools.Read readTools(ResponseRequest r) {
+        List<Object> added = new ArrayList<>();
+        if (r.getInput() instanceof List<?> items) {
+            for (Object item : items) {
+                if (item instanceof Map<?, ?> m && ("additional_tools".equals(m.get("type"))
+                        || "tool_search_output".equals(m.get("type"))) && m.get("tools") instanceof List<?> t) {
+                    added.addAll(t);
+                }
+            }
+        }
+        return ResponsesTools.read(r.getTools(), added);
     }
 
     /** The end-user id: {@code safety_identifier} if sent, else {@code user}; blank is none (#54). */
@@ -843,12 +880,15 @@ public class ResponsesController {
                 String type = m.get("type") == null ? "message" : m.get("type").toString();
                 switch (type) {
                     case "message" -> messages.add(parseInputItem(m));
-                    case "function_call", "custom_tool_call" -> ResponsesTools.addFunctionCall(messages, m);
-                    case "function_call_output", "custom_tool_call_output" ->
+                    case "function_call", "custom_tool_call", "tool_search_call" ->
+                            ResponsesTools.addFunctionCall(messages, m);
+                    case "function_call_output", "custom_tool_call_output", "tool_search_output" ->
                             messages.add(ResponsesTools.functionCallOutput(m));
                     // A reasoning item carries one provider's encrypted reasoning from an earlier answer. Chat
                     // completions cannot take it back, and the gateway never returns one, so it is left out.
                     case "reasoning" -> { }
+                    // Tools for the next call, read into the request's tools; not a turn of the conversation.
+                    case "additional_tools" -> { }
                     // Read as a message, any other item would reach the model as an empty turn.
                     default -> throw unsupported("input items of type " + type
                             + " are not supported on /v1/responses.");
@@ -954,7 +994,10 @@ public class ResponsesController {
             ResponseResult.OutputItem.OutputItemBuilder item = ResponseResult.OutputItem.builder()
                     .status("completed").callId(call.getId())
                     .name(names.name(travelling)).namespace(names.namespace(travelling));
-            if (names.isCustom(travelling)) {
+            if (names.isToolSearch(travelling)) {
+                item.type("tool_search_call").id("tsc_" + shortId()).execution("client")
+                        .arguments(parseArguments(call.getArguments()));
+            } else if (names.isCustom(travelling)) {
                 item.type("custom_tool_call").id("ctc_" + shortId())
                         .input(com.dvarahq.core.model.ToolDefinition.customInput(call.getArguments()));
             } else {
@@ -973,6 +1016,15 @@ public class ResponsesController {
                 .output(output)
                 .usage(usage)
                 .build();
+    }
+
+    /** A tool search's arguments as the object the API carries; the text as it is when it is not JSON. */
+    static Object parseArguments(String arguments) {
+        try {
+            return arguments == null || arguments.isBlank() ? Map.of() : JsonMapper.instance().readValue(arguments, Object.class);
+        } catch (Exception e) {
+            return arguments;
+        }
     }
 
     private static List<com.dvarahq.core.model.ToolCall> toolCalls(ChatResponse resp) {

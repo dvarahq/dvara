@@ -39,6 +39,42 @@ public class OpenAiUsage {
     @JsonProperty("completion_tokens_details") private CompletionDetails completionTokensDetails;
     @JsonProperty("prompt_cache_hit_tokens") private int promptCacheHitTokens;
     @JsonProperty("cached_tokens")           private int cachedTokens;
+    /** The block as it came, every field included, for a caller of the same API. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.util.Map<String, Object> asSent;
+
+    /** Reads a block, keeping it as it came beside the fields the gateway reads. */
+    @com.fasterxml.jackson.annotation.JsonCreator(mode = com.fasterxml.jackson.annotation.JsonCreator.Mode.DELEGATING)
+    public static OpenAiUsage of(java.util.Map<String, Object> block) {
+        OpenAiUsage usage = com.dvarahq.core.util.JsonMapper.instance().convertValue(block, Fields.class).usage();
+        usage.asSent = block == null ? null : new java.util.LinkedHashMap<>(block);
+        return usage;
+    }
+
+    /** The fields alone, bound by Jackson without the creator above. */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class Fields {
+        @JsonProperty("prompt_tokens")           private int promptTokens;
+        @JsonProperty("completion_tokens")       private int completionTokens;
+        @JsonProperty("total_tokens")            private int totalTokens;
+        @JsonProperty("prompt_tokens_details")   private PromptDetails promptTokensDetails;
+        @JsonProperty("completion_tokens_details") private CompletionDetails completionTokensDetails;
+        @JsonProperty("prompt_cache_hit_tokens") private int promptCacheHitTokens;
+        @JsonProperty("cached_tokens")           private int cachedTokens;
+
+        OpenAiUsage usage() {
+            OpenAiUsage u = new OpenAiUsage();
+            u.promptTokens = promptTokens;
+            u.completionTokens = completionTokens;
+            u.totalTokens = totalTokens;
+            u.promptTokensDetails = promptTokensDetails;
+            u.completionTokensDetails = completionTokensDetails;
+            u.promptCacheHitTokens = promptCacheHitTokens;
+            u.cachedTokens = cachedTokens;
+            return u;
+        }
+    }
 
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -63,6 +99,7 @@ public class OpenAiUsage {
                 .totalTokens(totalTokens)
                 .cachedInputTokens(cached)
                 .reasoningTokens(reasoning)
+                .asSent(asSent)
                 .build();
     }
 }

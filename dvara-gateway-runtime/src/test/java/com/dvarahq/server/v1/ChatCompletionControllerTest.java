@@ -30,6 +30,7 @@ import com.dvarahq.core.model.ContentBlock;
 import com.dvarahq.core.model.MultimodalMessage;
 import com.dvarahq.core.model.SseChunk;
 import com.dvarahq.core.model.ToolCallDelta;
+import com.dvarahq.core.model.ToolDefinition;
 import org.mockito.ArgumentCaptor;
 import static org.mockito.ArgumentMatchers.eq;
 import com.dvarahq.core.pii.PiiEnforcer;
@@ -1768,7 +1769,7 @@ class ChatCompletionControllerTest {
 
     @Test
     void fieldsTheGatewayCannotHonourAreRefusedNotDropped() throws Exception {
-        for (String extra : List.of("\"logprobs\": true", "\"top_logprobs\": 2", "\"parallel_tool_calls\": false")) {
+        for (String extra : List.of("\"logprobs\": true", "\"top_logprobs\": 2")) {
             mockMvc.perform(post("/v1/chat/completions")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"model\": \"gpt-4o\", \"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}], "
@@ -1885,5 +1886,206 @@ class ChatCompletionControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.error.code").value("unsupported_capability"));
+    }
+
+    /** One tool call per turn reaches the provider; a provider that can honour it is sent it. */
+    @Test
+    void parallelToolCallsFalse_reachesTheProvider() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("chatcmpl-abc", "gpt-4o", "ok"));
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}],
+                                 "parallel_tool_calls": false,
+                                 "tools": [{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}]}
+                                """))
+                .andExpect(status().isOk());
+
+        verify(dispatcher).chat(argThat(r -> Boolean.FALSE.equals(r.getParallelToolCalls())));
+    }
+
+    // -------- the provider's usage block as sent, and the token parts on the access line --------
+
+    @Test
+    void streaming_theUsageBlockGoesOnAsTheProviderSentIt_zerosIncluded() throws Exception {
+        java.util.Map<String, Object> asSent = new java.util.LinkedHashMap<>();
+        asSent.put("prompt_tokens", 6142);
+        asSent.put("completion_tokens", 111);
+        asSent.put("total_tokens", 6253);
+        asSent.put("prompt_tokens_details", java.util.Map.of("cached_tokens", 5760, "audio_tokens", 0));
+        asSent.put("completion_tokens_details", java.util.Map.of("reasoning_tokens", 0, "audio_tokens", 0,
+                "accepted_prediction_tokens", 0, "rejected_prediction_tokens", 0));
+        ChatResponse.Usage usage = new ChatResponse.Usage(6142, 111, 6253, 5760, 0, 0, asSent);
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c").model("gpt-4o").delta("Hi").done(false).build(),
+                SseChunk.builder().id("c").model("gpt-4o").finishReason("stop").done(true).usage(usage).build()).iterator());
+        MvcResult mvcResult = mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model": "gpt-4o", "stream": true, "stream_options": {"include_usage": true},
+                                 "messages": [{"role": "user", "content": "Hi"}]}
+                                """))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        String body = mockMvc.perform(asyncDispatch(mvcResult)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("\"completion_tokens_details\":{").contains("\"reasoning_tokens\":0")
+                .contains("\"rejected_prediction_tokens\":0")
+                .contains("\"audio_tokens\":0");
+        assertThat(mvcResult.getRequest().getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_TOKENS_CACHED))
+                .isEqualTo("5760");
+    }
+
+    @Test
+    void sync_theTokenPartsReachTheAccessLine() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(ChatResponse.builder().id("c").model("gpt-4o").created(1)
+                .choices(List.of(ChatResponse.Choice.builder().index(0)
+                        .message(com.dvarahq.core.model.MultimodalMessage.assistant("ok")).finishReason("stop").build()))
+                .usage(ChatResponse.Usage.builder().promptTokens(6142).completionTokens(111).totalTokens(6253)
+                        .cachedInputTokens(5760).reasoningTokens(64).build()).build());
+
+        MvcResult result = mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model": "gpt-4o", "messages": [{"role": "user", "content": "Hi"}]}
+                                """))
+                .andExpect(status().isOk()).andReturn();
+
+        assertThat(result.getRequest().getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_TOKENS_CACHED)).isEqualTo("5760");
+        assertThat(result.getRequest().getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_TOKENS_REASONING)).isEqualTo("64");
+    }
+
+    // -------- custom tools (Copilot CLI's apply_patch; fixture captured live and redacted) --------
+
+    private String copilotTurn() throws Exception {
+        try (java.io.InputStream in = getClass().getResourceAsStream("/copilot/apply-patch-turn.json")) {
+            return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
+
+    @Test
+    void aCustomTool_reachesTheProvider_andItsCallComesBackAsCustom() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(ChatResponse.builder().id("c").model("gpt-5.4-mini").created(1)
+                .choices(List.of(ChatResponse.Choice.builder().index(0).finishReason("tool_calls")
+                        .message(com.dvarahq.core.model.MultimodalMessage.builder().role("assistant").content(List.of())
+                                .toolCalls(List.of(new com.dvarahq.core.model.ToolCall("call_p", "apply_patch",
+                                        ToolDefinition.customArguments("*** Begin Patch\n*** End Patch"))))
+                                .build())
+                        .build()))
+                .build());
+        String body = copilotTurn().replace("\"stream\": true", "\"stream\": false");
+
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.choices[0].message.tool_calls[0].type").value("custom"))
+                .andExpect(jsonPath("$.choices[0].message.tool_calls[0].custom.name").value("apply_patch"))
+                .andExpect(jsonPath("$.choices[0].message.tool_calls[0].custom.input").value("*** Begin Patch\n*** End Patch"))
+                .andExpect(jsonPath("$.choices[0].message.tool_calls[0].function").doesNotExist());
+
+        verify(dispatcher).chat(argThat(r -> r.getTools().stream().anyMatch(t -> t.isCustom()
+                && "apply_patch".equals(t.getName()) && "lark".equals(t.getFormat().get("syntax"))
+                && String.valueOf(t.getFormat().get("definition")).startsWith("start: begin_patch"))));
+    }
+
+    @Test
+    void aCustomCallInTheHistory_keepsItsInput() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("c", "gpt-4o", "ok"));
+
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"model": "gpt-4o",
+                         "tools": [{"type": "custom", "custom": {"name": "apply_patch", "format": {"type": "text"}}}],
+                         "messages": [{"role": "user", "content": "fix it"},
+                                      {"role": "assistant", "content": null, "tool_calls": [
+                                          {"id": "call_p", "type": "custom", "custom": {"name": "apply_patch", "input": "*** Begin Patch"}}]},
+                                      {"role": "tool", "tool_call_id": "call_p", "content": "Done"}]}
+                        """))
+                .andExpect(status().isOk());
+
+        verify(dispatcher).chat(argThat(r -> {
+            var call = r.getMessages().get(1).getToolCalls().get(0);
+            return "apply_patch".equals(call.getName())
+                    && "*** Begin Patch".equals(ToolDefinition.customInput(call.getArguments()));
+        }));
+    }
+
+    @Test
+    void streaming_aCustomCall_comesBackInTheCustomChunkShape() throws Exception {
+        String args = ToolDefinition.customArguments("*** Begin Patch\n*** End Patch");
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c").model("gpt-5.4-mini")
+                        .toolCalls(List.of(ToolCallDelta.open(0, "call_p", "apply_patch", args.substring(0, 6)))).build(),
+                SseChunk.builder().id("c").model("gpt-5.4-mini")
+                        .toolCalls(List.of(ToolCallDelta.arguments(0, args.substring(6)))).build(),
+                SseChunk.builder().id("c").model("gpt-5.4-mini").finishReason("tool_calls").done(true).build()).iterator());
+
+        MvcResult mvcResult = mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON).content(copilotTurn()))
+                .andExpect(request().asyncStarted()).andReturn();
+        String body = mockMvc.perform(asyncDispatch(mvcResult)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("\"type\":\"custom\",\"custom\":{\"name\":\"apply_patch\",\"input\":\"\"}")
+                .contains("\"custom\":{\"input\":\"*** Begin Patch\\n*** End Patch\"}")
+                .doesNotContain("\"function\"");
+        assertThat(body.indexOf("*** End Patch")).isLessThan(body.indexOf("\"finish_reason\":\"tool_calls\""));
+    }
+
+    @Test
+    void aToolOfAnotherType_isRefusedNotDropped() throws Exception {
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}],
+                         "tools": [{"type": "web_search"}]}
+                        """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("unsupported_capability"))
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("web_search")));
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}],
+                         "tools": [{"type": "function"}]}
+                        """))
+                .andExpect(status().isBadRequest());
+        verify(dispatcher, org.mockito.Mockito.never()).chat(any());
+    }
+
+    /**
+     * The split a live OpenAI stream gives: the decoder opens the input as {"input":", and closes it with "} on the
+     * chunk carrying the finish. The closing fragment must join the held input, not leak as function arguments.
+     */
+    @Test
+    void streaming_aCustomCallClosedOnTheFinishChunk_isSentWhole() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c").model("gpt-5.4-mini")
+                        .toolCalls(List.of(ToolCallDelta.open(0, "call_p", "apply_patch", "{\"input\":\""))).build(),
+                SseChunk.builder().id("c").model("gpt-5.4-mini")
+                        .toolCalls(List.of(ToolCallDelta.arguments(0, "*** Begin Patch\\n*** End Patch"))).build(),
+                SseChunk.builder().id("c").model("gpt-5.4-mini").finishReason("tool_calls").done(true)
+                        .toolCalls(List.of(ToolCallDelta.arguments(0, "\"}"))).build()).iterator());
+
+        MvcResult mvcResult = mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON).content(copilotTurn()))
+                .andExpect(request().asyncStarted()).andReturn();
+        String body = mockMvc.perform(asyncDispatch(mvcResult)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("\"custom\":{\"input\":\"*** Begin Patch\\n*** End Patch\"}")
+                .doesNotContain("\"function\"")
+                .doesNotContain("{\\\"input\\\"");
+        assertThat(body.indexOf("*** End Patch")).isLessThan(body.indexOf("\"finish_reason\":\"tool_calls\""));
+    }
+
+    /** Never left out without a word: the effort reaches the dispatcher, which sends it where it is taken. */
+    @Test
+    void reasoningEffort_reachesTheProvider() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("c", "gpt-5.4-mini", "ok"));
+
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"model": "gpt-5.4-mini", "reasoning_effort": "medium",
+                         "messages": [{"role": "user", "content": "hi"}]}
+                        """))
+                .andExpect(status().isOk());
+
+        verify(dispatcher).chat(argThat(r -> "medium".equals(r.getReasoningEffort())));
     }
 }

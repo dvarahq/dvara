@@ -31,6 +31,18 @@ public class ToolCall {
     private String id;
     private String type;
     private FunctionCall function;
+    /** On a call of {@code type: "custom"}: the tool and the free-text input the model wrote. */
+    private CustomCall custom;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class CustomCall {
+        private String name;
+        private String input;
+    }
 
     @Data
     @Builder

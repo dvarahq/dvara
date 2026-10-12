@@ -76,6 +76,19 @@ public class ChatRequest {
      * providers are not sent it. Null when the client set none.
      */
     private String promptCacheKey;
+    /**
+     * OpenAI's {@code parallel_tool_calls}: false asks for at most one tool call per turn. Sent to a provider that
+     * can honour it (OpenAI's field, Anthropic's {@code disable_parallel_tool_use}); left out elsewhere. Null when
+     * the client did not say.
+     */
+    private Boolean parallelToolCalls;
+    /**
+     * What in this request only a provider with OpenAI's Responses API can serve, in plain words, for example a
+     * tool type the gateway cannot translate. Empty for every other request; a provider without that API is
+     * refused it.
+     */
+    @Builder.Default
+    private java.util.List<String> responsesApiOnly = java.util.List.of();
     private ResponseFormat responseFormat;
     private Map<String, Object> metadata;
 

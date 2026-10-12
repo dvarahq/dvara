@@ -206,4 +206,36 @@ class OpenAiResponsesRouteTest {
 
         server.verify();
     }
+
+    /** A stream as OpenAI sent it to Codex CLI (captured, redacted): text, then an apply_patch custom call. */
+    @Test
+    void aCapturedStream_isReadWhole() throws Exception {
+        String sse;
+        try (java.io.InputStream in = getClass().getResourceAsStream("/codex/custom-tool-stream.txt")) {
+            sse = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        server.expect(requestTo("https://api.openai.com/v1/responses"))
+                .andRespond(withSuccess(sse, MediaType.TEXT_EVENT_STREAM));
+
+        List<SseChunk> chunks = new ArrayList<>();
+        provider.streamChat(request("gpt-5.4")).forEachRemaining(chunks::add);
+
+        SseChunk last = chunks.get(chunks.size() - 1);
+        assertThat(last.isDone()).isTrue();
+        assertThat(last.getFinishReason()).isEqualTo("tool_calls");
+        assertThat(last.getUsage().getPromptTokens()).isGreaterThan(0);
+        StringBuilder args = new StringBuilder();
+        String name = null;
+        for (SseChunk c : chunks) {
+            if (c.getToolCalls() == null) continue;
+            for (var f : c.getToolCalls()) {
+                if (f.name() != null) name = f.name();
+                if (f.argumentsFragment() != null) args.append(f.argumentsFragment());
+            }
+        }
+        assertThat(name).isEqualTo("apply_patch");
+        String input = ToolDefinition.customInput(args.toString());
+        assertThat(input).startsWith("*** Begin Patch").contains("hello.py");
+        assertThat(sse).contains(com.dvarahq.core.util.JsonMapper.instance().writeValueAsString(input));
+    }
 }

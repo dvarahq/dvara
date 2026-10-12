@@ -272,6 +272,10 @@ key as its API key.
     one string argument, `input`, and the grammar in its description.
   - `namespace` tools, such as one MCP server's: each inner tool travels as `namespace__name` (cut to 64
     characters with a hash) and its calls come back under their own name and `namespace`.
+  - A client-run `tool_search` (`"execution": "client"`) is a function on a translated route, its calls coming
+    back as `tool_search_call`; the tools an `additional_tools` item or a `tool_search_output` brings are read
+    in. Any other tool type the gateway cannot translate (a `shell`, a `tool_search` the provider runs) goes
+    as it came to OpenAI or Azure OpenAI, and a request with one is refused on any other provider.
   - A tool's output can hold text and images. A provider that cannot take an image in a tool result
     (anything but Anthropic and Bedrock) gets it in a user message right after the results.
 
@@ -279,7 +283,8 @@ key as its API key.
   every field, tool and input item, including encrypted reasoning from an earlier answer
   (`include: ["reasoning.encrypted_content"]` and `reasoning` items), with only the edits governance makes
   (redacted text, the routed model, a token limit). The answer, whole or streamed event by event, comes
-  back as OpenAI sent it, with redacted text written back in place; usage counts cached and reasoning tokens.
+  back as OpenAI sent it, with redacted text written back in place, and its usage object exactly as sent.
+  The access log adds `tokens_cached` and `tokens_reasoning` when the provider reports them.
   When the streaming guard holds content back, the answer is rebuilt in the Responses shape and reasoning
   items are kept. On Azure the call goes to `{base-url}/v1/responses` with the deployment as `model`;
   `dvara.llm-gateway.providers.azure-openai.responses-api-version` adds an `api-version` (none by default).
@@ -287,8 +292,16 @@ key as its API key.
   your code does. Built-in tools (`web_search`, `file_search`, `code_interpreter`, `computer_use`, `mcp` and the rest)
   run at the provider, outside the gateway's checks, so they are refused; with Codex CLI, set
   `web_search = "disabled"`. So are `store: true`, `previous_response_id`, `background`, a `service_tier`
-  other than `auto` or `default`, `parallel_tool_calls: false`, file parts, and input item types the
-  gateway does not read. On a translated route, `reasoning.effort`, `text.verbosity` and
+  other than `auto` or `default`, file parts, and input item types the gateway does not read.
+  On `/v1/chat/completions`, `reasoning_effort` goes to OpenAI and Azure OpenAI as sent, so a model's own
+  refusal (for example of function tools with an effort) reaches the client; other providers are not sent
+  it, which is logged at DEBUG.
+  On `/v1/chat/completions` a `custom` tool (`{"type": "custom", "custom": {name, description, format}}`) is
+  sent to OpenAI as it is and to any other provider as a function with one `input` string; its calls come
+  back as `{"type": "custom", "custom": {name, input}}`, whole or, in a stream, with the input in one
+  fragment before the finish. A tool of any other type is refused there, never left out.
+  `parallel_tool_calls: false` goes to OpenAI as it is and to Anthropic as `disable_parallel_tool_use`; other
+  providers are not sent it (logged at DEBUG). The same holds on `/v1/chat/completions`. On a translated route, `reasoning.effort`, `text.verbosity` and
   `prompt_cache_key` are sent to OpenAI-shaped chat only where the provider takes them (logged at DEBUG
   when left out), and what only asks for reasoning output is accepted with no reasoning in the answer:
   `reasoning.summary`, `include: ["reasoning.encrypted_content"]`, `stream_options`, and `reasoning` items

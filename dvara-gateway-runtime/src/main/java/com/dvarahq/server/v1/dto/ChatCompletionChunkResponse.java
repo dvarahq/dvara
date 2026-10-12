@@ -83,6 +83,18 @@ public class ChatCompletionChunkResponse {
         private String id;
         private String type;
         private FunctionDelta function;
+        /** On a custom tool call: its name on the opener, its free-text input after. */
+        private CustomDelta custom;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class CustomDelta {
+        private String name;
+        private String input;
     }
 
     @Data

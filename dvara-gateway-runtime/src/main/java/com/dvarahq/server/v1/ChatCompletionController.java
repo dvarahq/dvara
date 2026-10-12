@@ -161,7 +161,7 @@ public class ChatCompletionController {
                 addGatewayHeaders(builder, response);
             }
             ContextResponseHeaders.apply(builder, ctx, policyDecision);
-            return builder.body(toExternal(response));
+            return builder.body(toExternal(response, customTools(prep.request())));
         } finally {
             executionService.releasePriority(ctx);
         }
@@ -230,6 +230,7 @@ public class ChatCompletionController {
                 upstream.set(chunks);
                 who = who.withUpstreamFrom(httpRequest);   // provider + credential, now known
                 boolean firstChunk = true;
+                CustomCalls customCalls = new CustomCalls(customTools(streamRequest));
                 boolean sawDone = false;
                 String streamId = null;
 
@@ -265,10 +266,31 @@ public class ChatCompletionController {
                             }
                         }
                     }
-                    ChatCompletionChunkResponse chunkResponse = toChunkResponse(chunk, firstChunk);
-                    String json = JsonMapper.instance().writeValueAsString(chunkResponse);
-                    emitter.send(SseEmitter.event().data(json, MediaType.APPLICATION_JSON));
-                    firstChunk = false;
+                    // The last chunk can carry fragments of a held custom call (an upstream closes the call's
+                    // arguments on its finish): its content goes first, so the hold has every fragment, then each
+                    // held call's whole input, then the finish.
+                    boolean flush = chunk.isDone();
+                    SseChunk content = flush ? chunk.toBuilder().finishReason(null).done(false).build() : chunk;
+                    ChatCompletionChunkResponse chunkResponse = toChunkResponse(content, firstChunk, customCalls);
+                    if (flush && customCalls.holding()) {
+                        if (chunkResponse != null) {
+                            emitter.send(SseEmitter.event().data(JsonMapper.instance().writeValueAsString(chunkResponse),
+                                    MediaType.APPLICATION_JSON));
+                            firstChunk = false;
+                        }
+                        emitter.send(SseEmitter.event().data(JsonMapper.instance().writeValueAsString(
+                                customCalls.inputs(chunk, firstChunk)), MediaType.APPLICATION_JSON));
+                        firstChunk = false;
+                        chunkResponse = toChunkResponse(chunk.toBuilder().delta(null).toolCalls(null).build(),
+                                firstChunk, customCalls);
+                    } else if (flush) {
+                        chunkResponse = toChunkResponse(chunk, firstChunk, customCalls);
+                    }
+                    if (chunkResponse != null) {
+                        String json = JsonMapper.instance().writeValueAsString(chunkResponse);
+                        emitter.send(SseEmitter.event().data(json, MediaType.APPLICATION_JSON));
+                        firstChunk = false;
+                    }
 
                     if (chunk.isDone()) {
                         sawDone = true;
@@ -374,11 +396,91 @@ public class ChatCompletionController {
         return emitter;
     }
 
+    /**
+     * Custom tool calls in a stream. A custom call's input travels as the JSON arguments {@code {"input": "..."}},
+     * which cannot be cut into input text as it streams, so its opener is sent at once and its whole input in one
+     * fragment just before the finish.
+     */
+    static final class CustomCalls {
+        private final java.util.Set<String> names;
+        private final Map<Integer, StringBuilder> held = new java.util.LinkedHashMap<>();
+
+        CustomCalls(java.util.Set<String> names) {
+            this.names = names;
+        }
+
+        boolean holding() {
+            return !held.isEmpty();
+        }
+
+        /** The fragment in the wire shape, or null when it is held. */
+        ChatCompletionChunkResponse.ToolCallDelta wire(ToolCallDelta call) {
+            boolean opener = call.id() != null || call.name() != null;
+            if (opener && names.contains(call.name())) {
+                held.put(call.index(), new StringBuilder(call.argumentsFragment() == null ? "" : call.argumentsFragment()));
+                return ChatCompletionChunkResponse.ToolCallDelta.builder().index(call.index()).id(call.id()).type("custom")
+                        .custom(new ChatCompletionChunkResponse.CustomDelta(call.name(), "")).build();
+            }
+            if (!opener && held.containsKey(call.index())) {
+                if (call.argumentsFragment() != null) {
+                    held.get(call.index()).append(call.argumentsFragment());
+                }
+                return null;
+            }
+            return ChatCompletionChunkResponse.ToolCallDelta.builder()
+                    .index(call.index())
+                    .id(call.id())
+                    .type(opener ? "function" : null)
+                    .function(ChatCompletionChunkResponse.FunctionDelta.builder()
+                            .name(call.name())
+                            .arguments(call.argumentsFragment() != null ? call.argumentsFragment() : opener ? "" : null)
+                            .build())
+                    .build();
+        }
+
+        /** A chunk carrying each held call's whole input; the calls are then no longer held. */
+        ChatCompletionChunkResponse inputs(SseChunk like, boolean firstChunk) {
+            List<ChatCompletionChunkResponse.ToolCallDelta> out = new java.util.ArrayList<>();
+            held.forEach((index, args) -> out.add(ChatCompletionChunkResponse.ToolCallDelta.builder().index(index)
+                    .custom(new ChatCompletionChunkResponse.CustomDelta(null, ToolDefinition.customInput(args.toString())))
+                    .build()));
+            held.clear();
+            return ChatCompletionChunkResponse.builder()
+                    .id(like.getId()).object("chat.completion.chunk").created(Instant.now().getEpochSecond())
+                    .model(like.getModel())
+                    .choices(List.of(ChatCompletionChunkResponse.Choice.builder().index(0)
+                            .delta(ChatCompletionChunkResponse.Delta.builder().role(firstChunk ? "assistant" : null)
+                                    .toolCalls(out).build())
+                            .build()))
+                    .build();
+        }
+    }
+
     private ChatCompletionChunkResponse toChunkResponse(SseChunk chunk, boolean firstChunk) {
+        return toChunkResponse(chunk, firstChunk, new CustomCalls(java.util.Set.of()));
+    }
+
+    /** The chunk in OpenAI's shape, or null when everything it carried is held. */
+    private ChatCompletionChunkResponse toChunkResponse(SseChunk chunk, boolean firstChunk, CustomCalls customCalls) {
+        List<ChatCompletionChunkResponse.ToolCallDelta> calls = null;
+        if (chunk.getToolCalls() != null && !chunk.getToolCalls().isEmpty()) {
+            calls = new java.util.ArrayList<>();
+            for (ToolCallDelta call : chunk.getToolCalls()) {
+                ChatCompletionChunkResponse.ToolCallDelta wire = customCalls.wire(call);
+                if (wire != null) calls.add(wire);
+            }
+            if (calls.isEmpty()) {
+                calls = null;
+                if ((chunk.getDelta() == null || chunk.getDelta().isEmpty()) && chunk.getFinishReason() == null
+                        && !chunk.isDone()) {
+                    return null;
+                }
+            }
+        }
         ChatCompletionChunkResponse.Delta delta = ChatCompletionChunkResponse.Delta.builder()
                 .role(firstChunk ? "assistant" : null)
                 .content(chunk.getDelta())
-                .toolCalls(toWireToolCalls(chunk.getToolCalls()))
+                .toolCalls(calls)
                 .build();
 
         return ChatCompletionChunkResponse.builder()
@@ -396,32 +498,6 @@ public class ChatCompletionController {
                 .build();
     }
 
-    /**
-     * The chunk's tool-call fragments in OpenAI's wire shape. An opener — the fragment that
-     * names the call — carries {@code type: "function"} and {@code arguments: ""} when it brought no
-     * argument text, as OpenAI's does, because SDKs that assemble a call concatenate onto that field
-     * and a missing one breaks the concatenation. A continuation carries only its slice.
-     */
-    private static List<ChatCompletionChunkResponse.ToolCallDelta> toWireToolCalls(List<ToolCallDelta> calls) {
-        if (calls == null || calls.isEmpty()) {
-            return null;
-        }
-        List<ChatCompletionChunkResponse.ToolCallDelta> out = new java.util.ArrayList<>(calls.size());
-        for (ToolCallDelta call : calls) {
-            boolean opener = call.id() != null || call.name() != null;
-            out.add(ChatCompletionChunkResponse.ToolCallDelta.builder()
-                    .index(call.index())
-                    .id(call.id())
-                    .type(opener ? "function" : null)
-                    .function(ChatCompletionChunkResponse.FunctionDelta.builder()
-                            .name(call.name())
-                            .arguments(call.argumentsFragment() != null ? call.argumentsFragment() : opener ? "" : null)
-                            .build())
-                    .build());
-        }
-        return out;
-    }
-
     // -------------------------------------------------------------------------
     // Mapping: external DTO ↔ internal model
     // -------------------------------------------------------------------------
@@ -435,15 +511,11 @@ public class ChatCompletionController {
                     "n must be 1 on /v1/chat/completions; one choice is returned");
         }
         // Fields the gateway cannot honour are refused rather than dropped with a 200. The harmless
-        // values (logprobs false, parallel_tool_calls true, top_logprobs 0) ask for nothing extra.
+        // values (logprobs false, top_logprobs 0) ask for nothing extra.
         if (Boolean.TRUE.equals(req.getLogprobs())
                 || (req.getTopLogprobs() != null && req.getTopLogprobs() > 0)) {
             throw new GatewayException("UNSUPPORTED_CAPABILITY",
                     "logprobs are not supported on /v1/chat/completions; the response carries none");
-        }
-        if (Boolean.FALSE.equals(req.getParallelToolCalls())) {
-            throw new GatewayException("UNSUPPORTED_CAPABILITY",
-                    "parallel_tool_calls=false is not supported on /v1/chat/completions");
         }
         Integer maxTokens = tokenLimit(req);
         List<MultimodalMessage> messages = req.getMessages().stream()
@@ -470,6 +542,10 @@ public class ChatCompletionController {
                 .responseFormat(parseResponseFormat(req.getResponseFormat()))
                 .tools(toToolDefinitions(req.getTools()))
                 .toolChoice(req.getToolChoice())
+                // Sent to a provider that can honour it; left out, and logged, for one that cannot.
+                .parallelToolCalls(req.getParallelToolCalls())
+                .reasoningEffort(req.getReasoningEffort() == null || req.getReasoningEffort().isBlank()
+                        ? null : req.getReasoningEffort())
                 .metadata(req.getMetadata())
                 .build();
     }
@@ -490,17 +566,33 @@ public class ChatCompletionController {
     }
 
     /**
-     * Maps OpenAI-style {@code tools[]} ({@code {type:"function", function:{name,
-     * description, parameters, strict}}}) to the internal {@link ToolDefinition}.
-     * Only {@code function} tools are relayed; malformed entries are skipped.
+     * Maps OpenAI-style {@code tools[]} to the internal {@link ToolDefinition}: a function
+     * ({@code {type:"function", function:{name, description, parameters, strict}}}), or a custom tool
+     * ({@code {type:"custom", custom:{name, description, format}}}), whose input is free text. OpenAI takes a
+     * custom tool as it is; another provider is given a function with one string argument, {@code input}. Any
+     * other entry is refused: a tool is never dropped without a word.
      */
     @SuppressWarnings("unchecked")
     private static List<ToolDefinition> toToolDefinitions(List<Object> tools) {
         if (tools == null || tools.isEmpty()) return null;
         List<ToolDefinition> out = new java.util.ArrayList<>();
         for (Object t : tools) {
-            if (!(t instanceof Map<?, ?> map)) continue;
+            if (!(t instanceof Map<?, ?> map)) {
+                throw new GatewayException("INVALID_REQUEST", "each entry of tools must be an object");
+            }
+            Object type = map.get("type");
+            if ("custom".equals(type)) {
+                out.add(customTool(map.get("custom")));
+                continue;
+            }
             Object fn = map.get("function");
+            if (type != null && !"function".equals(type)) {
+                throw new GatewayException("UNSUPPORTED_CAPABILITY", "the tool type " + type
+                        + " is not supported on /v1/chat/completions; use function or custom tools.");
+            }
+            if (!(fn instanceof Map<?, ?>)) {
+                throw new GatewayException("INVALID_REQUEST", "a function tool needs a function object");
+            }
             if (fn instanceof Map<?, ?> function) {
                 Object name = function.get("name");
                 Object desc = function.get("description");
@@ -518,11 +610,51 @@ public class ChatCompletionController {
         return out.isEmpty() ? null : out;
     }
 
-    /** DTO {@code tool_calls} → internal {@link com.dvarahq.core.model.ToolCall}. */
+    /**
+     * A custom tool in Chat Completions' shape, read into the Responses API's shape the gateway carries:
+     * {@code format: {type: grammar, grammar: {syntax, definition}}} becomes {@code {type: grammar, syntax,
+     * definition}}.
+     */
+    @SuppressWarnings("unchecked")
+    private static ToolDefinition customTool(Object custom) {
+        if (!(custom instanceof Map<?, ?> c) || c.get("name") == null || c.get("name").toString().isBlank()) {
+            throw new GatewayException("INVALID_REQUEST", "a custom tool needs a custom object with a name");
+        }
+        Map<String, Object> format = null;
+        if (c.get("format") instanceof Map<?, ?> f) {
+            String formatType = String.valueOf(f.get("type"));
+            if ("grammar".equals(formatType) && f.get("grammar") instanceof Map<?, ?> g
+                    && g.get("syntax") != null && g.get("definition") != null) {
+                format = Map.of("type", "grammar", "syntax", g.get("syntax").toString(),
+                        "definition", g.get("definition").toString());
+            } else if ("text".equals(formatType)) {
+                format = Map.of("type", "text");
+            } else {
+                throw new GatewayException("INVALID_REQUEST", "the format of custom tool " + c.get("name")
+                        + " must be text or a grammar with syntax and definition");
+            }
+        } else if (c.get("format") != null) {
+            throw new GatewayException("INVALID_REQUEST", "the format of custom tool " + c.get("name") + " must be an object");
+        }
+        return ToolDefinition.builder().name(c.get("name").toString())
+                .description(c.get("description") == null ? null : c.get("description").toString())
+                .custom(true).format(format).build();
+    }
+
+    /**
+     * DTO {@code tool_calls} → internal {@link com.dvarahq.core.model.ToolCall}. A custom call's input travels as
+     * the arguments {@code {"input": "..."}}, the form every provider can be given.
+     */
     private static List<com.dvarahq.core.model.ToolCall> toInternalToolCalls(List<ToolCall> dtoCalls) {
         if (dtoCalls == null || dtoCalls.isEmpty()) return null;
         return dtoCalls.stream()
-                .map(tc -> com.dvarahq.core.model.ToolCall.builder()
+                .map(tc -> tc.getCustom() != null || "custom".equals(tc.getType())
+                        ? com.dvarahq.core.model.ToolCall.builder()
+                                .id(tc.getId())
+                                .name(tc.getCustom() != null ? tc.getCustom().getName() : null)
+                                .arguments(ToolDefinition.customArguments(tc.getCustom() != null ? tc.getCustom().getInput() : ""))
+                                .build()
+                        : com.dvarahq.core.model.ToolCall.builder()
                         .id(tc.getId())
                         .name(tc.getFunction() != null ? tc.getFunction().getName() : null)
                         .arguments(tc.getFunction() != null ? tc.getFunction().getArguments() : null)
@@ -610,11 +742,18 @@ public class ChatCompletionController {
         throw new GatewayException("INVALID_REQUEST", "content must be a string or an array of content parts");
     }
 
-    private ChatCompletionResponse toExternal(ChatResponse resp) {
+    /** The names of the request's custom tools: their calls go back as custom calls. */
+    static java.util.Set<String> customTools(ChatRequest request) {
+        return request.getTools() == null ? java.util.Set.of() : request.getTools().stream()
+                .filter(ToolDefinition::isCustom).map(ToolDefinition::getName)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private ChatCompletionResponse toExternal(ChatResponse resp, java.util.Set<String> customTools) {
         List<ChatCompletionResponse.Choice> choices = resp.getChoices().stream()
                 .map(c -> ChatCompletionResponse.Choice.builder()
                         .index(c.getIndex())
-                        .message(toExternalMessage(c.getMessage()))
+                        .message(toExternalMessage(c.getMessage(), customTools))
                         .finishReason(c.getFinishReason())
                         .build())
                 .toList();
@@ -631,7 +770,7 @@ public class ChatCompletionController {
                 .build();
     }
 
-    private Message toExternalMessage(MultimodalMessage msg) {
+    private Message toExternalMessage(MultimodalMessage msg, java.util.Set<String> customTools) {
         String text = msg.getContent() == null ? "" : msg.getContent().stream()
                 .filter(b -> b instanceof ContentBlock.TextBlock)
                 .map(b -> ((ContentBlock.TextBlock) b).text())
@@ -640,14 +779,18 @@ public class ChatCompletionController {
         // relay the model's tool calls back to the client (OpenAI shape).
         if (msg.getToolCalls() != null && !msg.getToolCalls().isEmpty()) {
             builder.toolCalls(msg.getToolCalls().stream()
-                    .map(tc -> ToolCall.builder()
-                            .id(tc.getId())
-                            .type("function")
-                            .function(ToolCall.FunctionCall.builder()
-                                    .name(tc.getName())
-                                    .arguments(tc.getArguments())
+                    .map(tc -> customTools.contains(tc.getName())
+                            ? ToolCall.builder().id(tc.getId()).type("custom")
+                                    .custom(new ToolCall.CustomCall(tc.getName(), ToolDefinition.customInput(tc.getArguments())))
+                                    .build()
+                            : ToolCall.builder()
+                                    .id(tc.getId())
+                                    .type("function")
+                                    .function(ToolCall.FunctionCall.builder()
+                                            .name(tc.getName())
+                                            .arguments(tc.getArguments())
+                                            .build())
                                     .build())
-                            .build())
                     .toList());
         }
         return builder.build();

@@ -118,4 +118,53 @@ class ProviderShapesTest {
             logger.setLevel(before);
         }
     }
+
+    @Test
+    void parallelToolCallsFalse_leftOutForAProviderThatCannotHonourIt_isLogged() {
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProviderShapes.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        ch.qos.logback.classic.Level before = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            LlmProvider gemini = mock(LlmProvider.class);
+            when(gemini.name()).thenReturn("gemini");
+            ProviderShapes.forProvider(gemini, ChatRequest.builder().model("m")
+                    .messages(List.of(MultimodalMessage.user("hi"))).parallelToolCalls(false).build());
+
+            assertThat(appender.list).singleElement()
+                    .satisfies(e -> assertThat(e.getFormattedMessage()).contains("gemini").contains("parallel_tool_calls false"));
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(before);
+        }
+    }
+
+    @Test
+    void aProviderThatTakesTheEffortButNotTheOtherTuning_logsOnlyWhatItIsNotSent() {
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProviderShapes.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        ch.qos.logback.classic.Level before = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            LlmProvider azure = mock(LlmProvider.class);
+            when(azure.name()).thenReturn("azure-openai");
+            when(azure.takesReasoningEffort()).thenReturn(true);
+            ProviderShapes.forProvider(azure, ChatRequest.builder().model("m")
+                    .messages(List.of(MultimodalMessage.user("hi"))).reasoningEffort("medium").verbosity("low").build());
+
+            assertThat(appender.list).singleElement().satisfies(e -> assertThat(e.getFormattedMessage())
+                    .contains("verbosity low").doesNotContain("reasoning effort"));
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(before);
+        }
+    }
 }

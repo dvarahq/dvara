@@ -101,6 +101,24 @@ class GuardedSseIteratorTest {
         assertThat(result.getLast().isDone()).isTrue();
     }
 
+    /** A Responses API client is sent the provider's own completion; the guard's terminal keeps it, both modes. */
+    @Test
+    void theUpstreamTerminalsResponsesEvent_ridesOnTheGuardsTerminal() {
+        var completed = new com.dvarahq.core.model.ResponsesEvent("response.completed",
+                "{\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3}}}");
+        for (PiiAction action : List.of(PiiAction.LOG, PiiAction.REDACT)) {
+            var upstream = List.of(
+                    SseChunk.builder().delta("Hello").build(),
+                    SseChunk.builder().done(true).finishReason("stop").responsesEvent(completed).build()).iterator();
+
+            List<SseChunk> result = drain(new GuardedSseIterator(upstream, piiDetector, guardrailDetector,
+                    auditWriter, "t1", config(action, GuardrailAction.LOG)));
+
+            assertThat(result.getLast().isDone()).isTrue();
+            assertThat(result.getLast().getResponsesEvent()).as(action.name()).isEqualTo(completed);
+        }
+    }
+
     @Test
     void redactsPii_whenRedactMode() {
         when(piiDetector.scan(any(String.class), any())).thenReturn(

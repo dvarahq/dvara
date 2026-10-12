@@ -123,6 +123,11 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
     /** What the upstream's terminal chunk carried: the terminal this guard emits carries it too. */
     private ChatResponse.Usage lastUsage;
     private String lastFinishReason;
+    /**
+     * The upstream terminal's own Responses API event, kept for this guard's terminal: it holds the provider's
+     * whole response object and usage, which a client of the Responses API is sent as the provider wrote them.
+     */
+    private com.dvarahq.core.model.ResponsesEvent lastTerminalEvent;
     private boolean upstreamDone;
     private boolean finalized;
     private boolean terminated;
@@ -250,6 +255,7 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
             lastModel = chunk.getModel() != null ? chunk.getModel() : lastModel;
             if (chunk.getUsage() != null) lastUsage = chunk.getUsage();
             if (chunk.getFinishReason() != null) lastFinishReason = chunk.getFinishReason();
+            if (chunk.isDone() && chunk.getResponsesEvent() != null) lastTerminalEvent = chunk.getResponsesEvent();
 
             String delta = chunk.getDelta();
             List<ToolCallDelta> fragments = chunk.getToolCalls();
@@ -736,7 +742,8 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
                 .id(lastId).model(lastModel)
                 .delta(text.isEmpty() ? null : text)
                 .toolCalls(calls.isEmpty() ? null : List.copyOf(calls))
-                .finishReason(terminalFinishReason()).usage(lastUsage).done(true).build());
+                .finishReason(terminalFinishReason()).usage(lastUsage).done(true)
+                .responsesEvent(lastTerminalEvent).build());
         deliveredTerminal = true;
     }
 
@@ -744,7 +751,8 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
         if (!deliveredTerminal && upstreamFailure == null) {
             outQueue.add(SseChunk.builder()
                     .id(lastId).model(lastModel)
-                    .finishReason(terminalFinishReason()).usage(lastUsage).done(true).build());
+                    .finishReason(terminalFinishReason()).usage(lastUsage).done(true)
+                    .responsesEvent(lastTerminalEvent).build());
             deliveredTerminal = true;
         }
     }

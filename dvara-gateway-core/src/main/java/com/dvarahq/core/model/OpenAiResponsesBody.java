@@ -217,7 +217,7 @@ public final class OpenAiResponsesBody {
 
     /**
      * A response's output as the gateway's assistant message: each {@code output_text} part a text block, each
-     * function or custom tool call a tool call, in order. Reasoning and any other item is not read.
+     * function, custom or tool-search call a tool call, in order. Reasoning and any other item is not read.
      */
     public static MultimodalMessage responseMessage(JsonNode response) {
         List<ContentBlock> content = new ArrayList<>();
@@ -236,6 +236,8 @@ public final class OpenAiResponsesBody {
                 case "custom_tool_call" -> calls.add(ToolCall.builder().id(item.path("call_id").asText(null))
                         .name(callName(item))
                         .arguments(ToolDefinition.customArguments(item.path("input").asText(""))).build());
+                case "tool_search_call" -> calls.add(ToolCall.builder().id(item.path("call_id").asText(null))
+                        .name("tool_search").arguments(write(item.path("arguments"))).build());
                 default -> { }
             }
         }
@@ -308,6 +310,13 @@ public final class OpenAiResponsesBody {
                         return null;
                     }
                     putIfChanged(item, "input", ToolDefinition.customInput(call.next().getArguments()));
+                }
+                case "tool_search_call" -> {
+                    // Read for governance; its arguments are search terms, sent back as they came.
+                    if (!call.hasNext()) {
+                        return null;
+                    }
+                    call.next();
                 }
                 default -> { }
             }

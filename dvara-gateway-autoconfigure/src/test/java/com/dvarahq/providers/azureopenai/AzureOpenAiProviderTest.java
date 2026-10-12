@@ -399,4 +399,22 @@ class AzureOpenAiProviderTest {
 
         server.verify();
     }
+
+    @Test
+    void reasoningEffort_isSentAsTheClientSentIt() {
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo(
+                        org.hamcrest.Matchers.containsString("/chat/completions")))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.reasoning_effort").value("medium"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.verbosity").doesNotExist())
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess("""
+                        {"id":"c","object":"chat.completion","created":1,"model":"gpt-5-mini",
+                         "choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}]}
+                        """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.chat(com.dvarahq.core.model.ChatRequest.builder().model("azure/gpt-5-mini")
+                .messages(java.util.List.of(com.dvarahq.core.model.MultimodalMessage.user("hi")))
+                .reasoningEffort("medium").verbosity("low").build());
+
+        server.verify();
+    }
 }

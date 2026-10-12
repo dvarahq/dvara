@@ -119,15 +119,17 @@ public final class OpenAiResponsesStreamDecoder implements Iterator<SseChunk>, A
             case "response.output_item.added" -> {
                 JsonNode item = event.path("item");
                 String itemType = item.path("type").asText("");
-                if ("function_call".equals(itemType) || "custom_tool_call".equals(itemType)) {
+                if ("function_call".equals(itemType) || "custom_tool_call".equals(itemType)
+                        || "tool_search_call".equals(itemType)) {
                     String itemId = item.path("id").asText(null);
                     int index = callIndexes.computeIfAbsent(itemId, k -> callIndexes.size());
                     boolean custom = "custom_tool_call".equals(itemType);
                     if (custom) {
                         customCalls.add(itemId);
                     }
+                    String name = "tool_search_call".equals(itemType) ? "tool_search" : name(item);
                     chunk.toolCalls(List.of(ToolCallDelta.open(index, item.path("call_id").asText(null),
-                            name(item), custom ? "{\"input\":\"" : null)));
+                            name, custom ? "{\"input\":\"" : null)));
                 }
             }
             case "response.function_call_arguments.delta" -> {
@@ -146,7 +148,12 @@ public final class OpenAiResponsesStreamDecoder implements Iterator<SseChunk>, A
             }
             case "response.output_item.done" -> {
                 String itemId = event.path("item").path("id").asText(null);
-                if (customCalls.remove(itemId)) {
+                if ("tool_search_call".equals(event.path("item").path("type").asText(""))
+                        && callIndexes.containsKey(itemId)) {
+                    // A tool search's arguments come whole, on the finished item.
+                    chunk.toolCalls(List.of(ToolCallDelta.arguments(callIndexes.get(itemId),
+                            OpenAiResponsesBody.write(event.path("item").path("arguments")))));
+                } else if (customCalls.remove(itemId)) {
                     chunk.toolCalls(List.of(ToolCallDelta.arguments(callIndexes.get(itemId), "\"}")));
                 }
             }

@@ -175,6 +175,8 @@ class AccessLogFilterTest {
         request.setDispatcherType(jakarta.servlet.DispatcherType.ASYNC);
         request.setAttribute(AccessLogFilter.ATTR_PROVIDER, "openai");
         request.setAttribute(AccessLogFilter.ATTR_TOKENS_TOTAL, "120");
+        request.setAttribute(AccessLogFilter.ATTR_TOKENS_CACHED, "64");
+        request.setAttribute(AccessLogFilter.ATTR_TOKENS_REASONING, "12");
         request.setAttribute(AccessLogFilter.ATTR_START_NANOS, System.nanoTime() - 250_000_000L);
         AtomicReference<String> latencyAtLog = new AtomicReference<>();
         AtomicReference<String> providerAtLog = new AtomicReference<>();
@@ -192,7 +194,8 @@ class AccessLogFilterTest {
         }
         assertThat(appender.list).hasSize(1);
         java.util.Map<String, String> mdc = appender.list.get(0).getMDCPropertyMap();
-        assertThat(mdc).containsEntry("provider", "openai").containsEntry("tokens_total", "120");
+        assertThat(mdc).containsEntry("provider", "openai").containsEntry("tokens_total", "120")
+                .containsEntry("tokens_cached", "64").containsEntry("tokens_reasoning", "12");
         assertThat(Long.parseLong(mdc.get("latency_ms"))).as("from arrival, not from the dispatch").isGreaterThanOrEqualTo(250);
     }
 
@@ -236,5 +239,23 @@ class AccessLogFilterTest {
         }
         assertThat(appender.list).isEmpty();
         assertThat(MDC.get("method")).as("MDC still cleaned").isNull();
+    }
+
+    /**
+     * The JSON log encoder ships only the MDC keys it names, so a key the access line sets but the encoder does
+     * not name never reaches the log.
+     */
+    @Test
+    void theJsonLogShipsEveryKeyTheAccessLineSets() throws Exception {
+        String config;
+        try (java.io.InputStream in = getClass().getClassLoader().getResourceAsStream("logback-dvara.xml")) {
+            config = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        java.util.Set<String> shipped = new java.util.HashSet<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("<includeMdcKeyName>([^<]+)</includeMdcKeyName>").matcher(config);
+        while (m.find()) {
+            shipped.add(m.group(1).trim());
+        }
+        assertThat(shipped).containsAll(AccessLogFilter.MDC_KEYS);
     }
 }

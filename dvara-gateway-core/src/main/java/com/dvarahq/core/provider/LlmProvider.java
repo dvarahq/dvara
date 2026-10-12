@@ -123,6 +123,24 @@ public interface LlmProvider {
     }
 
     /**
+     * Whether this provider takes OpenAI's {@code reasoning_effort}. A provider that does not is not sent it, and
+     * that is logged.
+     */
+    default boolean takesReasoningEffort() {
+        return takesOpenAiTuning();
+    }
+
+    /** Whether this provider has OpenAI's Responses API, so a Responses API request can be sent to it as it came. */
+    default boolean takesResponsesApi() {
+        return false;
+    }
+
+    /** Whether this provider can be asked for at most one tool call per turn. */
+    default boolean canDisableParallelToolCalls() {
+        return false;
+    }
+
+    /**
      * The request's input tokens as this provider counts them, without calling a model, or empty when the
      * provider has no way to count; the caller then estimates.
      */

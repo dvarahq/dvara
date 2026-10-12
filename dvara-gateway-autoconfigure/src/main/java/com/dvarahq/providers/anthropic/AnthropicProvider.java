@@ -201,6 +201,11 @@ public class AnthropicProvider extends AbstractLlmProvider {
     }
 
     @Override
+    public boolean canDisableParallelToolCalls() {
+        return true;
+    }
+
+    @Override
     public boolean takesImagesInToolResults() {
         return true;
     }
@@ -316,6 +321,15 @@ public class AnthropicProvider extends AbstractLlmProvider {
             body.put("tool_choice", Map.of("type", "tool", "name", STRUCTURED_OUTPUT_TOOL));
         } else if (request.getToolChoice() != null) {
             body.put("tool_choice", mapToolChoice(request.getToolChoice()));
+        }
+        if (Boolean.FALSE.equals(request.getParallelToolCalls()) && request.getTools() != null
+                && !request.getTools().isEmpty() && !(format instanceof ResponseFormat.JsonSchema)) {
+            // At most one tool call per turn: Anthropic's flag lives on tool_choice.
+            @SuppressWarnings("unchecked")
+            Map<String, Object> choice = new LinkedHashMap<>(body.get("tool_choice") instanceof Map<?, ?> m
+                    ? (Map<String, Object>) m : Map.of("type", "auto"));
+            choice.put("disable_parallel_tool_use", true);
+            body.put("tool_choice", choice);
         }
 
         if (!tools.isEmpty()) body.put("tools", tools);

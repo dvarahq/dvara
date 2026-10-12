@@ -571,4 +571,20 @@ class MessagesControllerTest {
                         .contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.type").value("error"));
     }
+
+    @Test
+    void theTokenPartsReachTheAccessLine() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(ChatResponse.builder().id("c").model("claude-sonnet-4-5").created(1)
+                .choices(List.of(ChatResponse.Choice.builder().index(0)
+                        .message(com.dvarahq.core.model.MultimodalMessage.assistant("ok")).finishReason("stop").build()))
+                .usage(ChatResponse.Usage.builder().promptTokens(13000).completionTokens(20).totalTokens(13020)
+                        .cachedInputTokens(12957).build()).build());
+
+        var result = mockMvc.perform(messages("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100, "messages": [{"role": "user", "content": "hi"}]}
+                        """))
+                .andExpect(status().isOk()).andReturn();
+
+        assertThat(result.getRequest().getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_TOKENS_CACHED)).isEqualTo("12957");
+    }
 }

@@ -52,6 +52,10 @@ public class AccessLogFilter extends OncePerRequestFilter {
     public static final String ATTR_TOKENS_PROMPT = "gateway.tokensPrompt";
     public static final String ATTR_TOKENS_COMPLETION = "gateway.tokensCompletion";
     public static final String ATTR_TOKENS_TOTAL = "gateway.tokensTotal";
+    /** The part of the prompt tokens read from the provider's prompt cache; set only when there is one. */
+    public static final String ATTR_TOKENS_CACHED = "gateway.tokensCached";
+    /** The part of the completion tokens spent reasoning; set only when there is one. */
+    public static final String ATTR_TOKENS_REASONING = "gateway.tokensReasoning";
     public static final String ATTR_STREAM = "gateway.stream";
     public static final String ATTR_ERROR_CODE = "gateway.errorCode";
     /**
@@ -134,6 +138,8 @@ public class AccessLogFilter extends OncePerRequestFilter {
         putIfPresent(request, ATTR_TOKENS_PROMPT, "tokens_prompt");
         putIfPresent(request, ATTR_TOKENS_COMPLETION, "tokens_completion");
         putIfPresent(request, ATTR_TOKENS_TOTAL, "tokens_total");
+        putIfPresent(request, ATTR_TOKENS_CACHED, "tokens_cached");
+        putIfPresent(request, ATTR_TOKENS_REASONING, "tokens_reasoning");
         // Lower case, as the API returns it: the log and the reply must name one code the same way.
         Object errorCode = request.getAttribute(ATTR_ERROR_CODE);
         if (errorCode != null) {
@@ -156,11 +162,17 @@ public class AccessLogFilter extends OncePerRequestFilter {
         log.info("Request completed");
     }
 
+    /**
+     * Every MDC key the access line carries. A JSON log encoder that ships only the keys it names must name each
+     * of these, or the field never reaches the log.
+     */
+    public static final java.util.List<String> MDC_KEYS = java.util.List.of("method", "path", "latency_ms", "status",
+            "model", "provider", "cache_status", "stream", "tokens_prompt", "tokens_completion", "tokens_total",
+            "tokens_cached", "tokens_reasoning", "error_code", "priority_tier", "api_key", "workspace_id");
+
     /** Clean up all MDC keys we added (trace_id is cleaned by TraceIdFilter). */
     private static void clearMdc() {
-        for (String key : new String[]{"method", "path", "latency_ms", "status", "model", "provider",
-                "cache_status", "stream", "tokens_prompt", "tokens_completion", "tokens_total",
-                "error_code", "priority_tier", "api_key", "workspace_id"}) {
+        for (String key : MDC_KEYS) {
             MDC.remove(key);
         }
     }
