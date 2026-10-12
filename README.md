@@ -285,6 +285,10 @@ key as its API key.
   (redacted text, the routed model, a token limit). The answer, whole or streamed event by event, comes
   back as OpenAI sent it, with redacted text written back in place, and its usage object exactly as sent.
   The access log adds `tokens_cached` and `tokens_reasoning` when the provider reports them.
+  When the provider ends the stream with an error before any output (a spent quota, a rate limit, a bad
+  request), the client gets the status that error stands for, such as 429, with the provider's code and
+  message, instead of a stream that starts and then fails. After output has started, the provider's own
+  `response.failed` or `error` event is sent as the provider sent it.
   When the streaming guard holds content back, the answer is rebuilt in the Responses shape and reasoning
   items are kept. On Azure the call goes to `{base-url}/v1/responses` with the deployment as `model`;
   `dvara.llm-gateway.providers.azure-openai.responses-api-version` adds an `api-version` (none by default).

@@ -162,6 +162,11 @@ public final class ProviderErrors {
         return s.replace("\\\"", "\"").replace("\\n", " ").replace("\\\\", "\\");
     }
 
+    /** A provider's reason as the caller may see it: one line, anything shaped like an API key masked. */
+    static String masked(String reason) {
+        return SECRET.matcher(oneLine(reason)).replaceAll("***");
+    }
+
     private static String oneLine(String s) {
         String flat = s.replaceAll("\\p{Cntrl}+", " ").replaceAll("\\s{2,}", " ").strip();
         return flat.length() > REASON_LIMIT ? flat.substring(0, REASON_LIMIT) + "…" : flat;
