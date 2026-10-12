@@ -80,6 +80,8 @@ public class OpenAiUsage {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PromptDetails {
         @JsonProperty("cached_tokens") private int cachedTokens;
+        /** Written to the prompt cache; a part of {@code prompt_tokens}, as {@code cached_tokens} is. */
+        @JsonProperty("cache_write_tokens") private int cacheWriteTokens;
     }
 
     @Data
@@ -98,6 +100,7 @@ public class OpenAiUsage {
                 .completionTokens(completionTokens)
                 .totalTokens(totalTokens)
                 .cachedInputTokens(cached)
+                .cacheWriteTokens(promptTokensDetails == null ? 0 : promptTokensDetails.getCacheWriteTokens())
                 .reasoningTokens(reasoning)
                 .asSent(asSent)
                 .build();
