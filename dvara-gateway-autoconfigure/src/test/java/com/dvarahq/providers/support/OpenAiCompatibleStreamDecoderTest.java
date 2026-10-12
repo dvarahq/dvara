@@ -373,4 +373,21 @@ class OpenAiCompatibleStreamDecoderTest {
         assertThat(chunks.get(chunks.size() - 1).isDone()).isTrue();
         assertThat(chunks.get(chunks.size() - 1).getFinishReason()).isEqualTo("length");
     }
+
+    @Test
+    @DisplayName("the usage block is kept as the upstream sent it, every detail and zero included")
+    void theUsageBlockIsKeptAsSent() {
+        List<SseChunk> chunks = drain("""
+                data: {"id":"c9","model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}]}
+
+                data: {"id":"c9","model":"gpt-4o","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":4,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0}}}
+
+                data: [DONE]
+                """);
+
+        var usage = chunks.get(chunks.size() - 1).getUsage();
+        assertThat(usage.getCachedInputTokens()).isEqualTo(4);
+        assertThat(usage.getAsSent()).containsEntry("completion_tokens_details",
+                java.util.Map.of("reasoning_tokens", 0, "audio_tokens", 0));
+    }
 }

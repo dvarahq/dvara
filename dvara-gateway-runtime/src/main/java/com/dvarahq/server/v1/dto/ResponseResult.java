@@ -63,8 +63,13 @@ public class ResponseResult {
         private String callId;
         /** On a {@code function_call}: the function the model chose. */
         private String name;
-        /** On a {@code function_call}: the arguments, as the JSON text the model wrote. */
-        private String arguments;
+        /**
+         * On a {@code function_call}: the arguments, as the JSON text the model wrote. On a {@code tool_search_call}:
+         * the arguments as an object.
+         */
+        private Object arguments;
+        /** On a {@code tool_search_call}: who runs the search, {@code client}. */
+        private String execution;
         /** On a {@code custom_tool_call}: the free-text input the model wrote. */
         private String input;
         /** On a call to a tool declared in a {@code namespace}: that namespace. */
@@ -109,10 +114,9 @@ public class ResponseResult {
                     .inputTokens(u.getPromptTokens())
                     .outputTokens(u.getCompletionTokens())
                     .totalTokens(u.getTotalTokens())
-                    .inputTokensDetails(u.getCachedInputTokens() > 0
-                            ? new InputTokensDetails(u.getCachedInputTokens()) : null)
-                    .outputTokensDetails(u.getReasoningTokens() > 0
-                            ? new OutputTokensDetails(u.getReasoningTokens()) : null)
+                    // Always present, zero included, as OpenAI sends them: a client may read them unconditionally.
+                    .inputTokensDetails(new InputTokensDetails(u.getCachedInputTokens()))
+                    .outputTokensDetails(new OutputTokensDetails(u.getReasoningTokens()))
                     .build();
         }
     }

@@ -64,6 +64,7 @@ final class ResponsesTools {
         static final Names NONE = new Names();
         private final Map<String, String[]> namespaced = new java.util.HashMap<>();
         private final java.util.Set<String> custom = new java.util.HashSet<>();
+        private final java.util.Set<String> toolSearch = new java.util.HashSet<>();
 
         /** The name a namespace's tool travels under. The same for the tool and for every call to it. */
         static String joined(String namespace, String name) {
@@ -77,6 +78,11 @@ final class ResponsesTools {
             if (isCustom) {
                 custom.add(travelling);
             }
+        }
+
+        /** Whether calls under this name are a client-run tool search, returned as {@code tool_search_call}. */
+        boolean isToolSearch(String travelling) {
+            return travelling != null && toolSearch.contains(travelling);
         }
 
         boolean isCustom(String travelling) {
@@ -96,53 +102,99 @@ final class ResponsesTools {
         }
     }
 
-    /** The request's tools, and the names they travel under. Tools is null when it declares none. */
-    record Read(List<ToolDefinition> tools, Names names) {
+    /**
+     * The request's tools, the names they travel under, and what in them only a provider with OpenAI's Responses
+     * API can be sent (a tool type the gateway cannot translate). Tools is null when there are none.
+     */
+    record Read(List<ToolDefinition> tools, Names names, List<String> responsesApiOnly) {
+    }
+
+    /** Built-in tools: run by the provider, outside the gateway's checks. Refused on every route. */
+    static boolean builtIn(String type) {
+        return type.startsWith("web_search") || type.startsWith("computer_use")
+                || java.util.Set.of("file_search", "code_interpreter", "image_generation", "mcp").contains(type);
     }
 
     static Read read(List<Object> tools) {
-        if (tools == null || tools.isEmpty()) {
-            return new Read(null, Names.NONE);
+        return read(tools, List.of());
+    }
+
+    /**
+     * Reads the request's {@code tools}, then the tools input items add ({@code additional_tools}, and the tools a
+     * {@code tool_search_output} found), skipping a name already read.
+     */
+    static Read read(List<Object> tools, List<Object> added) {
+        List<Object> all = new ArrayList<>(tools == null ? List.of() : tools);
+        int declared = all.size();
+        all.addAll(added);
+        if (all.isEmpty()) {
+            return new Read(null, Names.NONE, List.of());
         }
         Names names = new Names();
         List<ToolDefinition> out = new ArrayList<>();
+        List<String> responsesOnly = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
-        for (Object t : tools) {
-            if (!(t instanceof Map<?, ?> tool)) {
+        for (int i = 0; i < all.size(); i++) {
+            boolean fromInput = i >= declared;
+            if (!(all.get(i) instanceof Map<?, ?> tool)) {
                 throw invalid("each entry of tools must be an object");
             }
             String type = string(tool.get("type"));
+            List<ToolDefinition> read = new ArrayList<>();
             if ("namespace".equals(type)) {
                 String namespace = string(tool.get("name"));
                 if (namespace.isBlank() || !(tool.get("tools") instanceof List<?> inner)) {
                     throw invalid("a namespace tool needs a name and a tools list");
                 }
-                for (Object i : inner) {
-                    if (!(i instanceof Map<?, ?> innerTool)) {
+                for (Object in : inner) {
+                    if (!(in instanceof Map<?, ?> innerTool)) {
                         throw invalid("each tool of namespace " + namespace + " must be an object");
                     }
-                    ToolDefinition d = one(innerTool, namespace, names);
-                    if (!seen.add(d.getName())) {
-                        throw invalid("two tools would both be named " + d.getName());
-                    }
-                    out.add(d);
+                    ToolDefinition d = one(innerTool, namespace, names, responsesOnly);
+                    if (d != null) read.add(d);
                 }
-                continue;
+            } else {
+                ToolDefinition d = one(tool, null, names, responsesOnly);
+                if (d != null) read.add(d);
             }
-            ToolDefinition d = one(tool, null, names);
-            if (!seen.add(d.getName())) {
-                throw invalid("two tools are both named " + d.getName());
+            for (ToolDefinition d : read) {
+                if (seen.add(d.getName())) {
+                    out.add(d);
+                } else if (!fromInput) {
+                    throw invalid("two tools would both be named " + d.getName());
+                }
             }
-            out.add(d);
         }
-        return new Read(out, names);
+        return new Read(out.isEmpty() ? null : out, names, List.copyOf(new java.util.LinkedHashSet<>(responsesOnly)));
     }
 
-    /** One function or custom tool, under the name it travels by. */
-    private static ToolDefinition one(Map<?, ?> tool, String namespace, Names names) {
+    /**
+     * One tool under the name it travels by: a function, a custom tool, or a client-run tool search (a function
+     * named {@code tool_search}). Null for a tool type the gateway cannot translate, which is named in
+     * {@code responsesOnly}: a provider with OpenAI's Responses API is sent it as it came, any other refuses it.
+     */
+    private static ToolDefinition one(Map<?, ?> tool, String namespace, Names names, List<String> responsesOnly) {
         String type = string(tool.get("type"));
-        if (!"function".equals(type) && !"custom".equals(type)) {
+        if (type.isBlank() || builtIn(type)) {
             throw unsupported(builtInToolMessage(type));
+        }
+        if ("tool_search".equals(type)) {
+            if (!"client".equals(string(tool.get("execution")))) {
+                responsesOnly.add("a tool_search the provider runs");
+                return null;
+            }
+            String travelling = namespace == null ? "tool_search" : Names.joined(namespace, "tool_search");
+            names.add(travelling, namespace, "tool_search", false);
+            names.toolSearch.add(travelling);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> schema = tool.get("parameters") instanceof Map<?, ?> p ? (Map<String, Object>) p : null;
+            return ToolDefinition.builder().name(travelling)
+                    .description(tool.get("description") == null ? null : string(tool.get("description")))
+                    .parameters(schema).build();
+        }
+        if (!"function".equals(type) && !"custom".equals(type)) {
+            responsesOnly.add("the tool type " + type);
+            return null;
         }
         String name = string(tool.get("name"));
         if (name.isBlank()) {
@@ -193,9 +245,6 @@ final class ResponsesTools {
             return "the tool type " + type + " is not supported on /v1/responses: it runs at the provider, "
                     + "outside the gateway's checks. In Codex CLI, set web_search = \"disabled\" in config.toml.";
         }
-        if ("tool_search".equals(type)) {
-            return "the tool type tool_search is not supported on /v1/responses; declare the tools themselves.";
-        }
         return "the tool type " + type + " is not supported on /v1/responses: it runs at the provider, "
                 + "outside the gateway's checks. Declare a function tool and run it in your own code.";
     }
@@ -239,8 +288,9 @@ final class ResponsesTools {
      */
     static void addFunctionCall(List<MultimodalMessage> messages, Map<String, Object> item) {
         boolean custom = "custom_tool_call".equals(string(item.get("type")));
+        boolean search = "tool_search_call".equals(string(item.get("type")));
         String callId = string(item.get("call_id"));
-        String name = string(item.get("name"));
+        String name = search ? "tool_search" : string(item.get("name"));
         if (callId.isBlank() || name.isBlank()) {
             throw invalid("a " + (custom ? "custom_tool_call" : "function_call") + " input item needs call_id and name");
         }
@@ -249,7 +299,9 @@ final class ResponsesTools {
             name = Names.joined(namespace, name);
         }
         String arguments;
-        if (custom) {
+        if (search) {
+            arguments = json(item.get("arguments") == null ? Map.of() : item.get("arguments"));
+        } else if (custom) {
             Object input = item.get("input");
             if (input != null && !(input instanceof String)) {
                 throw invalid("the input of custom_tool_call " + callId + " must be a string");
@@ -288,7 +340,8 @@ final class ResponsesTools {
         if (callId.isBlank()) {
             throw invalid("a " + type + " input item needs call_id");
         }
-        Object output = item.get("output");
+        Object output = "tool_search_output".equals(type) ? json(item.get("tools") == null ? List.of() : item.get("tools"))
+                : item.get("output");
         List<ContentBlock> blocks = new ArrayList<>();
         if (output instanceof String s) {
             blocks.add(new ContentBlock.TextBlock(s));
@@ -309,6 +362,14 @@ final class ResponsesTools {
             throw invalid(type + " " + callId + " needs an output string or a list of parts");
         }
         return MultimodalMessage.builder().role("tool").toolCallId(callId).content(blocks).build();
+    }
+
+    private static String json(Object value) {
+        try {
+            return com.dvarahq.core.util.JsonMapper.instance().writeValueAsString(value);
+        } catch (Exception e) {
+            throw invalid("an input item could not be read");
+        }
     }
 
     private static String string(Object o) {

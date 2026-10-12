@@ -83,10 +83,24 @@ public class ChatResponse {
         private int cacheWriteTokens;
         /** The part of {@code completionTokens} the model spent reasoning, which the caller does not see as text. */
         private int reasoningTokens;
+        /**
+         * The usage block exactly as an OpenAI-shaped provider sent it, every detail and zero included, so a
+         * caller of the same API is handed it unchanged. Null for any other provider and for an estimate. Not part
+         * of equality: the counts above are what the gateway meters.
+         */
+        @lombok.EqualsAndHashCode.Exclude
+        @lombok.ToString.Exclude
+        private java.util.Map<String, Object> asSent;
 
         /** The three counts alone, with no breakdown. */
         public Usage(int promptTokens, int completionTokens, int totalTokens) {
             this(promptTokens, completionTokens, totalTokens, 0, 0, 0);
+        }
+
+        /** The counts and their breakdown, with no block as sent. */
+        public Usage(int promptTokens, int completionTokens, int totalTokens,
+                     int cachedInputTokens, int cacheWriteTokens, int reasoningTokens) {
+            this(promptTokens, completionTokens, totalTokens, cachedInputTokens, cacheWriteTokens, reasoningTokens, null);
         }
     }
 }

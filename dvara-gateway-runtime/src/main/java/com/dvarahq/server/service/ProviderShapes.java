@@ -57,12 +57,18 @@ public final class ProviderShapes {
         if (!provider.takesImagesInToolResults() && imageInToolResult(out.getMessages())) {
             out = out.toBuilder().messages(toolImagesAfterResults(out.getMessages())).build();
         }
-        if (!provider.takesOpenAiTuning() && log.isDebugEnabled()) {
+        if (log.isDebugEnabled()) {
             List<String> left = new ArrayList<>();
-            if (out.getReasoningEffort() != null) left.add("reasoning effort " + out.getReasoningEffort());
-            if (out.getVerbosity() != null) left.add("verbosity " + out.getVerbosity());
-            if (out.getTools() != null && out.getTools().stream().anyMatch(t -> Boolean.TRUE.equals(t.getStrict()))) {
+            if (out.getReasoningEffort() != null && !provider.takesReasoningEffort()) {
+                left.add("reasoning effort " + out.getReasoningEffort());
+            }
+            if (!provider.takesOpenAiTuning() && out.getVerbosity() != null) left.add("verbosity " + out.getVerbosity());
+            if (!provider.takesOpenAiTuning() && out.getTools() != null && out.getTools().stream().anyMatch(t -> Boolean.TRUE.equals(t.getStrict()))) {
                 left.add("strict function tools");
+            }
+            if (!provider.takesOpenAiTuning() && Boolean.FALSE.equals(out.getParallelToolCalls())
+                    && !provider.canDisableParallelToolCalls()) {
+                left.add("parallel_tool_calls false");
             }
             if (!left.isEmpty()) {
                 log.debug("Not sent to provider {}, which has no such setting: {}", provider.name(), String.join(", ", left));

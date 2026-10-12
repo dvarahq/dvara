@@ -1182,6 +1182,29 @@ class ProviderDispatcherTest {
         verify(plain).streamChat(org.mockito.ArgumentMatchers.argThat(r -> !r.getTools().get(0).isCustom()));
     }
 
+    @Test
+    void whatOnlyAResponsesApiCanTake_isRefusedOnAProviderWithoutOne_andSentToOneWithIt() {
+        ChatRequest request = chatRequest("gpt-4o").toBuilder().responsesApiOnly(List.of("the tool type shell")).build();
+        LlmProvider plain = mock(LlmProvider.class);
+        when(plain.supports(any())).thenReturn(true);
+        when(plain.name()).thenReturn("deepseek");
+        when(plain.capabilities()).thenReturn(fullCaps());
+
+        assertThatThrownBy(() -> dispatcher(List.of(plain)).chat(request))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("UNSUPPORTED_CAPABILITY"))
+                .hasMessageContaining("deepseek").hasMessageContaining("the tool type shell");
+        verify(plain, org.mockito.Mockito.never()).chat(any());
+
+        LlmProvider openai = mock(LlmProvider.class);
+        when(openai.supports(any())).thenReturn(true);
+        when(openai.capabilities()).thenReturn(fullCaps());
+        when(openai.takesResponsesApi()).thenReturn(true);
+        when(openai.chat(any())).thenReturn(chatResponse("c", "gpt-4o"));
+        dispatcher(List.of(openai)).chat(request);
+        verify(openai).chat(any());
+    }
+
     private static ProviderDispatcher dispatcher(List<LlmProvider> providers) {
         return new ProviderDispatcher(providers, DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
                 TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,

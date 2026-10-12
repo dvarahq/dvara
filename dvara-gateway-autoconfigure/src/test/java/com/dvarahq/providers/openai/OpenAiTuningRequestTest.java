@@ -125,4 +125,18 @@ class OpenAiTuningRequestTest {
         org.assertj.core.api.Assertions.assertThat(com.dvarahq.core.model.ToolDefinition.customInput(call.getArguments()))
                 .isEqualTo("*** End Patch");
     }
+
+    @Test
+    void parallelToolCallsFalseIsSent() {
+        server.expect(requestTo(containsString("/chat/completions")))
+                .andExpect(jsonPath("$.parallel_tool_calls").value(false))
+                .andRespond(withSuccess(OK, MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("gpt-5.5").messages(List.of(MultimodalMessage.user("hi")))
+                .tools(List.of(com.dvarahq.core.model.ToolDefinition.builder().name("f")
+                        .parameters(java.util.Map.of("type", "object")).build()))
+                .parallelToolCalls(false).build());
+
+        server.verify();
+    }
 }

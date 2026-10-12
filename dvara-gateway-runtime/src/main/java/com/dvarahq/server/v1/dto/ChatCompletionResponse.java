@@ -67,25 +67,53 @@ public class ChatCompletionResponse {
         private int completionTokens;
         @JsonProperty("total_tokens")
         private int totalTokens;
+        /** {@link PromptTokensDetails}, or the provider's own block as it sent it. */
         @JsonProperty("prompt_tokens_details")
-        private PromptTokensDetails promptTokensDetails;
+        private Object promptTokensDetails;
+        /** {@link CompletionTokensDetails}, or the provider's own block as it sent it. */
         @JsonProperty("completion_tokens_details")
-        private CompletionTokensDetails completionTokensDetails;
+        private Object completionTokensDetails;
+        /** Any other field the provider put in its usage block, sent on as it came. */
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        private java.util.Map<String, Object> others;
 
-        /** The external block for an internal one; null for null. */
+        @com.fasterxml.jackson.annotation.JsonAnyGetter
+        public java.util.Map<String, Object> others() {
+            return others == null ? java.util.Map.of() : others;
+        }
+
+        private static final java.util.Set<String> READ = java.util.Set.of("prompt_tokens", "completion_tokens",
+                "total_tokens", "prompt_tokens_details", "completion_tokens_details");
+
+        /**
+         * The external block for an internal one; null for null. The counts are the gateway's. The details are
+         * the provider's own block when it sent one in this API's shape, zeros and all; otherwise built from the
+         * breakdown.
+         */
         public static Usage from(com.dvarahq.core.model.ChatResponse.Usage u) {
             if (u == null) {
                 return null;
+            }
+            java.util.Map<String, Object> sent = u.getAsSent();
+            java.util.Map<String, Object> others = new java.util.LinkedHashMap<>();
+            if (sent != null) {
+                sent.forEach((k, v) -> {
+                    if (!READ.contains(k)) others.put(k, v);
+                });
             }
             return Usage.builder()
                     .promptTokens(u.getPromptTokens())
                     .completionTokens(u.getCompletionTokens())
                     .totalTokens(u.getTotalTokens())
-                    .promptTokensDetails(u.getCachedInputTokens() > 0 || u.getCacheWriteTokens() > 0
+                    .promptTokensDetails(sent != null && sent.get("prompt_tokens_details") != null
+                            ? sent.get("prompt_tokens_details")
+                            : u.getCachedInputTokens() > 0 || u.getCacheWriteTokens() > 0
                             ? new PromptTokensDetails(positive(u.getCachedInputTokens()), positive(u.getCacheWriteTokens()))
                             : null)
-                    .completionTokensDetails(u.getReasoningTokens() > 0
-                            ? new CompletionTokensDetails(u.getReasoningTokens()) : null)
+                    .completionTokensDetails(sent != null && sent.get("completion_tokens_details") != null
+                            ? sent.get("completion_tokens_details")
+                            : u.getReasoningTokens() > 0 ? new CompletionTokensDetails(u.getReasoningTokens()) : null)
+                    .others(others.isEmpty() ? null : others)
                     .build();
         }
 

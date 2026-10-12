@@ -379,12 +379,15 @@ class ResponsesControllerTest {
         }
     }
 
+    // Fixtures under /codex are Codex CLI 0.155.1's own requests, captured live and redacted; openai-model-turn.json
+    // is built from its source, for the web search tool the captured runs had turned off.
+
     @Test
     void codexFirstTurn_isServedAndTheCallStreamsBack() throws Exception {
         List<SseChunk> chunks = List.of(
-                SseChunk.builder().id("c1").model("team-coder")
+                SseChunk.builder().id("c1").model("gpt-5.4")
                         .toolCalls(List.of(com.dvarahq.core.model.ToolCallDelta.open(0, "call_1", "exec_command", "{\"cmd\":\"ls\"}"))).build(),
-                SseChunk.builder().id("c1").model("team-coder").finishReason("tool_calls").done(true)
+                SseChunk.builder().id("c1").model("gpt-5.4").finishReason("tool_calls").done(true)
                         .usage(new ChatResponse.Usage(120, 9, 129)).build());
         when(dispatcher.streamChat(any())).thenReturn(chunks.iterator());
 
@@ -393,12 +396,16 @@ class ResponsesControllerTest {
         org.mockito.ArgumentCaptor<ChatRequest> sent = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(dispatcher).streamChat(sent.capture());
         ChatRequest r = sent.getValue();
-        assertThat(r.getMessages()).extracting(MultimodalMessage::getRole).containsExactly("system", "user", "user");
+        assertThat(r.getMessages()).extracting(MultimodalMessage::getRole).containsExactly("system", "system", "user", "user");
         assertThat(r.getTools()).extracting(com.dvarahq.core.model.ToolDefinition::getName)
-                .containsExactly("exec_command", "write_stdin", "update_plan");
+                .containsExactly("exec_command", "write_stdin", "request_user_input", "apply_patch", "view_image",
+                        "get_goal", "create_goal", "update_goal", "tool_search");
+        assertThat(r.getTools().get(3).isCustom()).isTrue();
+        assertThat(r.getResponsesApiOnly()).isEmpty();
         assertThat(r.getToolChoice()).isEqualTo("auto");
-        assertThat(r.getPromptCacheKey()).isEqualTo("0199d6a2-3b1c-7c40-9a51-5f0e8d2b7c11");
-        assertThat(r.getReasoningEffort()).isNull();
+        assertThat(r.getPromptCacheKey()).isEqualTo("00000000-0000-0000-0000-000000000000");
+        assertThat(r.getReasoningEffort()).isEqualTo("low");
+        assertThat(r.getVerbosity()).isEqualTo("low");
 
         com.fasterxml.jackson.databind.JsonNode done = events.stream()
                 .filter(e -> "response.output_item.done".equals(e.get("type").asText())).findFirst().orElseThrow();
@@ -408,13 +415,55 @@ class ResponsesControllerTest {
         com.fasterxml.jackson.databind.JsonNode completed = events.get(events.size() - 1);
         assertThat(completed.get("type").asText()).isEqualTo("response.completed");
         assertThat(completed.at("/response/usage/input_tokens").asInt()).isEqualTo(120);
-        assertThat(completed.at("/response/usage/output_tokens").asInt()).isEqualTo(9);
+        assertThat(completed.at("/response/usage/input_tokens_details/cached_tokens").isInt()).isTrue();
+    }
+
+    /** Codex's lighter request: its tools arrive as an additional_tools item, one call per turn, all-turn reasoning. */
+    @Test
+    void codexLiteTurn_readsItsAdditionalTools_andAsksForOneCallATurn() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c1").model("gpt-5.6-terra").delta("ok").finishReason("stop").done(true).build()).iterator());
+
+        streamEvents(fixture("lite-turn.json"));
+
+        org.mockito.ArgumentCaptor<ChatRequest> sent = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(dispatcher).streamChat(sent.capture());
+        ChatRequest r = sent.getValue();
+        assertThat(r.getParallelToolCalls()).isFalse();
+        assertThat(r.getTools()).extracting(com.dvarahq.core.model.ToolDefinition::getName)
+                .contains("functions__exec", "functions__wait", "collaboration__spawn_agent");
+        assertThat(r.getToolChoice()).isEqualTo("auto");
+        assertThat(r.getMessages()).extracting(MultimodalMessage::getRole)
+                .containsExactly("system", "system", "system", "system", "user", "user");
+        com.fasterxml.jackson.databind.JsonNode body = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                r.getOpenAiResponses().governedJson(r, "gpt-5.6-terra", true));
+        assertThat(body.at("/input/0/type").asText()).isEqualTo("additional_tools");
+        assertThat(body.at("/parallel_tool_calls").asBoolean(true)).isFalse();
+        assertThat(body.at("/reasoning/context").asText()).isEqualTo("all_turns");
+    }
+
+    /** A run routed to another provider: a function call that provider made and its output, translated back. */
+    @Test
+    void codexToolTurnFromAnotherProvidersRun_isTranslated() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c1").model("claude-sonnet-4-5").delta("Done.").finishReason("stop").done(true).build())
+                .iterator());
+
+        streamEvents(fixture("anthropic-turn.json"));
+
+        org.mockito.ArgumentCaptor<ChatRequest> sent = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(dispatcher).streamChat(sent.capture());
+        List<MultimodalMessage> messages = sent.getValue().getMessages();
+        assertThat(messages).extracting(MultimodalMessage::getRole)
+                .containsExactly("system", "system", "user", "user", "assistant", "tool");
+        assertThat(messages.get(4).getToolCalls().get(0).getId()).startsWith("toolu_");
+        assertThat(messages.get(5).getToolCallId()).isEqualTo(messages.get(4).getToolCalls().get(0).getId());
     }
 
     @Test
     void codexToolTurn_sendsTheCallAndItsOutput_andLeavesOutTheReasoningItem() throws Exception {
         when(dispatcher.streamChat(any())).thenReturn(List.of(
-                SseChunk.builder().id("c1").model("team-coder").delta("Three files.").finishReason("stop").done(true).build())
+                SseChunk.builder().id("c1").model("gpt-5.3-codex").delta("Updated.").finishReason("stop").done(true).build())
                 .iterator());
 
         List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(fixture("tool-turn.json"));
@@ -422,13 +471,17 @@ class ResponsesControllerTest {
         org.mockito.ArgumentCaptor<ChatRequest> sent = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(dispatcher).streamChat(sent.capture());
         List<MultimodalMessage> messages = sent.getValue().getMessages();
-        assertThat(messages).extracting(MultimodalMessage::getRole).containsExactly("system", "user", "assistant", "tool");
-        assertThat(messages.get(2).getToolCalls()).singleElement()
-                .satisfies(c -> assertThat(c.getId()).isEqualTo("call_1"))
-                .satisfies(c -> assertThat(c.getArguments()).isEqualTo("{\"cmd\":\"ls\"}"));
-        assertThat(messages.get(3).getToolCallId()).isEqualTo("call_1");
-        assertThat(messages.get(3).textContent()).contains("pom.xml");
-        assertThat(events.get(events.size() - 1).at("/response/output/0/content/0/text").asText()).isEqualTo("Three files.");
+        assertThat(messages).extracting(MultimodalMessage::getRole)
+                .containsExactly("system", "system", "user", "user", "assistant", "tool");
+        assertThat(messages.get(4).textContent()).startsWith("Got it");
+        assertThat(messages.get(4).getToolCalls()).singleElement()
+                .satisfies(c -> assertThat(c.getId()).isEqualTo("call_spqWNJam4rIlG0YbcVOdahGT"))
+                .satisfies(c -> assertThat(c.getArguments()).startsWith("{\"cmd\":\"ls -la"));
+        assertThat(messages.get(5).getToolCallId()).isEqualTo("call_spqWNJam4rIlG0YbcVOdahGT");
+        assertThat(messages.get(5).textContent()).contains("hello.py");
+        assertThat(sent.getValue().getTools()).extracting(com.dvarahq.core.model.ToolDefinition::getName)
+                .contains("multi_agent_v1__spawn_agent");
+        assertThat(events.get(events.size() - 1).at("/response/output/0/content/0/text").asText()).isEqualTo("Updated.");
     }
 
     @Test
@@ -526,25 +579,26 @@ class ResponsesControllerTest {
         when(requestPipeline.preDispatch(any(ChatRequest.class), any(FilterContext.class))).thenAnswer(inv -> {
             ChatRequest r = inv.getArgument(0);
             List<MultimodalMessage> messages = new java.util.ArrayList<>(r.getMessages());
-            messages.set(1, MultimodalMessage.builder().role("user")
-                    .content(List.of(new com.dvarahq.core.model.ContentBlock.TextBlock("List the files in [REDACTED]."))).build());
+            messages.set(3, MultimodalMessage.builder().role("user")
+                    .content(List.of(new com.dvarahq.core.model.ContentBlock.TextBlock("read [REDACTED]"))).build());
             return r.toBuilder().messages(messages).build();
         });
         when(dispatcher.streamChat(any())).thenReturn(List.of(
-                SseChunk.builder().id("c1").model("team-coder").delta("ok").finishReason("stop").done(true).build()).iterator());
+                SseChunk.builder().id("c1").model("gpt-5.3-codex").delta("ok").finishReason("stop").done(true).build()).iterator());
 
-        streamEvents(fixture("tool-turn.json").replace("List the files in this folder.", "List the files in /home/ann."));
+        streamEvents(fixture("tool-turn.json"));
 
         org.mockito.ArgumentCaptor<ChatRequest> sent = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
         verify(dispatcher).streamChat(sent.capture());
         com.fasterxml.jackson.databind.JsonNode body = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
-                sent.getValue().getOpenAiResponses().governedJson(sent.getValue(), "gpt-5.5", true));
-        assertThat(body.at("/input/1/content/0/text").asText()).isEqualTo("List the files in [REDACTED].");
-        assertThat(body.at("/input/2/type").asText()).isEqualTo("reasoning");
-        assertThat(body.at("/input/2/encrypted_content").asText()).isEqualTo("gAAAAAB-opaque");
-        assertThat(body.at("/input/3/arguments").asText()).isEqualTo("{\"cmd\":\"ls\"}");
-        assertThat(body.at("/client_metadata/session_id").asText()).isEqualTo("sess-1");
-        assertThat(body.at("/model").asText()).isEqualTo("gpt-5.5");
+                sent.getValue().getOpenAiResponses().governedJson(sent.getValue(), "gpt-5.3-codex", true));
+        assertThat(body.at("/input/2/content/0/text").asText()).isEqualTo("read [REDACTED]");
+        assertThat(body.at("/input/3/type").asText()).isEqualTo("reasoning");
+        assertThat(body.at("/input/3/encrypted_content").asText()).isEqualTo("gAAAAAB-redacted");
+        assertThat(body.at("/input/4/phase").asText()).isEqualTo("commentary");
+        assertThat(body.at("/input/5/arguments").asText()).startsWith("{\"cmd\":\"ls -la");
+        assertThat(body.at("/client_metadata/session_id").asText()).isEqualTo("00000000-0000-0000-0000-000000000000");
+        assertThat(body.at("/model").asText()).isEqualTo("gpt-5.3-codex");
     }
 
     @Test
@@ -600,7 +654,7 @@ class ResponsesControllerTest {
                 {"response.created", "{\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_9\",\"status\":\"in_progress\",\"output\":[]}}"},
                 {"response.output_item.done", "{\"type\":\"response.output_item.done\",\"sequence_number\":1,\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs_2\",\"summary\":[],\"encrypted_content\":\"gAAAAAB-next\"}}"},
                 {"response.output_text.delta", "{\"type\":\"response.output_text.delta\",\"sequence_number\":2,\"item_id\":\"msg_1\",\"output_index\":1,\"content_index\":0,\"delta\":\"One file.\"}"},
-                {"response.completed", "{\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"id\":\"resp_9\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":4},\"output_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":3},\"total_tokens\":15}}}"}};
+                {"response.completed", "{\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"id\":\"resp_9\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":4,\"cache_write_tokens\":0},\"output_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":3},\"total_tokens\":15}}}"}};
         List<SseChunk> chunks = new java.util.ArrayList<>();
         for (int i = 0; i < events.length; i++) {
             SseChunk.SseChunkBuilder c = SseChunk.builder().model("gpt-5.5")
@@ -622,6 +676,7 @@ class ResponsesControllerTest {
                 "response.created", "response.output_item.done", "response.output_text.delta", "response.completed");
         assertThat(events.get(0).at("/response/id").asText()).isEqualTo("resp_9");
         assertThat(events.get(1).at("/item/encrypted_content").asText()).isEqualTo("gAAAAAB-next");
+        assertThat(events.get(3).at("/response/usage/input_tokens_details/cache_write_tokens").isInt()).isTrue();
         verify(tokenUsageRepository, timeout(2000)).save(argThat(r -> r != null && !r.isEstimated()
                 && r.getInputTokens() == 10 && r.getCachedInputTokens() == 4 && r.getReasoningTokens() == 3));
     }
@@ -654,7 +709,8 @@ class ResponsesControllerTest {
             final java.util.Iterator<SseChunk> out = List.of(upstreamChunks.get(0), upstreamChunks.get(1),
                     SseChunk.builder().model("gpt-5.5").delta("One file.").build(),
                     SseChunk.builder().model("gpt-5.5").done(true).finishReason("stop")
-                            .usage(new ChatResponse.Usage(10, 5, 15, 4, 0, 3)).build()).iterator();
+                            .usage(new ChatResponse.Usage(10, 5, 15, 4, 0, 3))
+                            .responsesEvent(upstreamChunks.get(3).getResponsesEvent()).build()).iterator();
             @Override public boolean hasNext() { return out.hasNext(); }
             @Override public SseChunk next() { return out.next(); }
             @Override public boolean holdsContent() { return true; }
@@ -670,6 +726,9 @@ class ResponsesControllerTest {
         assertThat(output.get(0).get("type").asText()).isEqualTo("reasoning");
         assertThat(output.get(0).get("encrypted_content").asText()).isEqualTo("gAAAAAB-next");
         assertThat(output.get(1).at("/content/0/text").asText()).isEqualTo("One file.");
+        // The usage is the provider's own, zero and all.
+        assertThat(events.get(events.size() - 1).at("/response/usage/input_tokens_details/cache_write_tokens").isInt()).isTrue();
+        assertThat(events.get(events.size() - 1).at("/response/usage/output_tokens_details/reasoning_tokens").asInt()).isEqualTo(3);
         for (int i = 0; i < events.size(); i++) {
             assertThat(events.get(i).get("sequence_number").asInt()).isEqualTo(i);
         }
@@ -878,4 +937,24 @@ class ResponsesControllerTest {
                 .andExpect(jsonPath("$.error.code").value("unsupported_capability"));
     }
 
+
+    @Test
+    void streaming_theTokenPartsReachTheAccessLine() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c1").model("gpt-4o").delta("Hi").finishReason("stop").done(true)
+                        .usage(ChatResponse.Usage.builder().promptTokens(6142).completionTokens(111).totalTokens(6253)
+                        .cachedInputTokens(5760).reasoningTokens(64).build()).build()).iterator());
+
+        MvcResult mvcResult = mockMvc.perform(post("/v1/responses")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model": "gpt-4o", "stream": true, "input": "hi"}
+                                """))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        mockMvc.perform(asyncDispatch(mvcResult)).andExpect(status().isOk());
+
+        assertThat(mvcResult.getRequest().getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_TOKENS_CACHED)).isEqualTo("5760");
+        assertThat(mvcResult.getRequest().getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_TOKENS_REASONING)).isEqualTo("64");
+    }
 }

@@ -54,6 +54,13 @@ public class ChatCompletionRequest {
     @JsonProperty("max_completion_tokens")
     private Integer maxCompletionTokens;
 
+    /**
+     * OpenAI's reasoning effort, sent to OpenAI and Azure OpenAI as the client sent it, so a model's refusal (for
+     * example of function tools with an effort) reaches the client. Other providers are not sent it; that is logged.
+     */
+    @JsonProperty("reasoning_effort")
+    private String reasoningEffort;
+
     @JsonProperty("top_p")
     private Double topP;
 

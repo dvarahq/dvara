@@ -575,4 +575,20 @@ class AnthropicProviderTest {
         server.verify();
         assertThat(provider.takesImagesInToolResults()).isTrue();
     }
+
+    @Test
+    void chat_parallelToolCallsFalse_isDisableParallelToolUse() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(jsonPath("$.tool_choice.type").value("auto"))
+              .andExpect(jsonPath("$.tool_choice.disable_parallel_tool_use").value(true))
+              .andRespond(withSuccess(anthropicSuccessBody("msg-p", "end_turn", "ok", 5, 1), MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("claude-sonnet-4-5")
+                .messages(List.of(MultimodalMessage.user("hi")))
+                .tools(List.of(ToolDefinition.builder().name("f").parameters(Map.of("type", "object")).build()))
+                .parallelToolCalls(false).build());
+
+        server.verify();
+        assertThat(provider.canDisableParallelToolCalls()).isTrue();
+    }
 }

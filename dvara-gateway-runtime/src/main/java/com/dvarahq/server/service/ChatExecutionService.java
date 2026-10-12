@@ -559,6 +559,15 @@ public class ChatExecutionService {
                     String.valueOf(response.getUsage().getCompletionTokens()));
             httpRequest.setAttribute(AccessLogFilter.ATTR_TOKENS_TOTAL,
                     String.valueOf(response.getUsage().getTotalTokens()));
+            // The parts of the counts, when the provider reported any: read from cache, spent reasoning.
+            if (response.getUsage().getCachedInputTokens() > 0) {
+                httpRequest.setAttribute(AccessLogFilter.ATTR_TOKENS_CACHED,
+                        String.valueOf(response.getUsage().getCachedInputTokens()));
+            }
+            if (response.getUsage().getReasoningTokens() > 0) {
+                httpRequest.setAttribute(AccessLogFilter.ATTR_TOKENS_REASONING,
+                        String.valueOf(response.getUsage().getReasoningTokens()));
+            }
         } catch (RuntimeException recycled) {
             // A stream the container completed first (disconnect, timeout) may reach this tail after
             // the request was recycled; the access log then goes without tokens, and the row and the

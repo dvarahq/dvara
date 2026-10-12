@@ -98,6 +98,15 @@ public class AzureOpenAiProvider extends AbstractOpenAiCompatibleProvider {
         return responsesApiVersion == null ? new Object[0] : new Object[] { responsesApiVersion };
     }
 
+    /**
+     * Sent as the client sent it; where the deployment or API version does not take it, Azure's own refusal
+     * reaches the client.
+     */
+    @Override
+    public boolean takesReasoningEffort() {
+        return true;
+    }
+
     /** On Azure the body's model is the deployment. */
     @Override
     protected String responsesModel(ChatRequest request) {

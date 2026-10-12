@@ -145,6 +145,7 @@ public class ProviderDispatcher {
         final ChatRequest req = applyResolvedModel(request, routingCtx);
         Refusal refusal = primaryRefusal(req, selection);
         checkAnthropicOnly(req, selection);
+        checkResponsesApiOnly(req, selection);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
         setServedModelAttribute(req.getModel());
@@ -220,6 +221,7 @@ public class ProviderDispatcher {
         final ChatRequest req = applyResolvedModel(request, routingCtx);
         Refusal refusal = primaryRefusal(req, selection);
         checkAnthropicOnly(req, selection);
+        checkResponsesApiOnly(req, selection);
         recordIntelligentRoutingMetric(routingCtx);
         setProviderAttribute(primary.name());
         setServedModelAttribute(req.getModel());
@@ -268,6 +270,7 @@ public class ProviderDispatcher {
             throw refusal.error();
         }
         checkAnthropicOnly(req, selection);
+        checkResponsesApiOnly(req, selection);
         setProviderAttribute(selection.provider().name());
         setServedModelAttribute(req.getModel());
         if (selection.unavailable() != null) {
@@ -283,6 +286,22 @@ public class ProviderDispatcher {
      * {@code cache_control}, the beta header — is left out for another provider, logged and counted. A paused
      * primary is left to its route's chain, which skips a provider that cannot take the request.
      */
+    /**
+     * A request with something only a provider with OpenAI's Responses API can serve (a tool type the gateway
+     * cannot translate) is refused on any other, naming what and the provider. A paused primary is left to its
+     * route's chain, which skips a provider that cannot take the request.
+     */
+    private void checkResponsesApiOnly(ChatRequest request, Selection selection) {
+        if (selection.unavailable() != null || selection.provider().takesResponsesApi()
+                || request.getResponsesApiOnly() == null || request.getResponsesApiOnly().isEmpty()) {
+            return;
+        }
+        throw new GatewayException("UNSUPPORTED_CAPABILITY", "This request routes to provider "
+                + selection.provider().name() + ", which has no Responses API to send it to as it came, and it "
+                + "carries what the gateway cannot translate: " + String.join("; ", request.getResponsesApiOnly())
+                + ". Route the model to OpenAI or Azure OpenAI, or send the request without it.");
+    }
+
     private void checkAnthropicOnly(ChatRequest request, Selection selection) {
         if (selection.unavailable() != null || selection.provider().speaksAnthropicMessages()) {
             return;
@@ -620,7 +639,9 @@ public class ProviderDispatcher {
             }
             if (capabilityFilter(List.of(provider), mapped).isEmpty()
                     || (carriesImage(mapped) && !provider.capabilities().supportsVision())
-                    || (mapped.needsAnthropic() && !provider.speaksAnthropicMessages())) {
+                    || (mapped.needsAnthropic() && !provider.speaksAnthropicMessages())
+                    || (mapped.getResponsesApiOnly() != null && !mapped.getResponsesApiOnly().isEmpty()
+                            && !provider.takesResponsesApi())) {
                 capabilityMismatch = true;
                 log.info("Route [{}]: fallback {} cannot take what the request needs; skipped",
                         route.getId(), target.describe());

@@ -64,7 +64,7 @@ final class ResponsesSlots {
                         parts(slots, message, content, at + "/content");
                     }
                 }
-                case "function_call", "custom_tool_call" -> {
+                case "function_call", "custom_tool_call", "tool_search_call" -> {
                     boolean joins = message >= 0 && "assistant".equals(view.get(message).getRole());
                     if (!joins) {
                         message++;
@@ -76,6 +76,7 @@ final class ResponsesSlots {
                         slots.add(new Slot(message, custom ? Kind.CUSTOM_INPUT : Kind.ARGUMENTS, call, at + "/" + field));
                     }
                 }
+                case "tool_search_output" -> message++;   // its text is the tools it found, written by the gateway
                 case "function_call_output", "custom_tool_call_output" -> {
                     message++;
                     JsonNode output = item.path("output");
@@ -85,7 +86,7 @@ final class ResponsesSlots {
                         parts(slots, message, output, at + "/output");
                     }
                 }
-                default -> { }   // reasoning: not in the view, sent on as it came
+                default -> { }   // reasoning, additional_tools: not turns in the view, sent on as they came
             }
         }
         return slots;

@@ -145,6 +145,21 @@ public class ResilientLlmProvider implements LlmProvider {
         return delegate.takesImagesInToolResults();
     }
 
+    @Override
+    public boolean takesReasoningEffort() {
+        return delegate.takesReasoningEffort();
+    }
+
+    @Override
+    public boolean takesResponsesApi() {
+        return delegate.takesResponsesApi();
+    }
+
+    @Override
+    public boolean canDisableParallelToolCalls() {
+        return delegate.canDisableParallelToolCalls();
+    }
+
     /** A count calls no model, but it is still a call to the provider, so it is held to the same limits. */
     @Override
     public java.util.OptionalInt countInputTokens(ChatRequest request) {

@@ -237,7 +237,7 @@ class ResponsesMappingTest {
     }
 
     @Test
-    void chatResponse_withoutBreakdown_hasNoDetails() throws Exception {
+    void chatResponse_withoutBreakdown_hasZeroDetails_asOpenAiSendsThem() throws Exception {
         ChatResponse resp = ChatResponse.builder()
                 .id("chatcmpl-1").model("gpt-4o").created(1234)
                 .choices(List.of(ChatResponse.Choice.builder().index(0)
@@ -247,7 +247,8 @@ class ResponsesMappingTest {
 
         String json = com.dvarahq.core.util.JsonMapper.instance().writeValueAsString(controller.toResponseResult(resp));
 
-        assertThat(json).doesNotContain("tokens_details");
+        assertThat(json).contains("\"input_tokens_details\":{\"cached_tokens\":0}")
+                .contains("\"output_tokens_details\":{\"reasoning_tokens\":0}");
     }
 
     // -------- function calling --------
@@ -593,7 +594,6 @@ class ResponsesMappingTest {
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").reasoning(Map.of("mode", "deep")).build());
         assertUnsupported(ResponseRequest.builder().model("m").input("hi")
                 .include(List.of("reasoning.encrypted_content", "message.output_text.logprobs")).build());
-        assertUnsupported(ResponseRequest.builder().model("m").input("hi").parallelToolCalls(false).build());
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").serviceTier("priority").build());
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").background(true).build());
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").prompt(Map.of("id", "p_1")).build());
@@ -603,5 +603,67 @@ class ResponsesMappingTest {
         assertThatThrownBy(() -> controller.rejectUnsupported(req))
                 .isInstanceOf(GatewayException.class)
                 .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("UNSUPPORTED_CAPABILITY"));
+    }
+
+    // -------- tool search, and tool types only OpenAI's Responses API takes --------
+
+    @Test
+    void aClientRunToolSearch_isAFunction_andItsCallAndOutputAreATurn() {
+        ResponseRequest r = ResponseRequest.builder().model("m")
+                .tools(List.of(Map.of("type", "tool_search", "execution", "client", "description", "Find tools.",
+                        "parameters", Map.of("type", "object", "properties", Map.of("query", Map.of("type", "string"))))))
+                .input(List.of(Map.of("role", "user", "content", "spawn a helper"),
+                        Map.of("type", "tool_search_call", "call_id", "ts_1", "execution", "client",
+                                "arguments", Map.of("query", "agents"), "status", "completed"),
+                        Map.of("type", "tool_search_output", "call_id", "ts_1", "execution", "client", "status", "completed",
+                                "tools", List.of(Map.of("type", "function", "name", "spawn_agent",
+                                        "parameters", Map.of("type", "object"))))))
+                .build();
+
+        ChatRequest internal = controller.toInternal(r);
+
+        assertThat(internal.getTools()).extracting(com.dvarahq.core.model.ToolDefinition::getName)
+                .containsExactly("tool_search", "spawn_agent");
+        assertThat(internal.getMessages()).extracting(MultimodalMessage::getRole).containsExactly("user", "assistant", "tool");
+        assertThat(internal.getMessages().get(1).getToolCalls().get(0).getArguments()).isEqualTo("{\"query\":\"agents\"}");
+        assertThat(internal.getMessages().get(2).textContent()).contains("spawn_agent");
+        assertThat(internal.getResponsesApiOnly()).isEmpty();
+    }
+
+    @Test
+    void aToolSearchCall_comesBackAsOne() {
+        ResponseRequest request = ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(Map.of("type", "tool_search", "execution", "client"))).build();
+        MultimodalMessage msg = MultimodalMessage.builder().role("assistant").content(List.of())
+                .toolCalls(List.of(new com.dvarahq.core.model.ToolCall("ts_1", "tool_search", "{\"query\":\"agents\"}")))
+                .build();
+        ChatResponse resp = ChatResponse.builder().id("c").model("m").created(1)
+                .choices(List.of(ChatResponse.Choice.builder().index(0).message(msg).build())).build();
+
+        ResponseResult.OutputItem item = controller.toResponseResult(resp, ResponsesController.readTools(request).names())
+                .getOutput().get(0);
+
+        assertThat(item.getType()).isEqualTo("tool_search_call");
+        assertThat(item.getExecution()).isEqualTo("client");
+        assertThat(item.getArguments()).isEqualTo(Map.of("query", "agents"));
+    }
+
+    @Test
+    void aToolTypeTheGatewayCannotTranslate_isLeftForOpenAisResponsesApi() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(Map.of("type", "function", "name", "f"), Map.of("type", "shell"),
+                        Map.of("type", "tool_search", "execution", "server"))).build());
+
+        assertThat(internal.getTools()).extracting(com.dvarahq.core.model.ToolDefinition::getName).containsExactly("f");
+        assertThat(internal.getResponsesApiOnly()).containsExactly("the tool type shell", "a tool_search the provider runs");
+    }
+
+    @Test
+    void parallelToolCallsFalseAndReasoningContext_areAccepted() {
+        ResponseRequest r = ResponseRequest.builder().model("m").input("hi").parallelToolCalls(false)
+                .reasoning(Map.of("effort", "low", "context", "all_turns")).build();
+
+        controller.rejectUnsupported(r);
+        assertThat(controller.toInternal(r).getParallelToolCalls()).isFalse();
     }
 }
