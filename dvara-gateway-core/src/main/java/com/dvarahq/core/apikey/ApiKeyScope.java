@@ -82,7 +82,8 @@ public enum ApiKeyScope {
             return Optional.empty();
         }
         if (under(path, "/v1/chat/completions") || under(path, "/v1/completions") || under(path, "/v1/responses")
-                || under(path, "/v1/messages") || under(path, "/v1/gemini")) {
+                || under(path, "/v1/messages") || under(path, "/v1/gemini")
+                || under(path, "/v1/cursor/chat/completions")) {
             return Optional.of(COMPLETIONS_WRITE);
         }
         // /v1/budget prices a request the caller intends to make and reports the workspace's
@@ -101,7 +102,7 @@ public enum ApiKeyScope {
         if (under(path, "/v1/batches") || under(path, "/v1/files")) {
             return Optional.of(BATCHES_WRITE);
         }
-        if (under(path, "/v1/models")) {
+        if (under(path, "/v1/models") || under(path, "/v1/cursor/models")) {
             return Optional.of(MODELS_READ);
         }
         return Optional.empty();

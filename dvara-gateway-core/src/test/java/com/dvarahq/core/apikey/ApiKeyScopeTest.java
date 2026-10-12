@@ -48,6 +48,9 @@ class ApiKeyScopeTest {
         // A /v1 path outside every family, expressed as a path rather than a route: the rule is
         // about the scope vocabulary, not about which routes happen to be served.
         assertThat(ApiKeyScope.forPath("/v1/no-family-covers-this")).isEmpty();
+        // Cursor's base URL is governed like the paths it stands in for.
+        assertThat(ApiKeyScope.forPath("/v1/cursor/chat/completions")).contains(ApiKeyScope.COMPLETIONS_WRITE);
+        assertThat(ApiKeyScope.forPath("/v1/cursor/models")).contains(ApiKeyScope.MODELS_READ);
         assertThat(ApiKeyScope.permits(List.of("completions:write"), "/v1/no-family-covers-this")).isTrue();
         assertThat(ApiKeyScope.permits(List.of("completions:write"), "/mcp/servers")).isTrue();
     }

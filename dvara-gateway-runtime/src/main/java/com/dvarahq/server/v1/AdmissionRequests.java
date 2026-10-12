@@ -52,6 +52,9 @@ public final class AdmissionRequests {
             return Optional.empty();
         }
         try {
+            if (path.endsWith("/v1/cursor/chat/completions")) {
+                return Optional.of(CursorController.governanceView(body));
+            }
             if (path.endsWith("/chat/completions")) {
                 return Optional.of(ChatCompletionController.toInternal(
                         JsonMapper.instance().readValue(body, ChatCompletionRequest.class)));

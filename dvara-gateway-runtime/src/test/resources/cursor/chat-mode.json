@@ -1,0 +1,17 @@
+{
+  "model": "gateway-gpt",
+  "messages": [
+    {"role": "user", "content": "read a file"},
+    {"role": "assistant", "content": null, "tool_calls": [
+      {"id": "call_hist1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\": \"a.py\"}"}}]},
+    {"role": "tool", "tool_call_id": "call_hist1", "content": "file contents"},
+    {"role": "user", "content": "now use ApplyPatch"}
+  ],
+  "tools": [
+    {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}},
+    {"type": "custom", "custom": {"name": "ApplyPatch", "description": "V4A patch",
+      "format": {"type": "grammar", "definition": "start: patch", "syntax": "lark"}}}
+  ],
+  "tool_choice": {"type": "custom", "name": "ApplyPatch"},
+  "stream": false
+}

@@ -164,15 +164,8 @@ public class ResponsesController {
         httpRequest.setAttribute(AccessLogFilter.ATTR_MODEL, request.getModel());
         httpRequest.setAttribute(AccessLogFilter.ATTR_STREAM, String.valueOf(stream));
 
-        rejectUnsupported(request);
-        ChatRequest internal = toInternal(request);
-        // The body as it came, for a route to OpenAI or Azure OpenAI to send to its own /responses; every other
-        // provider is sent the translation. Null only if the two do not line up, and then every route translates.
-        OpenAiResponsesBody passthrough = ResponsesSlots.body(raw, internal.getMessages());
-        if (passthrough == null) {
-            log.warn("A Responses API request could not be kept as it came; it is translated on every route");
-        }
-        internal = internal.toBuilder().openAiResponses(passthrough).build();
+        ChatRequest internal = governable(raw, request);
+        OpenAiResponsesBody passthrough = internal.getOpenAiResponses();
         ResponsesTools.Names names = readTools(request).names();
 
         if (stream) {
@@ -730,7 +723,23 @@ public class ResponsesController {
     // Reject unsupported features cleanly (never silent-drop)
     // -------------------------------------------------------------------------
 
-    void rejectUnsupported(ResponseRequest r) {
+    /**
+     * A Responses API body as the gateway's request: checked for what is refused, read into the gateway's view,
+     * and kept as it came for a route to OpenAI or Azure OpenAI to send to its own {@code /responses}; every other
+     * provider is sent the translation. The body is not kept only if the two do not line up, and then every
+     * route translates.
+     */
+    static ChatRequest governable(com.fasterxml.jackson.databind.node.ObjectNode raw, ResponseRequest request) {
+        rejectUnsupported(request);
+        ChatRequest internal = toInternal(request);
+        OpenAiResponsesBody passthrough = ResponsesSlots.body(raw, internal.getMessages());
+        if (passthrough == null) {
+            log.warn("A Responses API request could not be kept as it came; it is translated on every route");
+        }
+        return internal.toBuilder().openAiResponses(passthrough).build();
+    }
+
+    static void rejectUnsupported(ResponseRequest r) {
         if (Boolean.TRUE.equals(r.getStore())) {
             throw unsupported("store=true (server-side conversation state) is not supported — the gateway is stateless. Use store=false.");
         }

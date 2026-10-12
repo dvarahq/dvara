@@ -1,0 +1,14 @@
+{
+  "model": "gateway-gpt",
+  "messages": [],
+  "instructions": "You are a coding agent in an IDE.",
+  "input": [{"role": "user", "content": "hello"}],
+  "tools": [
+    {"type": "function", "name": "read_file", "description": "Read a file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}},
+    {"type": "custom", "name": "ApplyPatch", "description": "V4A patch", "format": {"type": "grammar", "definition": "start: patch", "syntax": "lark"}}
+  ],
+  "tool_choice": "auto",
+  "reasoning": {"effort": "medium"},
+  "stream": true,
+  "stream_options": {"include_usage": true}
+}
