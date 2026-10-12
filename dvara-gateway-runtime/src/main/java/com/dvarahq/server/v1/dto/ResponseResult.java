@@ -26,7 +26,7 @@ import java.util.List;
 
 /**
  * Non-streaming response body for the Responses API — the internal {@code ChatResponse}
- * mapped to the Responses shape ({@code output[]} of message items, {@code usage} with
+ * mapped to the Responses shape ({@code output[]} of message and {@code function_call} items, {@code usage} with
  * {@code input_tokens}/{@code output_tokens}).
  */
 @Data
@@ -53,11 +53,18 @@ public class ResponseResult {
     @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class OutputItem {
-        private String type;   // "message"
+        private String type;   // "message" or "function_call"
         private String id;
         private String status; // "completed"
-        private String role;   // "assistant"
+        private String role;   // "assistant", on a message
         private List<ContentPart> content;
+        /** On a {@code function_call}: the id the caller answers with in {@code function_call_output}. */
+        @JsonProperty("call_id")
+        private String callId;
+        /** On a {@code function_call}: the function the model chose. */
+        private String name;
+        /** On a {@code function_call}: the arguments, as the JSON text the model wrote. */
+        private String arguments;
     }
 
     @Data

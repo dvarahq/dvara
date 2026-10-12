@@ -206,12 +206,9 @@ class ResponsesControllerTest {
                 .andExpect(jsonPath("$.error.code").value("unsupported_capability"));
     }
 
-    /**
-     * The dispatcher is stubbed to succeed on purpose: if {@code rejectUnsupported} let this
-     * request through, the test would fail on 200-vs-400 rather than on an incidental mock NPE.
-     */
+    /** Codex CLI sends tool_choice "auto" on every request, with or without tools. */
     @Test
-    void toolChoice_returns400Unsupported() throws Exception {
+    void toolChoiceAuto_isAccepted() throws Exception {
         when(dispatcher.chat(any())).thenReturn(chatResponse("gpt-4o", "ok"));
 
         mockMvc.perform(post("/v1/responses")
@@ -219,11 +216,10 @@ class ResponsesControllerTest {
                         .content("""
                                 {"model": "gpt-4o", "input": "hi", "tool_choice": "auto"}
                                 """))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("unsupported_capability"));
+                .andExpect(status().isOk());
     }
 
-    /** Same shape as {@link #toolChoice_returns400Unsupported}. */
+    /** The dispatcher is stubbed to succeed, so a request let through fails on 200-vs-400. */
     @Test
     void include_returns400Unsupported() throws Exception {
         when(dispatcher.chat(any())).thenReturn(chatResponse("gpt-4o", "ok"));
@@ -254,22 +250,144 @@ class ResponsesControllerTest {
                 .andExpect(status().isOk());
     }
 
-    /**
-     * A request carrying both tools and tool_choice gets the tools message, which names the
-     * working alternative. This fixes the order of the two checks.
-     */
+    /** A built-in tool next to a function tool is refused, naming the built-in tool. */
     @Test
-    void toolsAndToolChoice_reportsTheToolsMessage() throws Exception {
+    void aBuiltInToolNextToAFunctionTool_isRefusedNamingIt() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("gpt-4o", "ok"));
+
         mockMvc.perform(post("/v1/responses")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"model": "gpt-4o", "input": "hi",
-                                 "tools": [{"type": "function", "name": "f"}],
+                                 "tools": [{"type": "function", "name": "f", "parameters": {"type": "object"}},
+                                           {"type": "code_interpreter", "container": {"type": "auto"}}],
                                  "tool_choice": "auto"}
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("unsupported_capability"))
-                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("function calling")));
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("code_interpreter")));
+    }
+
+    // -------- function calling --------
+
+    private static final String WEATHER_REQUEST = """
+            {"model": "gpt-4o", %s"input": "Weather in Paris?",
+             "tools": [{"type": "function", "name": "get_weather", "description": "Weather for a city",
+                        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                        "strict": false}],
+             "tool_choice": "auto"}
+            """;
+
+    @Test
+    void sync_aFunctionCallComesBackAsAFunctionCallItem() throws Exception {
+        MultimodalMessage call = MultimodalMessage.builder().role("assistant").content(List.of())
+                .toolCalls(List.of(new com.dvarahq.core.model.ToolCall("call_1", "get_weather", "{\"city\":\"Paris\"}")))
+                .build();
+        when(dispatcher.chat(any())).thenReturn(ChatResponse.builder()
+                .id("chatcmpl-x").model("gpt-4o").created(1704067200L)
+                .choices(List.of(ChatResponse.Choice.builder().index(0).message(call).finishReason("tool_calls").build()))
+                .usage(ChatResponse.Usage.builder().promptTokens(10).completionTokens(3).totalTokens(13).build())
+                .build());
+
+        mockMvc.perform(post("/v1/responses")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(WEATHER_REQUEST.formatted("")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.output.length()").value(1))
+                .andExpect(jsonPath("$.output[0].type").value("function_call"))
+                .andExpect(jsonPath("$.output[0].call_id").value("call_1"))
+                .andExpect(jsonPath("$.output[0].name").value("get_weather"))
+                .andExpect(jsonPath("$.output[0].arguments").value("{\"city\":\"Paris\"}"))
+                .andExpect(jsonPath("$.output[0].status").value("completed"));
+
+        // The provider was asked with the tool and the choice.
+        verify(dispatcher).chat(argThat(r -> r.getTools() != null && r.getTools().size() == 1
+                && "get_weather".equals(r.getTools().get(0).getName()) && "auto".equals(r.getToolChoice())));
+    }
+
+    @Test
+    void streaming_aFunctionCallStreamsAsTypedEvents() throws Exception {
+        List<SseChunk> chunks = List.of(
+                SseChunk.builder().id("c1").model("gpt-4o")
+                        .toolCalls(List.of(com.dvarahq.core.model.ToolCallDelta.open(0, "call_1", "get_weather", null))).build(),
+                SseChunk.builder().id("c1").model("gpt-4o")
+                        .toolCalls(List.of(com.dvarahq.core.model.ToolCallDelta.arguments(0, "{\"city\":"))).build(),
+                SseChunk.builder().id("c1").model("gpt-4o")
+                        .toolCalls(List.of(com.dvarahq.core.model.ToolCallDelta.arguments(0, "\"Paris\"}"))).build(),
+                SseChunk.builder().id("c1").model("gpt-4o").finishReason("tool_calls").done(true).build());
+        when(dispatcher.streamChat(any())).thenReturn(chunks.iterator());
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(WEATHER_REQUEST.formatted("\"stream\": true, "));
+
+        assertThat(events).extracting(e -> e.get("type").asText()).containsExactly(
+                "response.created", "response.in_progress",
+                "response.output_item.added",
+                "response.function_call_arguments.delta", "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+                "response.output_item.done",
+                "response.completed");
+        com.fasterxml.jackson.databind.JsonNode added = events.get(2);
+        assertThat(added.get("output_index").asInt()).isZero();
+        assertThat(added.at("/item/type").asText()).isEqualTo("function_call");
+        assertThat(added.at("/item/call_id").asText()).isEqualTo("call_1");
+        assertThat(added.at("/item/name").asText()).isEqualTo("get_weather");
+        assertThat(added.at("/item/arguments").asText()).isEmpty();
+        assertThat(added.at("/item/status").asText()).isEqualTo("in_progress");
+        String itemId = added.at("/item/id").asText();
+        assertThat(itemId).startsWith("fc_");
+
+        assertThat(events.get(3).get("item_id").asText()).isEqualTo(itemId);
+        assertThat(events.get(3).get("delta").asText()).isEqualTo("{\"city\":");
+        assertThat(events.get(5).get("arguments").asText()).isEqualTo("{\"city\":\"Paris\"}");
+        assertThat(events.get(6).at("/item/arguments").asText()).isEqualTo("{\"city\":\"Paris\"}");
+        assertThat(events.get(6).at("/item/status").asText()).isEqualTo("completed");
+        com.fasterxml.jackson.databind.JsonNode output = events.get(7).at("/response/output");
+        assertThat(output).hasSize(1);
+        assertThat(output.get(0).get("type").asText()).isEqualTo("function_call");
+        for (int i = 0; i < events.size(); i++) {
+            assertThat(events.get(i).get("sequence_number").asInt()).isEqualTo(i);
+        }
+    }
+
+    @Test
+    void streaming_textThenAFunctionCall_finishesTheMessageFirst() throws Exception {
+        List<SseChunk> chunks = List.of(
+                SseChunk.builder().id("c1").model("gpt-4o").delta("Checking.").build(),
+                SseChunk.builder().id("c1").model("gpt-4o")
+                        .toolCalls(List.of(com.dvarahq.core.model.ToolCallDelta.open(0, "call_1", "get_weather", "{}"))).build(),
+                SseChunk.builder().id("c1").model("gpt-4o").finishReason("tool_calls").done(true).build());
+        when(dispatcher.streamChat(any())).thenReturn(chunks.iterator());
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(WEATHER_REQUEST.formatted("\"stream\": true, "));
+
+        List<String> types = events.stream().map(e -> e.get("type").asText()).toList();
+        assertThat(types.indexOf("response.output_text.done"))
+                .isLessThan(types.lastIndexOf("response.output_item.added"));
+        com.fasterxml.jackson.databind.JsonNode output = events.get(events.size() - 1).at("/response/output");
+        assertThat(output).hasSize(2);
+        assertThat(output.get(0).get("type").asText()).isEqualTo("message");
+        assertThat(output.get(0).at("/content/0/text").asText()).isEqualTo("Checking.");
+        assertThat(output.get(1).get("type").asText()).isEqualTo("function_call");
+        assertThat(output.get(1).get("arguments").asText()).isEqualTo("{}");
+    }
+
+    /** The SSE events of a streamed request, each as its JSON. */
+    private List<com.fasterxml.jackson.databind.JsonNode> streamEvents(String body) throws Exception {
+        MvcResult mvcResult = mockMvc.perform(post("/v1/responses")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        String sse = mockMvc.perform(asyncDispatch(mvcResult)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        List<com.fasterxml.jackson.databind.JsonNode> events = new java.util.ArrayList<>();
+        for (String line : sse.split("\n")) {
+            if (line.startsWith("data:")) {
+                events.add(json.readTree(line.substring(5).trim()));
+            }
+        }
+        return events;
     }
 
     @Test

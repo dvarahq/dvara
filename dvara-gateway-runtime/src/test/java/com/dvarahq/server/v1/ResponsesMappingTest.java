@@ -250,6 +250,175 @@ class ResponsesMappingTest {
         assertThat(json).doesNotContain("tokens_details");
     }
 
+    // -------- function calling --------
+
+    private static final Map<String, Object> WEATHER_TOOL = Map.of("type", "function", "name", "get_weather",
+            "description", "Weather for a city",
+            "parameters", Map.of("type", "object", "properties", Map.of("city", Map.of("type", "string"))));
+
+    @Test
+    void functionTools_becomeToolDefinitions() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(WEATHER_TOOL)).toolChoice("auto").build());
+
+        assertThat(internal.getTools()).hasSize(1);
+        assertThat(internal.getTools().get(0).getName()).isEqualTo("get_weather");
+        assertThat(internal.getTools().get(0).getDescription()).isEqualTo("Weather for a city");
+        assertThat(internal.getTools().get(0).getParameters()).containsEntry("type", "object");
+        assertThat(internal.getToolChoice()).isEqualTo("auto");
+    }
+
+    @Test
+    void aBuiltInTool_isRefusedNamingItsType() {
+        assertThatThrownBy(() -> controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(WEATHER_TOOL, Map.of("type", "web_search"))).build()))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("UNSUPPORTED_CAPABILITY"))
+                .hasMessageContaining("web_search")
+                .hasMessageContaining("runs at the provider");
+    }
+
+    @Test
+    void aFunctionToolChoice_takesTheFormChatCarries() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(WEATHER_TOOL)).toolChoice(Map.of("type", "function", "name", "get_weather")).build());
+
+        assertThat(internal.getToolChoice())
+                .isEqualTo(Map.of("type", "function", "function", Map.of("name", "get_weather")));
+    }
+
+    @Test
+    void aToolChoiceWithNoTools_isNotSent() {
+        // Codex CLI sends tool_choice "auto" on every request; a provider refuses a choice without tools.
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .toolChoice("auto").build());
+
+        assertThat(internal.getTools()).isNull();
+        assertThat(internal.getToolChoice()).isNull();
+    }
+
+    @Test
+    void anAllowedToolsChoice_isRefused() {
+        assertThatThrownBy(() -> controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(WEATHER_TOOL))
+                .toolChoice(Map.of("type", "allowed_tools", "mode", "auto", "tools", List.of())).build()))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("UNSUPPORTED_CAPABILITY"))
+                .hasMessageContaining("allowed_tools");
+    }
+
+    @Test
+    void functionCallItems_becomeOneAssistantTurnAndTheirOutputsToolMessages() {
+        // Two calls of one turn, then their outputs: the shape every provider's tool loop expects.
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m")
+                .tools(List.of(WEATHER_TOOL))
+                .input(List.of(
+                        Map.of("role", "user", "content", "Weather in Paris and Rome?"),
+                        Map.of("type", "function_call", "id", "fc_1", "call_id", "call_1",
+                                "name", "get_weather", "arguments", "{\"city\":\"Paris\"}"),
+                        Map.of("type", "function_call", "id", "fc_2", "call_id", "call_2",
+                                "name", "get_weather", "arguments", "{\"city\":\"Rome\"}"),
+                        Map.of("type", "function_call_output", "call_id", "call_1", "output", "18C"),
+                        Map.of("type", "function_call_output", "call_id", "call_2",
+                                "output", List.of(Map.of("type", "input_text", "text", "21C")))))
+                .build());
+
+        List<MultimodalMessage> messages = internal.getMessages();
+        assertThat(messages).extracting(MultimodalMessage::getRole)
+                .containsExactly("user", "assistant", "tool", "tool");
+        assertThat(messages.get(1).getToolCalls()).extracting(com.dvarahq.core.model.ToolCall::getId)
+                .containsExactly("call_1", "call_2");
+        assertThat(messages.get(1).getToolCalls().get(0).getName()).isEqualTo("get_weather");
+        assertThat(messages.get(1).getToolCalls().get(0).getArguments()).isEqualTo("{\"city\":\"Paris\"}");
+        assertThat(messages.get(2).getToolCallId()).isEqualTo("call_1");
+        assertThat(messages.get(2).textContent()).isEqualTo("18C");
+        assertThat(messages.get(3).getToolCallId()).isEqualTo("call_2");
+        assertThat(messages.get(3).textContent()).isEqualTo("21C");
+    }
+
+    @Test
+    void aFunctionCallAfterTheAssistantsText_joinsThatMessage() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m")
+                .input(List.of(
+                        Map.of("role", "user", "content", "hi"),
+                        Map.of("type", "message", "role", "assistant",
+                                "content", List.of(Map.of("type", "output_text", "text", "Checking."))),
+                        Map.of("type", "function_call", "call_id", "call_1", "name", "get_weather",
+                                "arguments", "{}"),
+                        Map.of("type", "function_call_output", "call_id", "call_1", "output", "18C")))
+                .build());
+
+        assertThat(internal.getMessages()).extracting(MultimodalMessage::getRole)
+                .containsExactly("user", "assistant", "tool");
+        assertThat(internal.getMessages().get(1).textContent()).isEqualTo("Checking.");
+        assertThat(internal.getMessages().get(1).getToolCalls()).hasSize(1);
+    }
+
+    @Test
+    void anInputItemTypeTheGatewayDoesNotRead_isRefusedNotSentAsAnEmptyMessage() {
+        assertThatThrownBy(() -> controller.toInternal(ResponseRequest.builder().model("m")
+                .input(List.of(Map.of("role", "user", "content", "hi"),
+                        Map.of("type", "item_reference", "id", "msg_1"))).build()))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("UNSUPPORTED_CAPABILITY"))
+                .hasMessageContaining("item_reference");
+    }
+
+    @Test
+    void aFunctionCallWithoutItsCallId_isInvalid() {
+        assertThatThrownBy(() -> controller.toInternal(ResponseRequest.builder().model("m")
+                .input(List.of(Map.of("type", "function_call", "name", "get_weather", "arguments", "{}"))).build()))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("INVALID_REQUEST"))
+                .hasMessageContaining("call_id");
+    }
+
+    @Test
+    void anImageInAFunctionsOutput_isRefused() {
+        assertThatThrownBy(() -> controller.toInternal(ResponseRequest.builder().model("m")
+                .input(List.of(Map.of("type", "function_call_output", "call_id", "call_1",
+                        "output", List.of(Map.of("type", "input_image", "image_url", "https://example.com/a.png")))))
+                .build()))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("UNSUPPORTED_CAPABILITY"))
+                .hasMessageContaining("input_image");
+    }
+
+    @Test
+    void aToolCallAnswer_becomesFunctionCallItems() {
+        MultimodalMessage msg = MultimodalMessage.builder().role("assistant").content(List.of())
+                .toolCalls(List.of(new com.dvarahq.core.model.ToolCall("call_1", "get_weather", "{\"city\":\"Paris\"}")))
+                .build();
+        ChatResponse resp = ChatResponse.builder().id("c").model("gpt-4o").created(1)
+                .choices(List.of(ChatResponse.Choice.builder().index(0).message(msg).finishReason("tool_calls").build()))
+                .build();
+
+        ResponseResult result = controller.toResponseResult(resp);
+
+        assertThat(result.getOutput()).hasSize(1);
+        ResponseResult.OutputItem item = result.getOutput().get(0);
+        assertThat(item.getType()).isEqualTo("function_call");
+        assertThat(item.getId()).startsWith("fc_");
+        assertThat(item.getCallId()).isEqualTo("call_1");
+        assertThat(item.getName()).isEqualTo("get_weather");
+        assertThat(item.getArguments()).isEqualTo("{\"city\":\"Paris\"}");
+        assertThat(item.getStatus()).isEqualTo("completed");
+    }
+
+    @Test
+    void textAndAToolCall_becomeAMessageThenAFunctionCall() {
+        MultimodalMessage msg = MultimodalMessage.builder().role("assistant")
+                .content(List.of(new ContentBlock.TextBlock("Checking.")))
+                .toolCalls(List.of(new com.dvarahq.core.model.ToolCall("call_1", "get_weather", "{}")))
+                .build();
+        ChatResponse resp = ChatResponse.builder().id("c").model("gpt-4o").created(1)
+                .choices(List.of(ChatResponse.Choice.builder().index(0).message(msg).build()))
+                .build();
+
+        assertThat(controller.toResponseResult(resp).getOutput()).extracting(ResponseResult.OutputItem::getType)
+                .containsExactly("message", "function_call");
+    }
+
     // -------- reject unsupported --------
 
     @Test
@@ -259,8 +428,6 @@ class ResponsesMappingTest {
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").reasoning(Map.of("effort", "high")).build());
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").background(true).build());
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").prompt(Map.of("id", "p_1")).build());
-        assertUnsupported(ResponseRequest.builder().model("m").input("hi")
-                .tools(List.of(Map.of("type", "web_search"))).build());
     }
 
     private void assertUnsupported(ResponseRequest req) {

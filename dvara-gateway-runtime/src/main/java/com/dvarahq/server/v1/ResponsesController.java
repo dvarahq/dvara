@@ -31,6 +31,7 @@ import com.dvarahq.core.model.ContentBlock;
 import com.dvarahq.core.model.MultimodalMessage;
 import com.dvarahq.core.model.ResponseFormat;
 import com.dvarahq.core.model.SseChunk;
+import com.dvarahq.core.model.ToolCallDelta;
 import com.dvarahq.core.pii.PiiEnforcer;
 import com.dvarahq.core.policy.PolicyDecision;
 import com.dvarahq.core.ratelimit.RateLimiter;
@@ -78,10 +79,11 @@ import java.util.stream.Collectors;
  * delegated to the shared {@link ChatExecutionService}, so Responses runs the same pipeline,
  * metering, audit and response cache as {@code /v1/chat/completions} across every provider.
  *
- * <p>Text and image input, structured output ({@code text.format}) and {@code top_p} are
- * honoured. Function calling, stateful conversation, hosted tools, reasoning, background mode,
- * and file/audio input are rejected with {@code UNSUPPORTED_CAPABILITY} (400), never silently
- * dropped.
+ * <p>Text and image input, structured output ({@code text.format}), {@code top_p} and function
+ * calling ({@code function} tools, {@code tool_choice}, {@code function_call} and
+ * {@code function_call_output} items; see {@link ResponsesTools}) are honoured. Stateful
+ * conversation, built-in tools, reasoning, background mode, and file/audio input are rejected with
+ * {@code UNSUPPORTED_CAPABILITY} (400), never silently dropped.
  */
 @RestController
 @RequestMapping("/v1")
@@ -216,7 +218,6 @@ public class ResponsesController {
         java.util.concurrent.atomic.AtomicReference<com.dvarahq.core.model.ChatResponse.Usage>
                 reportedUsage = new java.util.concurrent.atomic.AtomicReference<>();
         String responseId = "resp_" + shortId();
-        String itemId = "msg_" + shortId();
         long createdAt = Instant.now().getEpochSecond();
         String model = streamRequest.getModel();
         AtomicInteger seq = new AtomicInteger(0);
@@ -249,12 +250,7 @@ public class ResponsesController {
                 upstream.set(chunks);
                 who = who.withUpstreamFrom(httpRequest);   // provider + credential, now known
 
-                Map<String, Object> itemInProgress = messageItem(itemId, "in_progress", List.of());
-                emit(emitter, "response.output_item.added", seq, mapOf("output_index", 0, "item", itemInProgress));
-                Map<String, Object> emptyPart = mapOf("type", "output_text", "text", "", "annotations", List.of());
-                emit(emitter, "response.content_part.added", seq,
-                        mapOf("item_id", itemId, "output_index", 0, "content_index", 0, "part", emptyPart));
-
+                StreamItems items = new StreamItems(emitter, seq);
                 boolean sawDone = false;
                 while (!completed.get() && chunks.hasNext()) {   // cancellation first; see ChatCompletionController
                     SseChunk chunk = chunks.next();
@@ -268,8 +264,20 @@ public class ResponsesController {
                     }
                     if (chunk.getDelta() != null && !chunk.getDelta().isEmpty()) {
                         output.append(chunk.getDelta());
-                        emit(emitter, "response.output_text.delta", seq,
-                                mapOf("item_id", itemId, "output_index", 0, "content_index", 0, "delta", chunk.getDelta()));
+                        items.text(chunk.getDelta());
+                    }
+                    // A function call is output too: it counts in the estimate when the upstream
+                    // reports no usage, as on chat.
+                    if (chunk.getToolCalls() != null) {
+                        for (ToolCallDelta call : chunk.getToolCalls()) {
+                            if (call.name() != null) {
+                                output.append(call.name());
+                            }
+                            if (call.argumentsFragment() != null) {
+                                output.append(call.argumentsFragment());
+                            }
+                            items.toolCall(call);
+                        }
                     }
                     if (chunk.isDone()) {
                         sawDone = true;
@@ -282,15 +290,8 @@ public class ResponsesController {
                             "The upstream stream ended before it finished; the answer is incomplete");
                 }
 
-                String full = output.toString();
-                emit(emitter, "response.output_text.done", seq,
-                        mapOf("item_id", itemId, "output_index", 0, "content_index", 0, "text", full));
-                Map<String, Object> donePart = mapOf("type", "output_text", "text", full, "annotations", List.of());
-                emit(emitter, "response.content_part.done", seq,
-                        mapOf("item_id", itemId, "output_index", 0, "content_index", 0, "part", donePart));
-                Map<String, Object> itemDone = messageItem(itemId, "completed", List.of(donePart));
-                emit(emitter, "response.output_item.done", seq, mapOf("output_index", 0, "item", itemDone));
-                Map<String, Object> respCompleted = responseObject(responseId, model, "completed", List.of(itemDone), createdAt);
+                List<Map<String, Object>> finished = items.finish();
+                Map<String, Object> respCompleted = responseObject(responseId, model, "completed", finished, createdAt);
                 emit(emitter, "response.completed", seq, mapOf("response", respCompleted));
             } catch (Exception e) {
                 if (completed.get()) {
@@ -359,6 +360,126 @@ public class ResponsesController {
         return emitter;
     }
 
+    /**
+     * The output items of one streamed response, each announced when the model starts it and finished
+     * with its full content: a {@code message} item for text and a {@code function_call} item for each
+     * call, in the order the model produces them. The events are the Responses API's own:
+     * {@code response.output_text.*} for text, {@code response.function_call_arguments.*} for a call's
+     * arguments, each between {@code response.output_item.added} and {@code response.output_item.done}.
+     *
+     * <p>A provider may send fragments of several calls in turn, so a call stays open until the stream
+     * ends; the text item ends when the first call starts.</p>
+     */
+    private final class StreamItems {
+        private final SseEmitter emitter;
+        private final AtomicInteger seq;
+        private int nextIndex;
+        // Finished items by output index, so the completed response lists them in order.
+        private final java.util.TreeMap<Integer, Map<String, Object>> finished = new java.util.TreeMap<>();
+        // The message item being written, or null.
+        private String messageId;
+        private int messageIndex;
+        private StringBuilder messageText;
+        // Function calls in the order they opened, by the provider's call index.
+        private final Map<Integer, Call> calls = new LinkedHashMap<>();
+
+        private final class Call {
+            final String itemId = "fc_" + shortId();
+            final int outputIndex;
+            final String callId;
+            final String name;
+            final StringBuilder arguments = new StringBuilder();
+
+            Call(int outputIndex, String callId, String name) {
+                this.outputIndex = outputIndex;
+                this.callId = callId;
+                this.name = name;
+            }
+
+            Map<String, Object> item(String status) {
+                return mapOf("type", "function_call", "id", itemId, "call_id", callId, "name", name,
+                        "arguments", "completed".equals(status) ? arguments.toString() : "", "status", status);
+            }
+        }
+
+        StreamItems(SseEmitter emitter, AtomicInteger seq) {
+            this.emitter = emitter;
+            this.seq = seq;
+        }
+
+        void text(String delta) throws Exception {
+            if (messageId == null) {
+                openMessage();
+            }
+            messageText.append(delta);
+            emit(emitter, "response.output_text.delta", seq,
+                    mapOf("item_id", messageId, "output_index", messageIndex, "content_index", 0, "delta", delta));
+        }
+
+        void toolCall(ToolCallDelta delta) throws Exception {
+            Call call = calls.get(delta.index());
+            if (call == null) {
+                finishMessage();
+                call = new Call(nextIndex++, delta.id() == null ? "call_" + shortId() : delta.id(),
+                        delta.name() == null ? "" : delta.name());
+                calls.put(delta.index(), call);
+                emit(emitter, "response.output_item.added", seq,
+                        mapOf("output_index", call.outputIndex, "item", call.item("in_progress")));
+            }
+            String fragment = delta.argumentsFragment();
+            if (fragment != null && !fragment.isEmpty()) {
+                call.arguments.append(fragment);
+                emit(emitter, "response.function_call_arguments.delta", seq,
+                        mapOf("item_id", call.itemId, "output_index", call.outputIndex, "delta", fragment));
+            }
+        }
+
+        /** Finishes every open item and returns all of them in output order. */
+        List<Map<String, Object>> finish() throws Exception {
+            if (messageId == null && calls.isEmpty()) {
+                openMessage();   // an empty answer is still one message item
+            }
+            finishMessage();
+            for (Call call : calls.values()) {
+                String arguments = call.arguments.toString();
+                emit(emitter, "response.function_call_arguments.done", seq,
+                        mapOf("item_id", call.itemId, "output_index", call.outputIndex, "arguments", arguments));
+                Map<String, Object> done = call.item("completed");
+                emit(emitter, "response.output_item.done", seq, mapOf("output_index", call.outputIndex, "item", done));
+                finished.put(call.outputIndex, done);
+            }
+            calls.clear();
+            return new ArrayList<>(finished.values());
+        }
+
+        private void openMessage() throws Exception {
+            messageId = "msg_" + shortId();
+            messageIndex = nextIndex++;
+            messageText = new StringBuilder();
+            emit(emitter, "response.output_item.added", seq,
+                    mapOf("output_index", messageIndex, "item", messageItem(messageId, "in_progress", List.of())));
+            Map<String, Object> emptyPart = mapOf("type", "output_text", "text", "", "annotations", List.of());
+            emit(emitter, "response.content_part.added", seq,
+                    mapOf("item_id", messageId, "output_index", messageIndex, "content_index", 0, "part", emptyPart));
+        }
+
+        private void finishMessage() throws Exception {
+            if (messageId == null) {
+                return;
+            }
+            String full = messageText.toString();
+            emit(emitter, "response.output_text.done", seq,
+                    mapOf("item_id", messageId, "output_index", messageIndex, "content_index", 0, "text", full));
+            Map<String, Object> donePart = mapOf("type", "output_text", "text", full, "annotations", List.of());
+            emit(emitter, "response.content_part.done", seq,
+                    mapOf("item_id", messageId, "output_index", messageIndex, "content_index", 0, "part", donePart));
+            Map<String, Object> itemDone = messageItem(messageId, "completed", List.of(donePart));
+            emit(emitter, "response.output_item.done", seq, mapOf("output_index", messageIndex, "item", itemDone));
+            finished.put(messageIndex, itemDone);
+            messageId = null;
+        }
+    }
+
     private void emit(SseEmitter emitter, String type, AtomicInteger seq, Map<String, Object> fields) throws Exception {
         LinkedHashMap<String, Object> event = new LinkedHashMap<>();
         event.put("type", type);
@@ -388,21 +509,6 @@ public class ResponsesController {
         if (r.getPrompt() != null) {
             throw unsupported("reusable prompt objects are not supported — use DVARA prompt templates instead.");
         }
-        if (r.getTools() != null && !r.getTools().isEmpty()) {
-            // Function calling is not supported on /v1/responses: its output shape (a
-            // `function_call` output item plus typed streaming events) is a distinct surface from
-            // chat's message.tool_calls. Refused rather than silently dropped. Built-in hosted
-            // tools (web_search, file_search, code_interpreter, computer_use, mcp) are not
-            // supported either.
-            throw unsupported("function calling on /v1/responses is a follow-up "
-                    + "(available now on /v1/chat/completions); built-in hosted tools "
-                    + "(web_search, file_search, code_interpreter, computer_use, mcp) are not supported.");
-        }
-        // Checked after `tools` so a request carrying both gets the more informative tools message.
-        if (r.getToolChoice() != null) {
-            throw unsupported("tool_choice is not supported without function calling on /v1/responses "
-                    + "(a follow-up; available now on /v1/chat/completions).");
-        }
         if (r.getInclude() != null && !r.getInclude().isEmpty()) {
             throw unsupported("include is not supported in this release — the requested extra output "
                     + "fields would be absent from the response.");
@@ -429,6 +535,7 @@ public class ResponsesController {
         if (messages.isEmpty()) {
             throw new GatewayException("INVALID_REQUEST", "input is required");
         }
+        List<com.dvarahq.core.model.ToolDefinition> tools = ResponsesTools.tools(r.getTools());
         return ChatRequest.builder()
                 .model(r.getModel())
                 .messages(messages)
@@ -439,6 +546,8 @@ public class ResponsesController {
                 .responseFormat(parseTextFormat(r.getText()))
                 .metadata(r.getMetadata())
                 .user(endUser(r))
+                .tools(tools)
+                .toolChoice(ResponsesTools.toolChoice(r.getToolChoice(), tools != null))
                 .build();
     }
 
@@ -465,7 +574,16 @@ public class ResponsesController {
                 }
                 @SuppressWarnings("unchecked")
                 Map<String, Object> m = (Map<String, Object>) map;
-                messages.add(parseInputItem(m));
+                // An item without a type is a message, as the API reads it.
+                String type = m.get("type") == null ? "message" : m.get("type").toString();
+                switch (type) {
+                    case "message" -> messages.add(parseInputItem(m));
+                    case "function_call" -> ResponsesTools.addFunctionCall(messages, m);
+                    case "function_call_output" -> messages.add(ResponsesTools.functionCallOutput(m));
+                    // Read as a message, any other item would reach the model as an empty turn.
+                    default -> throw unsupported("input items of type " + type
+                            + " are not supported on /v1/responses.");
+                }
             }
             return messages;
         }
@@ -544,11 +662,23 @@ public class ResponsesController {
 
     ResponseResult toResponseResult(ChatResponse resp) {
         String outputText = extractText(resp);
-        ResponseResult.ContentPart part = ResponseResult.ContentPart.builder()
-                .type("output_text").text(outputText).build();
-        ResponseResult.OutputItem item = ResponseResult.OutputItem.builder()
-                .type("message").id("msg_" + shortId()).status("completed").role("assistant")
-                .content(List.of(part)).build();
+        List<com.dvarahq.core.model.ToolCall> calls = toolCalls(resp);
+        List<ResponseResult.OutputItem> output = new ArrayList<>();
+        // A message item for the text; an answer that is only function calls has none, as the API returns it.
+        if (!outputText.isEmpty() || calls.isEmpty()) {
+            ResponseResult.ContentPart part = ResponseResult.ContentPart.builder()
+                    .type("output_text").text(outputText).build();
+            output.add(ResponseResult.OutputItem.builder()
+                    .type("message").id("msg_" + shortId()).status("completed").role("assistant")
+                    .content(List.of(part)).build());
+        }
+        for (com.dvarahq.core.model.ToolCall call : calls) {
+            output.add(ResponseResult.OutputItem.builder()
+                    .type("function_call").id("fc_" + shortId()).status("completed")
+                    .callId(call.getId()).name(call.getName())
+                    .arguments(call.getArguments() == null ? "" : call.getArguments())
+                    .build());
+        }
         ResponseResult.Usage usage = ResponseResult.Usage.from(resp.getUsage());
         return ResponseResult.builder()
                 .id("resp_" + shortId())
@@ -556,9 +686,17 @@ public class ResponsesController {
                 .createdAt(resp.getCreated() > 0 ? resp.getCreated() : Instant.now().getEpochSecond())
                 .model(resp.getModel())
                 .status("completed")
-                .output(List.of(item))
+                .output(output)
                 .usage(usage)
                 .build();
+    }
+
+    private static List<com.dvarahq.core.model.ToolCall> toolCalls(ChatResponse resp) {
+        if (resp.getChoices() == null || resp.getChoices().isEmpty()) {
+            return List.of();
+        }
+        MultimodalMessage msg = resp.getChoices().get(0).getMessage();
+        return msg == null || msg.getToolCalls() == null ? List.of() : msg.getToolCalls();
     }
 
     private String extractText(ChatResponse resp) {
