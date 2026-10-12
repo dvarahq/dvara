@@ -682,9 +682,9 @@ public class AnthropicProvider extends AbstractLlmProvider {
      * reported as the breakdown of that count.
      */
     /** The usage with the thinking tokens, when Anthropic reported them, as the reasoning part of the output. */
-    private static ChatResponse.Usage withThinking(ChatResponse.Usage usage, JsonNode outputDetails) {
-        if (outputDetails != null) {
-            usage.setReasoningTokens(outputDetails.path("thinking_tokens").asInt(0));
+    private static ChatResponse.Usage withThinking(ChatResponse.Usage usage, Map<String, Object> outputDetails) {
+        if (outputDetails != null && outputDetails.get("thinking_tokens") instanceof Number thinking) {
+            usage.setReasoningTokens(thinking.intValue());
         }
         return usage;
     }
@@ -1084,8 +1084,11 @@ public class AnthropicProvider extends AbstractLlmProvider {
             @JsonProperty("output_tokens") private int outputTokens;
             @JsonProperty("cache_read_input_tokens")     private int cacheReadInputTokens;
             @JsonProperty("cache_creation_input_tokens") private int cacheCreationInputTokens;
-            /** The thinking part of {@code output_tokens}, when Anthropic reports it. */
-            @JsonProperty("output_tokens_details") private JsonNode outputTokensDetails;
+            /**
+             * The thinking part of {@code output_tokens}, when Anthropic reports it. A plain map: the application
+             * reads this response with its own JSON library, which takes no tree type from another.
+             */
+            @JsonProperty("output_tokens_details") private Map<String, Object> outputTokensDetails;
         }
     }
 
