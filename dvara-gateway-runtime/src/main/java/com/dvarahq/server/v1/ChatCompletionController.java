@@ -140,13 +140,26 @@ public class ChatCompletionController {
         httpRequest.setAttribute(AccessLogFilter.ATTR_MODEL, request.getModel());
         httpRequest.setAttribute(AccessLogFilter.ATTR_STREAM, String.valueOf(Boolean.TRUE.equals(request.getStream())));
 
-        if (Boolean.TRUE.equals(request.getStream())) {
-            return handleStreaming(request, traceId, httpRequest, httpResponse);
+        boolean includeUsage = request.getStreamOptions() != null
+                && Boolean.TRUE.equals(request.getStreamOptions().get("include_usage"));
+        return serve(toInternal(request), Boolean.TRUE.equals(request.getStream()), includeUsage,
+                httpRequest, httpResponse);
+    }
+
+    /**
+     * Serves the gateway's request and answers in the Chat Completions shape, whole or streamed. Another doorway
+     * that answers in this shape (Cursor's, whatever shape its request came in) serves through here.
+     */
+    Object serve(ChatRequest internal, boolean stream, boolean includeUsage,
+                 HttpServletRequest httpRequest, HttpServletResponse httpResponse) {
+        String traceId = (String) httpRequest.getAttribute(TraceIdFilter.ATTR);
+        if (stream) {
+            return handleStreaming(internal, includeUsage, traceId, httpRequest, httpResponse);
         }
 
         // Governance preamble (template → budget → policy → PII → guardrail → priority → downgrade → context window)
         ChatExecutionService.Prepared prep =
-                executionService.prepare(toInternal(request), httpRequest, httpResponse, traceId);
+                executionService.prepare(internal, httpRequest, httpResponse, traceId);
         FilterContext ctx = prep.ctx();
         PolicyDecision policyDecision = ctx.getPolicyDecision();
 
@@ -167,14 +180,12 @@ public class ChatCompletionController {
         }
     }
 
-    private SseEmitter handleStreaming(ChatCompletionRequest request, String traceId,
+    private SseEmitter handleStreaming(ChatRequest internal, boolean includeUsage, String traceId,
                                        HttpServletRequest httpRequest,
                                        HttpServletResponse httpResponse) {
         ChatExecutionService.Prepared prep =
-                executionService.prepare(toInternal(request), httpRequest, httpResponse, traceId);
+                executionService.prepare(internal, httpRequest, httpResponse, traceId);
         ChatRequest streamRequest = prep.request();
-        boolean includeUsage = request.getStreamOptions() != null
-                && Boolean.TRUE.equals(request.getStreamOptions().get("include_usage"));
         FilterContext ctx = prep.ctx();
         String workspaceId = (String) httpRequest.getAttribute("workspaceId");
         PolicyDecision policyDecision = ctx.getPolicyDecision();

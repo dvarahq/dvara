@@ -639,6 +639,33 @@ curl http://localhost:8080/v1/chat/completions \
 
 Revoking a key is editing the file and restarting. A key from this file never expires.
 
+### Cursor (preview)
+
+Point Cursor's "Override OpenAI Base URL" (Settings, Models) at the gateway's Cursor base URL and use a gateway
+API key as the OpenAI key:
+
+- Base URL: `https://<your-gateway>/v1/cursor`. Cursor calls `{base}/models` to check the key and
+  `{base}/chat/completions` for every request.
+- Key: a gateway API key with the `completions:write` and `models:read` scopes.
+- Models: add each as a custom model in Cursor under the name your routes serve. Cursor refuses a custom
+  model named like one of its built-in models, so give your routes names of their own.
+- Variants: a model picked as `<name>-fast` is routed as `<name>`, and `<name>-thinking-<effort>` (effort
+  `minimal`, `low`, `medium`, `high` or `xhigh`) as `<name>` with that reasoning effort. A bare `-thinking` stays
+  in the name, so a route can carry it.
+
+Cursor sends its requests from its own servers, not from your machine, so the gateway must be reachable from
+the internet over HTTPS.
+
+In chat mode Cursor sends a Chat Completions body. In agent mode it sends a Responses API body (`input`,
+`instructions`, flat tool definitions, `reasoning`) to the same path. The gateway reads each the way its own API
+reads it (agent mode as `/v1/responses` does, so OpenAI and Azure OpenAI are sent it as it came) and always
+answers in the Chat Completions shape, which is what Cursor reads. Every request gets the same checks, metering
+and audit as `/v1/chat/completions`.
+
+This is a preview: it is tested against Cursor's request shapes as publicly documented from its traffic, not
+yet against a live Cursor session. Cursor's Azure OpenAI setting, which calls
+`/openai/deployments/<deployment>/chat/completions`, is not served.
+
 ### Audit log
 
 To keep an audit record, set two variables:
