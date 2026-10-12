@@ -1,0 +1,23 @@
+{
+  "model": "gpt-5.5",
+  "stream": true,
+  "input": [
+    {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "You are a coding agent running in a terminal."}]},
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Fix the failing test."}]}
+  ],
+  "tools": [
+    {"type": "function", "name": "shell_command", "description": "Runs a shell command.", "strict": false,
+     "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"], "additionalProperties": false}},
+    {"type": "custom", "name": "apply_patch", "description": "The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+     "format": {"type": "grammar", "syntax": "lark", "definition": "start: begin_patch hunk+ end_patch"}},
+    {"type": "web_search", "external_web_access": false}
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "reasoning": {"effort": "medium", "summary": "auto"},
+  "store": false,
+  "include": ["reasoning.encrypted_content"],
+  "prompt_cache_key": "0199d6a2-3b1c-7c40-9a51-5f0e8d2b7c11",
+  "text": {"verbosity": "low"},
+  "client_metadata": {"session_id": "sess-1", "thread_id": "0199d6a2-3b1c-7c40-9a51-5f0e8d2b7c11"}
+}

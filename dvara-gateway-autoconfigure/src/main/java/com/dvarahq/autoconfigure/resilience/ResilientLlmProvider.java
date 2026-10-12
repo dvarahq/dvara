@@ -130,6 +130,21 @@ public class ResilientLlmProvider implements LlmProvider {
         return delegate.speaksAnthropicMessages();
     }
 
+    @Override
+    public boolean takesOpenAiTuning() {
+        return delegate.takesOpenAiTuning();
+    }
+
+    @Override
+    public boolean takesCustomTools() {
+        return delegate.takesCustomTools();
+    }
+
+    @Override
+    public boolean takesImagesInToolResults() {
+        return delegate.takesImagesInToolResults();
+    }
+
     /** A count calls no model, but it is still a call to the provider, so it is held to the same limits. */
     @Override
     public java.util.OptionalInt countInputTokens(ChatRequest request) {

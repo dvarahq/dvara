@@ -73,6 +73,28 @@ public class ResponseRequest {
     @JsonProperty("tool_choice")
     private Object toolChoice;
 
+    /** True, the default, lets the model call several functions in one turn. False is refused, as on chat. */
+    @JsonProperty("parallel_tool_calls")
+    private Boolean parallelToolCalls;
+
+    /**
+     * {@code {"effort", "summary"}}. {@code effort} is sent to OpenAI as {@code reasoning_effort} and to no
+     * other provider. {@code summary} asks for reasoning summaries, which the gateway does not return.
+     */
+    private Object reasoning;
+
+    /** Sent to OpenAI as {@code prompt_cache_key}; it changes no answer. */
+    @JsonProperty("prompt_cache_key")
+    private String promptCacheKey;
+
+    /** The client's own labels for OpenAI's side; accepted and not sent. They change no answer. */
+    @JsonProperty("client_metadata")
+    private Map<String, Object> clientMetadata;
+
+    /** How the provider delivers reasoning summaries in a stream; accepted and not sent, as none are returned. */
+    @JsonProperty("stream_options")
+    private Map<String, Object> streamOptions;
+
     // -------- Detected and rejected (stateful / OpenAI-only / unsupported) --------
     // INVARIANT: every field below must have a matching check in
     // ResponsesController.rejectUnsupported(...). A field declared here without one is
@@ -81,10 +103,13 @@ public class ResponseRequest {
     @JsonProperty("previous_response_id")
     private String previousResponseId;
     private Boolean store;
-    private Object reasoning;
     private Boolean background;
     private Object prompt;
+    /** Only {@code reasoning.encrypted_content} is accepted; see ResponsesController. */
     private List<String> include;
+    /** Only {@code auto} and {@code default} are accepted. */
+    @JsonProperty("service_tier")
+    private String serviceTier;
 
     /** The caller's end-user id (#54): relayed to the provider and recorded for cost attribution, as on Chat Completions (#33). */
     private String user;

@@ -222,10 +222,10 @@ class OpenAiCompatibleStreamDecoderTest {
     }
 
     @Test
-    @DisplayName("a tool of a type other than function is a provider error, not a function call in disguise")
+    @DisplayName("a tool of a type other than function or custom is a provider error, not a function call in disguise")
     void nonFunctionToolTypeIsAProviderError() {
         String sse = """
-                data: {"id":"c7","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_q","type":"custom","custom":{"name":"x","input":"y"}}]},"finish_reason":null}]}
+                data: {"id":"c7","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_q","type":"computer","computer":{"action":"y"}}]},"finish_reason":null}]}
 
                 data: [DONE]
                 """;
@@ -234,9 +234,30 @@ class OpenAiCompatibleStreamDecoderTest {
             @Override public void close() throws java.io.IOException { closed[0] = true; super.close(); }
         };
         var it = new OpenAiCompatibleStreamDecoder(reader, "m", "Upstream");
-        assertThatThrownBy(it::hasNext).isInstanceOf(GatewayException.class).hasMessageContaining("type 'custom'");
+        assertThatThrownBy(it::hasNext).isInstanceOf(GatewayException.class).hasMessageContaining("type 'computer'");
         assertThat(it.hasNext()).as("the stream is over after the error").isFalse();
         assertThat(closed[0]).as("and the reader was closed on the way out").isTrue();
+    }
+
+    @Test
+    @DisplayName("a streamed custom tool call becomes the arguments {\"input\": ...}, closed at the finish")
+    void customToolCallStreamsAsInputArguments() throws Exception {
+        String sse = """
+                data: {"id":"c8","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_p","type":"custom","custom":{"name":"apply_patch","input":"*** Begin Patch\\n"}}]},"finish_reason":null}]}
+
+                data: {"id":"c8","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"custom":{"input":"say \\"hi\\"\\n*** End Patch"}}]},"finish_reason":null}]}
+
+                data: {"id":"c8","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+                data: [DONE]
+                """;
+        List<SseChunk> chunks = drain(sse);
+
+        assertThat(fragments(chunks).get(0).name()).isEqualTo("apply_patch");
+        assertThat(fragments(chunks).get(0).id()).isEqualTo("call_p");
+        String arguments = arguments(chunks, 0);
+        assertThat(com.dvarahq.core.util.JsonMapper.instance().readTree(arguments).get("input").asText())
+                .isEqualTo("*** Begin Patch\nsay \"hi\"\n*** End Patch");
     }
 
     @Test

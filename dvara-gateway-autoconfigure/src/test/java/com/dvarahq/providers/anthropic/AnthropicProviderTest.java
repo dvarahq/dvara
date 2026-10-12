@@ -554,4 +554,25 @@ class AnthropicProviderTest {
 
         server.verify();
     }
+
+    @Test
+    void chat_anImageInAToolResult_staysInTheToolResult() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(jsonPath("$.messages[1].content[0].type").value("tool_result"))
+              .andExpect(jsonPath("$.messages[1].content[0].content[0].type").value("text"))
+              .andExpect(jsonPath("$.messages[1].content[0].content[1].type").value("image"))
+              .andExpect(jsonPath("$.messages[1].content[0].content[1].source.media_type").value("image/png"))
+              .andRespond(withSuccess(anthropicSuccessBody("msg-img", "end_turn", "a cat", 5, 1),
+                      MediaType.APPLICATION_JSON));
+
+        MultimodalMessage result = MultimodalMessage.builder().role("tool").toolCallId("toolu_1")
+                .content(List.of(new ContentBlock.TextBlock("screenshot"),
+                        new ContentBlock.ImageBlock("image/png", "AAAA", null)))
+                .build();
+        provider.chat(ChatRequest.builder().model("claude-sonnet-4-5")
+                .messages(List.of(MultimodalMessage.user("What is on screen?"), result)).build());
+
+        server.verify();
+        assertThat(provider.takesImagesInToolResults()).isTrue();
+    }
 }

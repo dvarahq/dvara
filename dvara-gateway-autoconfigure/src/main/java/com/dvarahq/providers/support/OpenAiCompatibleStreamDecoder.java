@@ -74,6 +74,8 @@ public final class OpenAiCompatibleStreamDecoder implements Iterator<SseChunk>, 
     private final Map<String, Integer> toolCallIndexes = new LinkedHashMap<>();
     /** Fragments with neither index nor id: each is its own call, under a key no upstream index can share. */
     private int anonymousCalls;
+    /** Streamed custom tool calls whose input is still open, by normalised index; closed at the finish. */
+    private final java.util.Set<Integer> openCustomCalls = new java.util.LinkedHashSet<>();
 
     public OpenAiCompatibleStreamDecoder(BufferedReader reader, String model, String upstreamLabel) {
         this(() -> { }, reader, model, upstreamLabel);
@@ -198,6 +200,15 @@ public final class OpenAiCompatibleStreamDecoder implements Iterator<SseChunk>, 
             }
             finishReason = choice.getFinishReason();
         }
+        if (finishReason != null && !openCustomCalls.isEmpty()) {
+            // Each custom call's input was opened as {"input":" — the finish closes it.
+            List<ToolCallDelta> closing = new ArrayList<>(toolCalls == null ? List.of() : toolCalls);
+            for (int index : openCustomCalls) {
+                closing.add(ToolCallDelta.arguments(index, "\"}"));
+            }
+            openCustomCalls.clear();
+            toolCalls = closing;
+        }
         // The usage-bearing chunk arrives after the one carrying finish_reason and has an empty choices
         // array, so it is a normal chunk with a null delta. Groq reports usage under x_groq.
         OpenAiUsage reported = chunk.getUsage() != null ? chunk.getUsage()
@@ -221,6 +232,10 @@ public final class OpenAiCompatibleStreamDecoder implements Iterator<SseChunk>, 
         }
         List<ToolCallDelta> out = new ArrayList<>(raw.size());
         for (StreamChunk.ToolCall call : raw) {
+            if (call.getCustom() != null || "custom".equals(call.getType())) {
+                out.add(customFragment(call));
+                continue;
+            }
             if (call.getType() != null && !"function".equals(call.getType())) {
                 throw new GatewayException("PROVIDER_ERROR",
                         upstreamLabel + " streamed a tool call of type '" + call.getType()
@@ -235,6 +250,37 @@ public final class OpenAiCompatibleStreamDecoder implements Iterator<SseChunk>, 
                     call.getFunction() != null ? argumentsText(call.getFunction().getArguments()) : null));
         }
         return out;
+    }
+
+    /**
+     * A fragment of a custom tool call. Its input is free text; the gateway's request carries it as the JSON
+     * arguments {@code {"input": "..."}}, so the first fragment opens that object, each fragment is escaped
+     * as JSON string text, and the finish closes it.
+     */
+    private ToolCallDelta customFragment(StreamChunk.ToolCall call) {
+        String key = call.getIndex() != null ? "i:" + call.getIndex()
+                : call.getId() != null ? "id:" + call.getId()
+                : "anonymous:" + anonymousCalls++;
+        boolean opening = !toolCallIndexes.containsKey(key);
+        int index = toolCallIndexes.computeIfAbsent(key, k -> toolCallIndexes.size());
+        String name = call.getCustom() != null ? call.getCustom().getName() : null;
+        String input = call.getCustom() != null && call.getCustom().getInput() != null ? call.getCustom().getInput() : "";
+        String escaped = escape(input);
+        if (opening) {
+            openCustomCalls.add(index);
+            return ToolCallDelta.open(index, call.getId(), name, "{\"input\":\"" + escaped);
+        }
+        return new ToolCallDelta(index, call.getId(), name, escaped.isEmpty() ? null : escaped);
+    }
+
+    /** Text as it reads inside a JSON string, without the quotes. */
+    private static String escape(String text) {
+        try {
+            String quoted = JsonMapper.instance().writeValueAsString(text);
+            return quoted.substring(1, quoted.length() - 1);
+        } catch (Exception e) {
+            throw new IllegalStateException("could not escape a custom tool input", e);
+        }
     }
 
     /**
@@ -314,6 +360,14 @@ public final class OpenAiCompatibleStreamDecoder implements Iterator<SseChunk>, 
             private String id;
             private String type;
             private Function function;
+            /** A custom tool call's name and a slice of its free-text input. */
+            private Custom custom;
+
+            @Data @JsonIgnoreProperties(ignoreUnknown = true)
+            static class Custom {
+                private String name;
+                private String input;
+            }
 
             @Data @JsonIgnoreProperties(ignoreUnknown = true)
             static class Function {

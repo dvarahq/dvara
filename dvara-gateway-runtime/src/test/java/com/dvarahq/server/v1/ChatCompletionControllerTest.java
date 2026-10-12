@@ -1130,6 +1130,22 @@ class ChatCompletionControllerTest {
     // Helpers
     // -------------------------------------------------------------------------
 
+    @Test
+    void aFunctionToolsStrict_reachesTheProvider() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("chatcmpl-abc", "gpt-4o", "ok"));
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}],
+                                 "tools": [{"type": "function", "function": {"name": "f", "strict": true,
+                                            "parameters": {"type": "object", "properties": {}, "additionalProperties": false}}}]}
+                                """))
+                .andExpect(status().isOk());
+
+        verify(dispatcher).chat(argThat(r -> Boolean.TRUE.equals(r.getTools().get(0).getStrict())));
+    }
+
     private static ChatResponse chatResponse(String id, String model, String text) {
         return ChatResponse.builder()
                 .id(id)

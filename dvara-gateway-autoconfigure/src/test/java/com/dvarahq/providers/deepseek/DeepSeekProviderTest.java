@@ -131,4 +131,58 @@ class DeepSeekProviderTest {
 
         server.verify();
     }
+
+    /** Another OpenAI-compatible server may refuse a field it does not know, so OpenAI's tuning fields are not sent. */
+    @Test
+    void openAisTuningFieldsAreNotSent() {
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo(
+                        org.hamcrest.Matchers.containsString("/chat/completions")))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.reasoning_effort").doesNotExist())
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.verbosity").doesNotExist())
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.prompt_cache_key").doesNotExist())
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess("""
+                        {"id":"c","object":"chat.completion","created":1,"model":"deepseek-chat",
+                         "choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}]}
+                        """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("deepseek-chat")
+                .messages(List.of(com.dvarahq.core.model.MultimodalMessage.user("hi")))
+                .reasoningEffort("high").verbosity("low").promptCacheKey("thread-1").build());
+
+        server.verify();
+    }
+
+    /** Without custom tools or strict, a custom tool goes as a function taking its input as one string. */
+    @Test
+    void aCustomToolGoesAsAFunction_andStrictIsNotSent() {
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo(
+                        org.hamcrest.Matchers.containsString("/chat/completions")))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.tools[0].type").value("function"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.tools[0].function.parameters.required[0]").value("input"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.tools[0].function.description").value(org.hamcrest.Matchers.containsString("lark grammar")))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.tools[1].function.strict").doesNotExist())
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess("""
+                        {"id":"c","object":"chat.completion","created":1,"model":"deepseek-chat",
+                         "choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}]}
+                        """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("deepseek-chat")
+                .messages(List.of(com.dvarahq.core.model.MultimodalMessage.user("hi")))
+                .tools(List.of(
+                        com.dvarahq.core.model.ToolDefinition.builder().name("apply_patch").description("Edits files.")
+                                .custom(true).format(java.util.Map.of("type", "grammar", "syntax", "lark", "definition", "start: x"))
+                                .build(),
+                        com.dvarahq.core.model.ToolDefinition.builder().name("f")
+                                .parameters(java.util.Map.of("type", "object")).strict(true).build()))
+                .build());
+
+        server.verify();
+    }
 }

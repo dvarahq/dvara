@@ -1,0 +1,24 @@
+{
+  "model": "team-coder",
+  "stream": true,
+  "input": [
+    {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "You are a coding agent running in a terminal."}]},
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<environment_context><cwd>/work/app</cwd></environment_context>"}]},
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "List the files in this folder."}]}
+  ],
+  "tools": [
+    {"type": "function", "name": "exec_command", "description": "Runs a command in a PTY.", "strict": false,
+     "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}, "workdir": {"type": "string"}, "yield_time_ms": {"type": "number"}}, "required": ["cmd"], "additionalProperties": false}},
+    {"type": "function", "name": "write_stdin", "description": "Writes characters to a running session.", "strict": false,
+     "parameters": {"type": "object", "properties": {"session_id": {"type": "number"}, "chars": {"type": "string"}}, "required": ["session_id"], "additionalProperties": false}},
+    {"type": "function", "name": "update_plan", "description": "Updates the task plan.", "strict": false,
+     "parameters": {"type": "object", "properties": {"plan": {"type": "array", "items": {"type": "object"}}}, "required": ["plan"], "additionalProperties": false}}
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "reasoning": {"summary": "auto"},
+  "store": false,
+  "include": ["reasoning.encrypted_content"],
+  "prompt_cache_key": "0199d6a2-3b1c-7c40-9a51-5f0e8d2b7c11",
+  "client_metadata": {"x-codex-installation-id": "inst-1", "session_id": "sess-1", "thread_id": "0199d6a2-3b1c-7c40-9a51-5f0e8d2b7c11", "x-codex-window-id": "win-1", "turn_id": "turn-1"}
+}

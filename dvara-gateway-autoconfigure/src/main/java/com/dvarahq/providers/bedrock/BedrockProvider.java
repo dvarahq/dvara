@@ -250,10 +250,13 @@ public class BedrockProvider extends AbstractLlmProvider {
      */
     private Map<String, Object> buildBedrockMessage(MultimodalMessage msg) {
         if ("tool".equals(msg.getRole())) {
+            boolean image = msg.getContent() != null
+                    && msg.getContent().stream().anyMatch(b -> b instanceof ContentBlock.ImageBlock);
+            // A tool result takes text and image blocks, so an image stays in the result.
             return Map.of("role", "user", "content", List.of(Map.of(
                     "toolResult", Map.of(
                             "toolUseId", msg.getToolCallId() == null ? "" : msg.getToolCallId(),
-                            "content", List.of(Map.of("text", extractText(msg)))))));
+                            "content", image ? buildContentBlocks(msg) : List.of(Map.of("text", extractText(msg)))))));
         }
         return Map.of("role", msg.getRole(), "content", buildContentBlocks(msg));
     }
@@ -469,6 +472,11 @@ public class BedrockProvider extends AbstractLlmProvider {
     // -------------------------------------------------------------------------
     // Capabilities / routing
     // -------------------------------------------------------------------------
+
+    @Override
+    public boolean takesImagesInToolResults() {
+        return true;
+    }
 
     @Override
     public ProviderCapabilities capabilities() {

@@ -1,0 +1,22 @@
+{
+  "model": "team-coder",
+  "stream": true,
+  "input": [
+    {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "You are a coding agent running in a terminal."}]},
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "List the files in this folder."}]},
+    {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "Run ls."}], "encrypted_content": "gAAAAAB-opaque"},
+    {"type": "function_call", "id": "fc_1", "name": "exec_command", "arguments": "{\"cmd\":\"ls\"}", "call_id": "call_1"},
+    {"type": "function_call_output", "call_id": "call_1", "output": "README.md\npom.xml\nsrc\n"}
+  ],
+  "tools": [
+    {"type": "function", "name": "exec_command", "description": "Runs a command in a PTY.", "strict": false,
+     "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"], "additionalProperties": false}}
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "reasoning": {"summary": "auto"},
+  "store": false,
+  "include": ["reasoning.encrypted_content"],
+  "prompt_cache_key": "0199d6a2-3b1c-7c40-9a51-5f0e8d2b7c11",
+  "client_metadata": {"session_id": "sess-1", "thread_id": "0199d6a2-3b1c-7c40-9a51-5f0e8d2b7c11", "turn_id": "turn-1"}
+}

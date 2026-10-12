@@ -53,7 +53,7 @@ public class ResponseResult {
     @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class OutputItem {
-        private String type;   // "message" or "function_call"
+        private String type;   // "message", "function_call" or "custom_tool_call"
         private String id;
         private String status; // "completed"
         private String role;   // "assistant", on a message
@@ -65,6 +65,10 @@ public class ResponseResult {
         private String name;
         /** On a {@code function_call}: the arguments, as the JSON text the model wrote. */
         private String arguments;
+        /** On a {@code custom_tool_call}: the free-text input the model wrote. */
+        private String input;
+        /** On a call to a tool declared in a {@code namespace}: that namespace. */
+        private String namespace;
     }
 
     @Data

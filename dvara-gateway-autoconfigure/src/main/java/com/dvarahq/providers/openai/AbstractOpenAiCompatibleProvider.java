@@ -120,6 +120,7 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         return "max_tokens";
     }
 
+
     // -------------------------------------------------------------------------
     // Chat
     // -------------------------------------------------------------------------
@@ -278,8 +279,12 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
     // -------------------------------------------------------------------------
 
     protected Map<String, Object> buildChatBody(ChatRequest request) {
+        java.util.Set<String> customTools = request.getTools() == null || !takesCustomTools() ? java.util.Set.of()
+                : request.getTools().stream().filter(com.dvarahq.core.model.ToolDefinition::isCustom)
+                        .map(com.dvarahq.core.model.ToolDefinition::getName)
+                        .collect(Collectors.toSet());
         List<Map<String, Object>> messages = request.getMessages().stream()
-                .map(this::serializeMessage)
+                .map(m -> serializeMessage(m, customTools))
                 .collect(Collectors.toList());
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -293,6 +298,11 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         if (request.getStop() != null) body.put("stop", request.getStop());
         if (request.getSeed() != null) body.put("seed", request.getSeed());
         if (request.getUser() != null) body.put("user", request.getUser());
+        if (takesOpenAiTuning()) {
+            if (request.getReasoningEffort() != null) body.put("reasoning_effort", request.getReasoningEffort());
+            if (request.getVerbosity() != null) body.put("verbosity", request.getVerbosity());
+            if (request.getPromptCacheKey() != null) body.put("prompt_cache_key", request.getPromptCacheKey());
+        }
         applyResponseFormat(body, request.getResponseFormat());
         applyTools(body, request);
         return body;
@@ -303,18 +313,26 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
      * {@code tool_calls} on an assistant message, {@code tool_call_id} on a
      * {@code tool}-role result message.
      */
-    private Map<String, Object> serializeMessage(MultimodalMessage m) {
+    private Map<String, Object> serializeMessage(MultimodalMessage m, java.util.Set<String> customTools) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("role", m.getRole());
         out.put("content", extractContent(m));
         if (m.getToolCalls() != null && !m.getToolCalls().isEmpty()) {
             out.put("tool_calls", m.getToolCalls().stream()
-                    .map(tc -> Map.of(
-                            "id", tc.getId() == null ? "" : tc.getId(),
-                            "type", "function",
-                            "function", Map.of(
-                                    "name", tc.getName() == null ? "" : tc.getName(),
-                                    "arguments", tc.getArguments() == null ? "" : tc.getArguments())))
+                    .map(tc -> customTools.contains(tc.getName())
+                            // A call to a custom tool goes back as one, its input read out of the arguments.
+                            ? Map.of(
+                                    "id", tc.getId() == null ? "" : tc.getId(),
+                                    "type", "custom",
+                                    "custom", Map.of(
+                                            "name", tc.getName(),
+                                            "input", com.dvarahq.core.model.ToolDefinition.customInput(tc.getArguments())))
+                            : Map.of(
+                                    "id", tc.getId() == null ? "" : tc.getId(),
+                                    "type", "function",
+                                    "function", Map.of(
+                                            "name", tc.getName() == null ? "" : tc.getName(),
+                                            "arguments", tc.getArguments() == null ? "" : tc.getArguments())))
                     .collect(Collectors.toList()));
         }
         if (m.getToolCallId() != null) {
@@ -336,10 +354,15 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         if (request.getTools() == null || request.getTools().isEmpty()) return;
         body.put("tools", request.getTools().stream()
                 .map(t -> {
+                    if (t.isCustom() && takesCustomTools()) {
+                        return Map.of("type", "custom", "custom", customTool(t));
+                    }
+                    com.dvarahq.core.model.ToolDefinition f = t.asFunction();
                     Map<String, Object> function = new LinkedHashMap<>();
-                    function.put("name", t.getName());
-                    if (t.getDescription() != null) function.put("description", t.getDescription());
-                    if (t.getParameters() != null) function.put("parameters", t.getParameters());
+                    function.put("name", f.getName());
+                    if (f.getDescription() != null) function.put("description", f.getDescription());
+                    if (f.getParameters() != null) function.put("parameters", f.getParameters());
+                    if (f.getStrict() != null && takesOpenAiTuning()) function.put("strict", f.getStrict());
                     return Map.of("type", "function", "function", function);
                 })
                 .collect(Collectors.toList()));
@@ -429,17 +452,40 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
      * Maps an upstream assistant message to the internal model, carrying any
      * {@code tool_calls} the model emitted so they reach the client.
      */
+    /** A custom tool in Chat Completions' shape, whose grammar sits one level deeper than the Responses API's. */
+    private static Map<String, Object> customTool(com.dvarahq.core.model.ToolDefinition t) {
+        Map<String, Object> custom = new LinkedHashMap<>();
+        custom.put("name", t.getName());
+        if (t.getDescription() != null) custom.put("description", t.getDescription());
+        Map<String, Object> format = t.getFormat();
+        if (format != null && "grammar".equals(String.valueOf(format.get("type")))) {
+            custom.put("format", Map.of("type", "grammar", "grammar",
+                    Map.of("syntax", String.valueOf(format.get("syntax")),
+                            "definition", String.valueOf(format.get("definition")))));
+        } else if (format != null) {
+            custom.put("format", Map.of("type", "text"));
+        }
+        return custom;
+    }
+
     private MultimodalMessage toAssistantMessage(OaiChatResponse.OaiMessage m) {
         MultimodalMessage.MultimodalMessageBuilder builder = MultimodalMessage.builder()
                 .role(m.getRole() != null ? m.getRole() : "assistant")
                 .content(List.of(new ContentBlock.TextBlock(m.getContent() != null ? m.getContent() : "")));
         if (m.getToolCalls() != null && !m.getToolCalls().isEmpty()) {
             builder.toolCalls(m.getToolCalls().stream()
-                    .map(tc -> com.dvarahq.core.model.ToolCall.builder()
-                            .id(tc.getId())
-                            .name(tc.getFunction() != null ? tc.getFunction().getName() : null)
-                            .arguments(tc.getFunction() != null ? tc.getFunction().getArguments() : null)
-                            .build())
+                    .map(tc -> tc.getCustom() != null
+                            // A custom tool's input travels as {"input": ...}, the form every provider can replay.
+                            ? com.dvarahq.core.model.ToolCall.builder()
+                                    .id(tc.getId())
+                                    .name(tc.getCustom().getName())
+                                    .arguments(com.dvarahq.core.model.ToolDefinition.customArguments(tc.getCustom().getInput()))
+                                    .build()
+                            : com.dvarahq.core.model.ToolCall.builder()
+                                    .id(tc.getId())
+                                    .name(tc.getFunction() != null ? tc.getFunction().getName() : null)
+                                    .arguments(tc.getFunction() != null ? tc.getFunction().getArguments() : null)
+                                    .build())
                     .toList());
         }
         return builder.build();
@@ -477,11 +523,18 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
             private String id;
             private String type;
             private OaiFunction function;
+            private OaiCustom custom;
 
             @Data @JsonIgnoreProperties(ignoreUnknown = true)
             static class OaiFunction {
                 private String name;
                 private String arguments;
+            }
+
+            @Data @JsonIgnoreProperties(ignoreUnknown = true)
+            static class OaiCustom {
+                private String name;
+                private String input;
             }
         }
     }

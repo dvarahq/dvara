@@ -855,4 +855,23 @@ class BedrockProviderTest {
         assertThat(calls.get(0).getArguments()).contains("Paris");
         assertThat(response.getChoices().get(0).getFinishReason()).isEqualTo("tool_calls");
     }
+
+    @Test
+    void chat_anImageInAToolResult_staysInTheToolResult() {
+        server.expect(requestTo(containsString("/converse")))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                      .jsonPath("$.messages[1].content[0].toolResult.content[0].text").value("screenshot"))
+              .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                      .jsonPath("$.messages[1].content[0].toolResult.content[1].image.format").value("png"))
+              .andRespond(withSuccess(converseSuccessBody("end_turn", "a cat", 1, 1), MediaType.APPLICATION_JSON));
+
+        MultimodalMessage result = MultimodalMessage.builder().role("tool").toolCallId("tu_1")
+                .content(List.of(new com.dvarahq.core.model.ContentBlock.TextBlock("screenshot"),
+                        new com.dvarahq.core.model.ContentBlock.ImageBlock("image/png", "AAAA", null)))
+                .build();
+        provider.chat(ChatRequest.builder().model("bedrock/anthropic.claude-3-sonnet-20240229-v1")
+                .messages(List.of(MultimodalMessage.user("What is on screen?"), result)).build());
+
+        server.verify();
+    }
 }

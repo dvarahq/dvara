@@ -1163,6 +1163,25 @@ class ProviderDispatcherTest {
     private static final CostEstimator TEST_COST_ESTIMATOR = mock(CostEstimator.class);
     private static final com.dvarahq.core.routing.ShadowDispatcher TEST_SHADOW_DISPATCHER = (req, resp, latency, route) -> { };
 
+    @Test
+    void eachProviderIsGivenTheRequestInItsOwnShape_chatAndStream() {
+        LlmProvider plain = mock(LlmProvider.class);
+        when(plain.supports(any())).thenReturn(true);
+        when(plain.capabilities()).thenReturn(fullCaps());
+        when(plain.chat(any())).thenReturn(chatResponse("c", "m"));
+        when(plain.streamChat(any())).thenReturn(java.util.Collections.emptyIterator());
+        com.dvarahq.core.model.ToolDefinition patch = com.dvarahq.core.model.ToolDefinition.builder()
+                .name("apply_patch").custom(true).build();
+        ChatRequest request = chatRequest("gpt-4o").toBuilder().tools(List.of(patch)).build();
+        ProviderDispatcher dispatcher = dispatcher(List.of(plain));
+
+        dispatcher.chat(request);
+        dispatcher.streamChat(request);
+
+        verify(plain).chat(org.mockito.ArgumentMatchers.argThat(r -> !r.getTools().get(0).isCustom()));
+        verify(plain).streamChat(org.mockito.ArgumentMatchers.argThat(r -> !r.getTools().get(0).isCustom()));
+    }
+
     private static ProviderDispatcher dispatcher(List<LlmProvider> providers) {
         return new ProviderDispatcher(providers, DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
                 TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,

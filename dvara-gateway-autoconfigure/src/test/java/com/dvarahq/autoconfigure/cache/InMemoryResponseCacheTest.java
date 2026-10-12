@@ -91,6 +91,30 @@ class InMemoryResponseCacheTest {
     }
 
     @Test
+    void reasoningEffortAndVerbosityArePartOfTheIdentity_thePromptCacheKeyIsNot() {
+        var cache = new InMemoryResponseCache(10, 300);
+        ChatRequest base = request("acme", "gpt-5.5", "hello");
+        cache.put(base.toBuilder().reasoningEffort("low").verbosity("low").build(), response("quick"));
+
+        assertThat(cache.get(base.toBuilder().reasoningEffort("high").verbosity("low").build())).isEmpty();
+        assertThat(cache.get(base.toBuilder().reasoningEffort("low").verbosity("high").build())).isEmpty();
+        assertThat(cache.get(base.toBuilder().reasoningEffort("low").verbosity("low").promptCacheKey("t-2").build()))
+                .as("a cache routing hint asks the model for nothing different")
+                .isPresent();
+    }
+
+    @Test
+    void aToolsStrictnessAndKindArePartOfTheIdentity() {
+        var cache = new InMemoryResponseCache(10, 300);
+        ChatRequest base = request("acme", "gpt-5.5", "hello");
+        var loose = com.dvarahq.core.model.ToolDefinition.builder().name("f").parameters(Map.of("type", "object")).build();
+        cache.put(base.toBuilder().tools(List.of(loose)).build(), response("loose"));
+
+        assertThat(cache.get(base.toBuilder().tools(List.of(loose.toBuilder().strict(true).build())).build())).isEmpty();
+        assertThat(cache.get(base.toBuilder().tools(List.of(loose.toBuilder().custom(true).build())).build())).isEmpty();
+    }
+
+    @Test
     void messageBoundariesCannotBeFlattenedIntoOneAnother() {
         // Length-prefixing is what stops two different message lists hashing to one string. Without
         // it a message ending at the separator collides with the next one starting.

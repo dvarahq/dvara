@@ -147,6 +147,9 @@ public final class InMemoryResponseCache implements ResponseCache {
         append(sb, responseFormatOf(request.getResponseFormat()));
         append(sb, toolsOf(request.getTools()));
         append(sb, canonical(request.getToolChoice()));
+        // Both change the answer; the prompt cache key does not.
+        append(sb, String.valueOf(request.getReasoningEffort()));
+        append(sb, String.valueOf(request.getVerbosity()));
         return sha256(sb.toString());
     }
 
@@ -178,6 +181,9 @@ public final class InMemoryResponseCache implements ResponseCache {
             append(sb, tool.getName());
             append(sb, tool.getDescription());
             append(sb, canonical(tool.getParameters()));
+            append(sb, String.valueOf(tool.getStrict()));
+            append(sb, String.valueOf(tool.isCustom()));
+            append(sb, canonical(tool.getFormat()));
         }
         return sb.toString();
     }
