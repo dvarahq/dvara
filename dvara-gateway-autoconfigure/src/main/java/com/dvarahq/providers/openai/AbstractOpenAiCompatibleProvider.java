@@ -131,6 +131,9 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
         if (request.getOpenAiResponses() != null && responsesUri() != null) {
             return responsesChat(request);
         }
+        if (responsesUri() != null && ChatViaResponses.needed(request)) {
+            return responsesChat(request.toBuilder().openAiResponses(ChatViaResponses.body(request)).build());
+        }
         Map<String, Object> body = buildChatBody(request);
 
         OaiChatResponse oai = restClient.post()
@@ -332,6 +335,10 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
     public Iterator<SseChunk> streamChat(ChatRequest request) {
         if (request.getOpenAiResponses() != null && responsesUri() != null) {
             return responsesStream(request);
+        }
+        // Chat Completions refuses function tools with a reasoning effort on OpenAI's newest models.
+        if (responsesUri() != null && ChatViaResponses.needed(request)) {
+            return responsesStream(request.toBuilder().openAiResponses(ChatViaResponses.body(request)).build());
         }
         Map<String, Object> body = buildChatBody(request);
         body.put("stream", true);
