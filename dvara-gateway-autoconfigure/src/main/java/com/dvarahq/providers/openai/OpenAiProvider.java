@@ -77,6 +77,16 @@ public class OpenAiProvider extends AbstractOpenAiCompatibleProvider {
         return OpenAiTokenLimit.fieldFor(request.getModel());
     }
 
+    @Override
+    public boolean takesOpenAiTuning() {
+        return true;
+    }
+
+    @Override
+    public boolean takesCustomTools() {
+        return true;
+    }
+
     // -------------------------------------------------------------------------
     // Embeddings — OpenAI-only in the current provider set
     // -------------------------------------------------------------------------

@@ -159,7 +159,7 @@ public class ProviderDispatcher {
             long startNanos = System.nanoTime();
             ProviderCall<ChatResponse> fallbackCall = (p, r) -> {
                 long fbStart = System.nanoTime();
-                ChatResponse fbResponse = p.chat(r);
+                ChatResponse fbResponse = p.chat(ProviderShapes.forProvider(p, r));
                 long fbLatencyMs = (System.nanoTime() - fbStart) / 1_000_000;
                 if (latencyTracker != null) {
                     latencyTracker.record(p.name(), r.getModel(), fbLatencyMs);
@@ -174,7 +174,7 @@ public class ProviderDispatcher {
                 if (refusal != null) {
                     throw refusal.error();
                 }
-                response = primary.chat(req);
+                response = primary.chat(ProviderShapes.forProvider(primary, req));
                 long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
                 if (latencyTracker != null) {
                     latencyTracker.record(primary.name(), req.getModel(), latencyMs);
@@ -232,20 +232,20 @@ public class ProviderDispatcher {
         return obs.observe(() -> {
             if (refusal != null) {
                 // Nothing is opened on the refused target; the route's chain may take the call.
-                return afterRefusal(refusal, req, primary, routingCtx, startNanos, (p, r) -> p.streamChat(r));
+                return afterRefusal(refusal, req, primary, routingCtx, startNanos, (p, r) -> p.streamChat(ProviderShapes.forProvider(p, r)));
             }
             if (selection.unavailable() != null) {
                 // The route's provider is paused: nothing is opened on it, and the route's chain takes the call.
                 return attemptFallback(req, primary, selection.unavailable(), routingCtx, startNanos,
-                        (p, r) -> p.streamChat(r));
+                        (p, r) -> p.streamChat(ProviderShapes.forProvider(p, r)));
             }
             try {
-                return primary.streamChat(req);
+                return primary.streamChat(ProviderShapes.forProvider(primary, req));
             } catch (GatewayException e) {
                 // Only while opening the stream (#7 REQ-CPF-08): once an iterator is returned, a failure
                 // reading it is the caller's, and no second provider starts.
                 if (isFallbackEligible(e)) {
-                    return attemptFallback(req, primary, e, routingCtx, startNanos, (p, r) -> p.streamChat(r));
+                    return attemptFallback(req, primary, e, routingCtx, startNanos, (p, r) -> p.streamChat(ProviderShapes.forProvider(p, r)));
                 }
                 throw e;
             }
@@ -273,7 +273,7 @@ public class ProviderDispatcher {
         if (selection.unavailable() != null) {
             return java.util.OptionalInt.empty();
         }
-        return selection.provider().countInputTokens(req);
+        return selection.provider().countInputTokens(ProviderShapes.forProvider(selection.provider(), req));
     }
 
     /**

@@ -201,6 +201,11 @@ public class AnthropicProvider extends AbstractLlmProvider {
     }
 
     @Override
+    public boolean takesImagesInToolResults() {
+        return true;
+    }
+
+    @Override
     public boolean speaksAnthropicMessages() {
         return true;
     }
@@ -338,7 +343,8 @@ public class AnthropicProvider extends AbstractLlmProvider {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("type", "tool_result");
             result.put("tool_use_id", msg.getToolCallId() == null ? "" : msg.getToolCallId());
-            result.put("content", extractText(msg));
+            // Text alone stays a string; with an image the result is text and image blocks, which Anthropic takes.
+            result.put("content", buildContent(msg));
             if (Boolean.TRUE.equals(msg.getToolError())) {
                 result.put("is_error", true);
             }

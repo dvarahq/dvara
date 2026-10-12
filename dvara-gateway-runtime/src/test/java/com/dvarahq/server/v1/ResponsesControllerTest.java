@@ -228,7 +228,7 @@ class ResponsesControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"model": "gpt-4o", "input": "hi",
-                                 "include": ["reasoning.encrypted_content"]}
+                                 "include": ["message.output_text.logprobs"]}
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("unsupported_capability"));
@@ -369,6 +369,144 @@ class ResponsesControllerTest {
         assertThat(output.get(0).at("/content/0/text").asText()).isEqualTo("Checking.");
         assertThat(output.get(1).get("type").asText()).isEqualTo("function_call");
         assertThat(output.get(1).get("arguments").asText()).isEqualTo("{}");
+    }
+
+    // -------- requests as Codex CLI builds them (fixtures from its source, not a live capture) --------
+
+    private String fixture(String name) throws Exception {
+        try (java.io.InputStream in = getClass().getResourceAsStream("/codex/" + name)) {
+            return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
+
+    @Test
+    void codexFirstTurn_isServedAndTheCallStreamsBack() throws Exception {
+        List<SseChunk> chunks = List.of(
+                SseChunk.builder().id("c1").model("team-coder")
+                        .toolCalls(List.of(com.dvarahq.core.model.ToolCallDelta.open(0, "call_1", "exec_command", "{\"cmd\":\"ls\"}"))).build(),
+                SseChunk.builder().id("c1").model("team-coder").finishReason("tool_calls").done(true)
+                        .usage(new ChatResponse.Usage(120, 9, 129)).build());
+        when(dispatcher.streamChat(any())).thenReturn(chunks.iterator());
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(fixture("first-turn.json"));
+
+        org.mockito.ArgumentCaptor<ChatRequest> sent = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(dispatcher).streamChat(sent.capture());
+        ChatRequest r = sent.getValue();
+        assertThat(r.getMessages()).extracting(MultimodalMessage::getRole).containsExactly("system", "user", "user");
+        assertThat(r.getTools()).extracting(com.dvarahq.core.model.ToolDefinition::getName)
+                .containsExactly("exec_command", "write_stdin", "update_plan");
+        assertThat(r.getToolChoice()).isEqualTo("auto");
+        assertThat(r.getPromptCacheKey()).isEqualTo("0199d6a2-3b1c-7c40-9a51-5f0e8d2b7c11");
+        assertThat(r.getReasoningEffort()).isNull();
+
+        com.fasterxml.jackson.databind.JsonNode done = events.stream()
+                .filter(e -> "response.output_item.done".equals(e.get("type").asText())).findFirst().orElseThrow();
+        assertThat(done.at("/item/type").asText()).isEqualTo("function_call");
+        assertThat(done.at("/item/call_id").asText()).isEqualTo("call_1");
+        assertThat(done.at("/item/arguments").asText()).isEqualTo("{\"cmd\":\"ls\"}");
+        com.fasterxml.jackson.databind.JsonNode completed = events.get(events.size() - 1);
+        assertThat(completed.get("type").asText()).isEqualTo("response.completed");
+        assertThat(completed.at("/response/usage/input_tokens").asInt()).isEqualTo(120);
+        assertThat(completed.at("/response/usage/output_tokens").asInt()).isEqualTo(9);
+    }
+
+    @Test
+    void codexToolTurn_sendsTheCallAndItsOutput_andLeavesOutTheReasoningItem() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c1").model("team-coder").delta("Three files.").finishReason("stop").done(true).build())
+                .iterator());
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(fixture("tool-turn.json"));
+
+        org.mockito.ArgumentCaptor<ChatRequest> sent = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(dispatcher).streamChat(sent.capture());
+        List<MultimodalMessage> messages = sent.getValue().getMessages();
+        assertThat(messages).extracting(MultimodalMessage::getRole).containsExactly("system", "user", "assistant", "tool");
+        assertThat(messages.get(2).getToolCalls()).singleElement()
+                .satisfies(c -> assertThat(c.getId()).isEqualTo("call_1"))
+                .satisfies(c -> assertThat(c.getArguments()).isEqualTo("{\"cmd\":\"ls\"}"));
+        assertThat(messages.get(3).getToolCallId()).isEqualTo("call_1");
+        assertThat(messages.get(3).textContent()).contains("pom.xml");
+        assertThat(events.get(events.size() - 1).at("/response/output/0/content/0/text").asText()).isEqualTo("Three files.");
+    }
+
+    @Test
+    void codexOnAnOpenAiCatalogModel_isRefusedForWebSearch_namingTheSetting() throws Exception {
+        mockMvc.perform(post("/v1/responses")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(fixture("openai-model-turn.json")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("unsupported_capability"))
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("web_search = \"disabled\"")));
+    }
+
+    /** Codex with web search off: its freeform apply_patch tool is accepted, and a call to it streams back as one. */
+    @Test
+    void codexOnAnOpenAiCatalogModel_withWebSearchOff_getsItsPatchCallBack() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.node.ObjectNode body =
+                (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(fixture("openai-model-turn.json"));
+        ((com.fasterxml.jackson.databind.node.ArrayNode) body.get("tools")).remove(2);
+        String patch = "*** Begin Patch\n*** End Patch";
+        String args = com.dvarahq.core.model.ToolDefinition.customArguments(patch);
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c1").model("gpt-5.5")
+                        .toolCalls(List.of(com.dvarahq.core.model.ToolCallDelta.open(0, "call_9", "apply_patch", args.substring(0, 5)))).build(),
+                SseChunk.builder().id("c1").model("gpt-5.5")
+                        .toolCalls(List.of(com.dvarahq.core.model.ToolCallDelta.arguments(0, args.substring(5)))).build(),
+                SseChunk.builder().id("c1").model("gpt-5.5").finishReason("tool_calls").done(true).build()).iterator());
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(json.writeValueAsString(body));
+
+        verify(dispatcher).streamChat(argThat(r -> r.getTools().stream().anyMatch(t -> t.isCustom() && "apply_patch".equals(t.getName()))));
+        assertThat(events).extracting(e -> e.get("type").asText()).containsSubsequence(
+                "response.output_item.added", "response.custom_tool_call_input.delta",
+                "response.custom_tool_call_input.done", "response.output_item.done", "response.completed");
+        assertThat(events).extracting(e -> e.get("type").asText()).doesNotContain("response.function_call_arguments.delta");
+        com.fasterxml.jackson.databind.JsonNode done = events.stream()
+                .filter(e -> "response.output_item.done".equals(e.get("type").asText())).findFirst().orElseThrow();
+        assertThat(done.at("/item/type").asText()).isEqualTo("custom_tool_call");
+        assertThat(done.at("/item/name").asText()).isEqualTo("apply_patch");
+        assertThat(done.at("/item/call_id").asText()).isEqualTo("call_9");
+        assertThat(done.at("/item/input").asText()).isEqualTo(patch);
+    }
+
+    @Test
+    void streaming_aNamespacedCallComesBackUnderItsNameAndNamespace() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c1").model("m")
+                        .toolCalls(List.of(com.dvarahq.core.model.ToolCallDelta.open(0, "call_1", "mcp__github__list_issues", "{}"))).build(),
+                SseChunk.builder().id("c1").model("m").finishReason("tool_calls").done(true).build()).iterator());
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents("""
+                {"model": "m", "stream": true, "input": "issues?",
+                 "tools": [{"type": "namespace", "name": "mcp__github", "description": "GitHub",
+                            "tools": [{"type": "function", "name": "list_issues", "parameters": {"type": "object"}}]}]}
+                """);
+
+        com.fasterxml.jackson.databind.JsonNode done = events.stream()
+                .filter(e -> "response.output_item.done".equals(e.get("type").asText())).findFirst().orElseThrow();
+        assertThat(done.at("/item/type").asText()).isEqualTo("function_call");
+        assertThat(done.at("/item/name").asText()).isEqualTo("list_issues");
+        assertThat(done.at("/item/namespace").asText()).isEqualTo("mcp__github");
+    }
+
+    @Test
+    void codexOnAnOpenAiCatalogModel_withoutBuiltInTools_carriesEffortAndVerbosity() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.node.ObjectNode body =
+                (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(fixture("openai-model-turn.json"));
+        com.fasterxml.jackson.databind.node.ArrayNode tools = (com.fasterxml.jackson.databind.node.ArrayNode) body.get("tools");
+        tools.remove(2);
+        tools.remove(1);
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c1").model("gpt-5.5").delta("ok").finishReason("stop").done(true).build()).iterator());
+
+        streamEvents(json.writeValueAsString(body));
+
+        verify(dispatcher).streamChat(argThat(r -> "medium".equals(r.getReasoningEffort())
+                && "low".equals(r.getVerbosity()) && r.getTools().size() == 1));
     }
 
     /** The SSE events of a streamed request, each as its JSON. */

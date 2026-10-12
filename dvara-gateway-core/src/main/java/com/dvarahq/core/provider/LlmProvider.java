@@ -99,6 +99,30 @@ public interface LlmProvider {
     }
 
     /**
+     * Whether this provider takes OpenAI's tuning fields: reasoning effort, verbosity, the prompt cache key and
+     * a function tool's {@code strict}. A provider that does not is not sent them.
+     */
+    default boolean takesOpenAiTuning() {
+        return false;
+    }
+
+    /**
+     * Whether this provider takes custom tools as they are. A provider that does not is given each one as a
+     * function with one string argument ({@link com.dvarahq.core.model.ToolDefinition#asFunction()}).
+     */
+    default boolean takesCustomTools() {
+        return false;
+    }
+
+    /**
+     * Whether this provider takes images inside a tool result. A provider that does not is given them in a
+     * user message after the tool results.
+     */
+    default boolean takesImagesInToolResults() {
+        return false;
+    }
+
+    /**
      * The request's input tokens as this provider counts them, without calling a model, or empty when the
      * provider has no way to count; the caller then estimates.
      */

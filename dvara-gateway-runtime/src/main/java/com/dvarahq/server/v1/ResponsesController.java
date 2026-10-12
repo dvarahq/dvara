@@ -81,9 +81,11 @@ import java.util.stream.Collectors;
  *
  * <p>Text and image input, structured output ({@code text.format}), {@code top_p} and function
  * calling ({@code function} tools, {@code tool_choice}, {@code function_call} and
- * {@code function_call_output} items; see {@link ResponsesTools}) are honoured. Stateful
- * conversation, built-in tools, reasoning, background mode, and file/audio input are rejected with
- * {@code UNSUPPORTED_CAPABILITY} (400), never silently dropped.
+ * {@code function_call_output} items; see {@link ResponsesTools}) are honoured. Reasoning effort,
+ * verbosity and the prompt cache key are sent to OpenAI. What only asks for reasoning output
+ * (reasoning summaries, encrypted reasoning, reasoning input items) is accepted and left out, because
+ * the gateway calls chat completions, which returns none. Stateful conversation, built-in tools,
+ * background mode, and file/audio input are rejected with {@code UNSUPPORTED_CAPABILITY} (400).
  */
 @RestController
 @RequestMapping("/v1")
@@ -152,9 +154,10 @@ public class ResponsesController {
 
         rejectUnsupported(request);
         ChatRequest internal = toInternal(request);
+        ResponsesTools.Names names = ResponsesTools.read(request.getTools()).names();
 
         if (stream) {
-            return handleStreaming(internal, traceId, httpRequest, httpResponse);
+            return handleStreaming(internal, names, traceId, httpRequest, httpResponse);
         }
 
         ChatExecutionService.Prepared prep =
@@ -174,7 +177,7 @@ public class ResponsesController {
                 response.getGatewayHeaders().forEach(builder::header);
             }
             ContextResponseHeaders.apply(builder, ctx, policyDecision);
-            return builder.body(toResponseResult(response));
+            return builder.body(toResponseResult(response, names));
         } finally {
             executionService.releasePriority(ctx);
         }
@@ -184,7 +187,7 @@ public class ResponsesController {
     // Streaming — the full Responses typed-event taxonomy
     // -------------------------------------------------------------------------
 
-    private SseEmitter handleStreaming(ChatRequest internal, String traceId,
+    private SseEmitter handleStreaming(ChatRequest internal, ResponsesTools.Names names, String traceId,
                                        HttpServletRequest httpRequest, HttpServletResponse httpResponse) {
         ChatExecutionService.Prepared prep =
                 executionService.prepare(internal, httpRequest, httpResponse, traceId);
@@ -250,7 +253,7 @@ public class ResponsesController {
                 upstream.set(chunks);
                 who = who.withUpstreamFrom(httpRequest);   // provider + credential, now known
 
-                StreamItems items = new StreamItems(emitter, seq);
+                StreamItems items = new StreamItems(emitter, seq, names);
                 boolean sawDone = false;
                 while (!completed.get() && chunks.hasNext()) {   // cancellation first; see ChatCompletionController
                     SseChunk chunk = chunks.next();
@@ -292,6 +295,10 @@ public class ResponsesController {
 
                 List<Map<String, Object>> finished = items.finish();
                 Map<String, Object> respCompleted = responseObject(responseId, model, "completed", finished, createdAt);
+                // The provider's own count, when it reported one; a client keeps its context budget from it.
+                if (reportedUsage.get() != null) {
+                    respCompleted.put("usage", ResponseResult.Usage.from(reportedUsage.get()));
+                }
                 emit(emitter, "response.completed", seq, mapOf("response", respCompleted));
             } catch (Exception e) {
                 if (completed.get()) {
@@ -373,6 +380,7 @@ public class ResponsesController {
     private final class StreamItems {
         private final SseEmitter emitter;
         private final AtomicInteger seq;
+        private final ResponsesTools.Names names;
         private int nextIndex;
         // Finished items by output index, so the completed response lists them in order.
         private final java.util.TreeMap<Integer, Map<String, Object>> finished = new java.util.TreeMap<>();
@@ -380,31 +388,48 @@ public class ResponsesController {
         private String messageId;
         private int messageIndex;
         private StringBuilder messageText;
-        // Function calls in the order they opened, by the provider's call index.
+        // Tool calls in the order they opened, by the provider's call index.
         private final Map<Integer, Call> calls = new LinkedHashMap<>();
 
         private final class Call {
-            final String itemId = "fc_" + shortId();
+            final boolean custom;
+            final String itemId;
             final int outputIndex;
             final String callId;
-            final String name;
+            final String travelling;
             final StringBuilder arguments = new StringBuilder();
 
-            Call(int outputIndex, String callId, String name) {
+            Call(int outputIndex, String callId, String travelling) {
+                this.custom = names.isCustom(travelling);
+                this.itemId = (custom ? "ctc_" : "fc_") + shortId();
                 this.outputIndex = outputIndex;
                 this.callId = callId;
-                this.name = name;
+                this.travelling = travelling;
+            }
+
+            String input() {
+                return com.dvarahq.core.model.ToolDefinition.customInput(arguments.toString());
             }
 
             Map<String, Object> item(String status) {
-                return mapOf("type", "function_call", "id", itemId, "call_id", callId, "name", name,
-                        "arguments", "completed".equals(status) ? arguments.toString() : "", "status", status);
+                boolean done = "completed".equals(status);
+                Map<String, Object> item = custom
+                        ? mapOf("type", "custom_tool_call", "id", itemId, "call_id", callId, "name", names.name(travelling),
+                                "input", done ? input() : "", "status", status)
+                        : mapOf("type", "function_call", "id", itemId, "call_id", callId, "name", names.name(travelling),
+                                "arguments", done ? arguments.toString() : "", "status", status);
+                String namespace = names.namespace(travelling);
+                if (namespace != null) {
+                    item.put("namespace", namespace);
+                }
+                return item;
             }
         }
 
-        StreamItems(SseEmitter emitter, AtomicInteger seq) {
+        StreamItems(SseEmitter emitter, AtomicInteger seq, ResponsesTools.Names names) {
             this.emitter = emitter;
             this.seq = seq;
+            this.names = names;
         }
 
         void text(String delta) throws Exception {
@@ -429,8 +454,11 @@ public class ResponsesController {
             String fragment = delta.argumentsFragment();
             if (fragment != null && !fragment.isEmpty()) {
                 call.arguments.append(fragment);
-                emit(emitter, "response.function_call_arguments.delta", seq,
-                        mapOf("item_id", call.itemId, "output_index", call.outputIndex, "delta", fragment));
+                // A custom call's input arrives wrapped as JSON arguments, so it is sent whole when the call ends.
+                if (!call.custom) {
+                    emit(emitter, "response.function_call_arguments.delta", seq,
+                            mapOf("item_id", call.itemId, "output_index", call.outputIndex, "delta", fragment));
+                }
             }
         }
 
@@ -441,9 +469,19 @@ public class ResponsesController {
             }
             finishMessage();
             for (Call call : calls.values()) {
-                String arguments = call.arguments.toString();
-                emit(emitter, "response.function_call_arguments.done", seq,
-                        mapOf("item_id", call.itemId, "output_index", call.outputIndex, "arguments", arguments));
+                if (call.custom) {
+                    String input = call.input();
+                    if (!input.isEmpty()) {
+                        emit(emitter, "response.custom_tool_call_input.delta", seq,
+                                mapOf("item_id", call.itemId, "output_index", call.outputIndex, "delta", input));
+                    }
+                    emit(emitter, "response.custom_tool_call_input.done", seq,
+                            mapOf("item_id", call.itemId, "output_index", call.outputIndex, "input", input));
+                } else {
+                    emit(emitter, "response.function_call_arguments.done", seq,
+                            mapOf("item_id", call.itemId, "output_index", call.outputIndex,
+                                    "arguments", call.arguments.toString()));
+                }
                 Map<String, Object> done = call.item("completed");
                 emit(emitter, "response.output_item.done", seq, mapOf("output_index", call.outputIndex, "item", done));
                 finished.put(call.outputIndex, done);
@@ -500,19 +538,66 @@ public class ResponsesController {
         if (r.getPreviousResponseId() != null) {
             throw unsupported("previous_response_id (stateful chaining) is not supported — the gateway is stateless.");
         }
-        if (r.getReasoning() != null) {
-            throw unsupported("reasoning items are not supported in this release.");
-        }
+        checkReasoning(r.getReasoning());
         if (Boolean.TRUE.equals(r.getBackground())) {
             throw unsupported("background (async) mode is not supported — it requires server-side state.");
         }
         if (r.getPrompt() != null) {
             throw unsupported("reusable prompt objects are not supported — use DVARA prompt templates instead.");
         }
-        if (r.getInclude() != null && !r.getInclude().isEmpty()) {
-            throw unsupported("include is not supported in this release — the requested extra output "
-                    + "fields would be absent from the response.");
+        if (r.getInclude() != null) {
+            for (String field : r.getInclude()) {
+                // Encrypted reasoning carries a model's reasoning to the next stateless call. The gateway
+                // calls chat completions, which returns none, so the answer has no reasoning items: what a
+                // model that did not reason returns too, and what a client must already handle.
+                if (!INCLUDE_ACCEPTED.equals(field)) {
+                    throw unsupported("include " + field + " is not supported on /v1/responses; the requested "
+                            + "output would be absent from the response. Only " + INCLUDE_ACCEPTED + " is accepted.");
+                }
+            }
         }
+        if (Boolean.FALSE.equals(r.getParallelToolCalls())) {
+            throw unsupported("parallel_tool_calls=false is not supported on /v1/responses");
+        }
+        if (r.getServiceTier() != null && !"auto".equals(r.getServiceTier()) && !"default".equals(r.getServiceTier())) {
+            throw unsupported("service_tier " + r.getServiceTier() + " is not supported on /v1/responses; "
+                    + "it changes the price and speed of the call, and the gateway does not send it.");
+        }
+    }
+
+    private static final String INCLUDE_ACCEPTED = "reasoning.encrypted_content";
+
+    /**
+     * {@code reasoning} may carry {@code effort}, which is sent to OpenAI, and {@code summary}
+     * ({@code generate_summary} is its older name) and {@code context}, which ask for reasoning summaries and
+     * for which reasoning to keep: chat completions returns no reasoning, so the answer has none either way.
+     * Anything else is refused.
+     */
+    private static void checkReasoning(Object reasoning) {
+        if (reasoning == null) {
+            return;
+        }
+        if (!(reasoning instanceof Map<?, ?> m)) {
+            throw new GatewayException("INVALID_REQUEST", "reasoning must be an object");
+        }
+        for (Object key : m.keySet()) {
+            if (!REASONING_ACCEPTED.contains(String.valueOf(key))) {
+                throw unsupported("reasoning." + key + " is not supported on /v1/responses.");
+            }
+        }
+    }
+
+    private static final java.util.Set<String> REASONING_ACCEPTED =
+            java.util.Set.of("effort", "summary", "generate_summary", "context");
+
+    private static String reasoningEffort(Object reasoning) {
+        Object effort = reasoning instanceof Map<?, ?> m ? m.get("effort") : null;
+        return effort == null ? null : effort.toString();
+    }
+
+    private static String verbosity(Map<String, Object> text) {
+        Object verbosity = text == null ? null : text.get("verbosity");
+        return verbosity == null ? null : verbosity.toString();
     }
 
     private static GatewayException unsupported(String message) {
@@ -535,7 +620,7 @@ public class ResponsesController {
         if (messages.isEmpty()) {
             throw new GatewayException("INVALID_REQUEST", "input is required");
         }
-        List<com.dvarahq.core.model.ToolDefinition> tools = ResponsesTools.tools(r.getTools());
+        List<com.dvarahq.core.model.ToolDefinition> tools = ResponsesTools.read(r.getTools()).tools();
         return ChatRequest.builder()
                 .model(r.getModel())
                 .messages(messages)
@@ -548,6 +633,10 @@ public class ResponsesController {
                 .user(endUser(r))
                 .tools(tools)
                 .toolChoice(ResponsesTools.toolChoice(r.getToolChoice(), tools != null))
+                .reasoningEffort(reasoningEffort(r.getReasoning()))
+                .verbosity(verbosity(r.getText()))
+                .promptCacheKey(r.getPromptCacheKey() == null || r.getPromptCacheKey().isBlank()
+                        ? null : r.getPromptCacheKey())
                 .build();
     }
 
@@ -578,8 +667,12 @@ public class ResponsesController {
                 String type = m.get("type") == null ? "message" : m.get("type").toString();
                 switch (type) {
                     case "message" -> messages.add(parseInputItem(m));
-                    case "function_call" -> ResponsesTools.addFunctionCall(messages, m);
-                    case "function_call_output" -> messages.add(ResponsesTools.functionCallOutput(m));
+                    case "function_call", "custom_tool_call" -> ResponsesTools.addFunctionCall(messages, m);
+                    case "function_call_output", "custom_tool_call_output" ->
+                            messages.add(ResponsesTools.functionCallOutput(m));
+                    // A reasoning item carries one provider's encrypted reasoning from an earlier answer. Chat
+                    // completions cannot take it back, and the gateway never returns one, so it is left out.
+                    case "reasoning" -> { }
                     // Read as a message, any other item would reach the model as an empty turn.
                     default -> throw unsupported("input items of type " + type
                             + " are not supported on /v1/responses.");
@@ -592,6 +685,10 @@ public class ResponsesController {
 
     private static MultimodalMessage parseInputItem(Map<String, Object> m) {
         String role = m.get("role") != null ? m.get("role").toString() : "user";
+        // Instructions under the developer role are system instructions; only OpenAI knows the role's name.
+        if ("developer".equals(role)) {
+            role = "system";
+        }
         Object content = m.get("content");
         List<ContentBlock> blocks = new ArrayList<>();
         if (content instanceof String s) {
@@ -661,6 +758,10 @@ public class ResponsesController {
     }
 
     ResponseResult toResponseResult(ChatResponse resp) {
+        return toResponseResult(resp, ResponsesTools.Names.NONE);
+    }
+
+    ResponseResult toResponseResult(ChatResponse resp, ResponsesTools.Names names) {
         String outputText = extractText(resp);
         List<com.dvarahq.core.model.ToolCall> calls = toolCalls(resp);
         List<ResponseResult.OutputItem> output = new ArrayList<>();
@@ -673,11 +774,18 @@ public class ResponsesController {
                     .content(List.of(part)).build());
         }
         for (com.dvarahq.core.model.ToolCall call : calls) {
-            output.add(ResponseResult.OutputItem.builder()
-                    .type("function_call").id("fc_" + shortId()).status("completed")
-                    .callId(call.getId()).name(call.getName())
-                    .arguments(call.getArguments() == null ? "" : call.getArguments())
-                    .build());
+            String travelling = call.getName();
+            ResponseResult.OutputItem.OutputItemBuilder item = ResponseResult.OutputItem.builder()
+                    .status("completed").callId(call.getId())
+                    .name(names.name(travelling)).namespace(names.namespace(travelling));
+            if (names.isCustom(travelling)) {
+                item.type("custom_tool_call").id("ctc_" + shortId())
+                        .input(com.dvarahq.core.model.ToolDefinition.customInput(call.getArguments()));
+            } else {
+                item.type("function_call").id("fc_" + shortId())
+                        .arguments(call.getArguments() == null ? "" : call.getArguments());
+            }
+            output.add(item.build());
         }
         ResponseResult.Usage usage = ResponseResult.Usage.from(resp.getUsage());
         return ResponseResult.builder()

@@ -59,6 +59,23 @@ public class ChatRequest {
      * end user. Null when the client set none.
      */
     private String user;
+    /**
+     * OpenAI's reasoning effort ({@code minimal}, {@code low}, {@code medium}, {@code high} and newer values):
+     * how long a reasoning model thinks before it answers. Sent to OpenAI as {@code reasoning_effort}. Other
+     * providers have no such setting and are not sent it. Null when the client set none.
+     */
+    private String reasoningEffort;
+    /**
+     * OpenAI's verbosity ({@code low}, {@code medium}, {@code high}): how long an answer a model that takes it
+     * writes. Sent to OpenAI as {@code verbosity}; other providers are not sent it. Null when the client set none.
+     */
+    private String verbosity;
+    /**
+     * OpenAI's {@code prompt_cache_key}: a hint that sends calls sharing a long prompt prefix to the same prompt
+     * cache. It changes no answer, only how much of the prompt is read from cache. Sent to OpenAI; other
+     * providers are not sent it. Null when the client set none.
+     */
+    private String promptCacheKey;
     private ResponseFormat responseFormat;
     private Map<String, Object> metadata;
 

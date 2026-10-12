@@ -262,14 +262,30 @@ key as its API key.
   only the Claude models Anthropic serves, so a client built for Anthropic is never offered another
   provider's model.
 - ✅ **OpenAI Responses API** — `POST /v1/responses`, whole or streamed, governed like chat on any
-  provider. Text, images, structured output (`text.format`) and function calling: `function` tools,
-  `tool_choice`, and `function_call` and `function_call_output` items in `input`. A call comes back as a
-  `function_call` output item, and streams with `response.output_item.added`,
-  `response.function_call_arguments.delta` and `.done`, and `response.output_item.done`. On a provider
-  that is not OpenAI the calls are translated, as on chat. The gateway runs no tool; your code does.
-  Built-in tools (`web_search`, `file_search`, `code_interpreter`, `computer_use`, `mcp` and the rest)
-  run at the provider, outside the gateway's checks, so they are refused. So are `store: true`,
-  `previous_response_id`, `background` and input item types the gateway does not read.
+  provider. Text, images, structured output (`text.format`) and your own tools:
+  - `function` tools (with `strict`, sent to OpenAI), `tool_choice`, and `function_call` and
+    `function_call_output` items in `input`. A call comes back as a `function_call` output item, and streams
+    with `response.output_item.added`, `response.function_call_arguments.delta` and `.done`, and
+    `response.output_item.done`.
+  - `custom` tools, whose input is free text such as a patch, with `custom_tool_call` and
+    `custom_tool_call_output` items. OpenAI takes them as they are; another provider gets a function with
+    one string argument, `input`, and the grammar in its description.
+  - `namespace` tools, such as one MCP server's: each inner tool travels as `namespace__name` (cut to 64
+    characters with a hash) and its calls come back under their own name and `namespace`.
+  - A tool's output can hold text and images. A provider that cannot take an image in a tool result
+    (anything but Anthropic and Bedrock) gets it in a user message right after the results.
+
+  On a provider that is not OpenAI the calls are translated, as on chat. The gateway runs no tool; your code
+  does. Built-in tools (`web_search`, `file_search`, `code_interpreter`, `computer_use`, `mcp` and the rest)
+  run at the provider, outside the gateway's checks, so they are refused; with Codex CLI, set
+  `web_search = "disabled"`. So are `store: true`, `previous_response_id`, `background`, a `service_tier`
+  other than `auto` or `default`, `parallel_tool_calls: false`, file parts, and input item types the
+  gateway does not read. `reasoning.effort`, `text.verbosity` and `prompt_cache_key` are sent to OpenAI and
+  not to other providers (logged at DEBUG when left out). The gateway calls each provider's chat API, which
+  returns no reasoning, so what only asks for reasoning output is accepted and the answer has none:
+  `reasoning.summary`, `include: ["reasoning.encrypted_content"]`, `stream_options`, and `reasoning` items
+  in `input`, which are left out. A `developer` message is a system message. `client_metadata` is accepted
+  and not sent. When the provider reports usage, `response.completed` carries it.
 - ✅ **Response cache** — exact-match, in memory, per process. Off until
   `dvara.llm-gateway.cache.in-memory.enabled` is `true`.
 

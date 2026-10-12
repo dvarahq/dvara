@@ -491,7 +491,7 @@ public class ChatCompletionController {
 
     /**
      * Maps OpenAI-style {@code tools[]} ({@code {type:"function", function:{name,
-     * description, parameters}}}) to the internal {@link ToolDefinition}.
+     * description, parameters, strict}}}) to the internal {@link ToolDefinition}.
      * Only {@code function} tools are relayed; malformed entries are skipped.
      */
     @SuppressWarnings("unchecked")
@@ -505,10 +505,13 @@ public class ChatCompletionController {
                 Object name = function.get("name");
                 Object desc = function.get("description");
                 Object params = function.get("parameters");
+                Object strict = function.get("strict");
                 out.add(ToolDefinition.builder()
                         .name(name != null ? name.toString() : null)
                         .description(desc != null ? desc.toString() : null)
                         .parameters(params instanceof Map ? (Map<String, Object>) params : null)
+                        // Sent to OpenAI, which holds the arguments to the schema; other providers have no such switch.
+                        .strict(strict instanceof Boolean b ? b : null)
                         .build());
             }
         }

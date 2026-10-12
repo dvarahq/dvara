@@ -374,14 +374,119 @@ class ResponsesMappingTest {
     }
 
     @Test
-    void anImageInAFunctionsOutput_isRefused() {
+    void anImageInAFunctionsOutput_isCarried() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m")
+                .input(List.of(Map.of("type", "function_call_output", "call_id", "call_1",
+                        "output", List.of(Map.of("type", "input_text", "text", "the screen:"),
+                                Map.of("type", "input_image", "image_url", "data:image/png;base64,AAAA")))))
+                .build());
+
+        List<ContentBlock> blocks = internal.getMessages().get(0).getContent();
+        assertThat(internal.getMessages().get(0).getRole()).isEqualTo("tool");
+        assertThat(blocks.get(0).textContent()).isEqualTo("the screen:");
+        assertThat(blocks.get(1)).isInstanceOf(ContentBlock.ImageBlock.class);
+        assertThat(((ContentBlock.ImageBlock) blocks.get(1)).mediaType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void aFileInAFunctionsOutput_isRefused() {
         assertThatThrownBy(() -> controller.toInternal(ResponseRequest.builder().model("m")
                 .input(List.of(Map.of("type", "function_call_output", "call_id", "call_1",
-                        "output", List.of(Map.of("type", "input_image", "image_url", "https://example.com/a.png")))))
+                        "output", List.of(Map.of("type", "input_file", "file_id", "file-1")))))
                 .build()))
                 .isInstanceOf(GatewayException.class)
                 .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("UNSUPPORTED_CAPABILITY"))
-                .hasMessageContaining("input_image");
+                .hasMessageContaining("input_file");
+    }
+
+    // -------- custom and namespace tools --------
+
+    private static final Map<String, Object> PATCH_TOOL = Map.of("type", "custom", "name", "apply_patch",
+            "description", "Edits files.", "format", Map.of("type", "grammar", "syntax", "lark", "definition", "start: x"));
+
+    @Test
+    void aCustomTool_isCarriedAsCustom() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(PATCH_TOOL)).build());
+
+        com.dvarahq.core.model.ToolDefinition tool = internal.getTools().get(0);
+        assertThat(tool.isCustom()).isTrue();
+        assertThat(tool.getName()).isEqualTo("apply_patch");
+        assertThat(tool.getFormat()).containsEntry("syntax", "lark");
+    }
+
+    @Test
+    void aFunctionToolsStrict_isCarried() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(Map.of("type", "function", "name", "f", "strict", true,
+                        "parameters", Map.of("type", "object")))).build());
+
+        assertThat(internal.getTools().get(0).getStrict()).isTrue();
+    }
+
+    @Test
+    void aNamespacesTools_travelUnderJoinedNames() {
+        String longName = "x".repeat(70);
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(Map.of("type", "namespace", "name", "mcp__github", "description", "GitHub",
+                        "tools", List.of(Map.of("type", "function", "name", "list_issues", "parameters", Map.of("type", "object")),
+                                Map.of("type", "function", "name", longName, "parameters", Map.of("type", "object"))))))
+                .build());
+
+        assertThat(internal.getTools().get(0).getName()).isEqualTo("mcp__github__list_issues");
+        assertThat(internal.getTools().get(1).getName()).hasSize(64).startsWith("mcp__github__xxx");
+    }
+
+    @Test
+    void customAndNamespacedCallItems_travelUnderTheirToolsNames() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m")
+                .input(List.of(Map.of("role", "user", "content", "go"),
+                        Map.of("type", "custom_tool_call", "call_id", "call_1", "name", "apply_patch", "input", "*** Begin Patch"),
+                        Map.of("type", "function_call", "call_id", "call_2", "namespace", "mcp__github",
+                                "name", "list_issues", "arguments", "{}"),
+                        Map.of("type", "custom_tool_call_output", "call_id", "call_1", "output", "Done"),
+                        Map.of("type", "function_call_output", "call_id", "call_2", "output", "[]")))
+                .build());
+
+        List<com.dvarahq.core.model.ToolCall> calls = internal.getMessages().get(1).getToolCalls();
+        assertThat(calls.get(0).getName()).isEqualTo("apply_patch");
+        assertThat(calls.get(0).getArguments()).isEqualTo("{\"input\":\"*** Begin Patch\"}");
+        assertThat(calls.get(1).getName()).isEqualTo("mcp__github__list_issues");
+        assertThat(internal.getMessages()).extracting(MultimodalMessage::getRole)
+                .containsExactly("user", "assistant", "tool", "tool");
+    }
+
+    @Test
+    void webSearch_isRefusedTellingCodexUsersWhatToSet() {
+        assertThatThrownBy(() -> controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(Map.of("type", "web_search", "external_web_access", false))).build()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("web_search = \"disabled\"");
+    }
+
+    @Test
+    void customAndNamespacedCalls_comeBackUnderTheirOwnNames() {
+        ResponseRequest request = ResponseRequest.builder().model("m").input("hi")
+                .tools(List.of(PATCH_TOOL, Map.of("type", "namespace", "name", "mcp__github", "description", "",
+                        "tools", List.of(Map.of("type", "function", "name", "list_issues"))))).build();
+        MultimodalMessage msg = MultimodalMessage.builder().role("assistant").content(List.of())
+                .toolCalls(List.of(
+                        new com.dvarahq.core.model.ToolCall("call_1", "apply_patch", "{\"input\":\"*** Begin Patch\"}"),
+                        new com.dvarahq.core.model.ToolCall("call_2", "mcp__github__list_issues", "{}")))
+                .build();
+        ChatResponse resp = ChatResponse.builder().id("c").model("m").created(1)
+                .choices(List.of(ChatResponse.Choice.builder().index(0).message(msg).build())).build();
+
+        List<ResponseResult.OutputItem> out = controller.toResponseResult(resp,
+                ResponsesTools.read(request.getTools()).names()).getOutput();
+
+        assertThat(out.get(0).getType()).isEqualTo("custom_tool_call");
+        assertThat(out.get(0).getName()).isEqualTo("apply_patch");
+        assertThat(out.get(0).getInput()).isEqualTo("*** Begin Patch");
+        assertThat(out.get(0).getArguments()).isNull();
+        assertThat(out.get(1).getType()).isEqualTo("function_call");
+        assertThat(out.get(1).getName()).isEqualTo("list_issues");
+        assertThat(out.get(1).getNamespace()).isEqualTo("mcp__github");
     }
 
     @Test
@@ -419,13 +524,77 @@ class ResponsesMappingTest {
                 .containsExactly("message", "function_call");
     }
 
+    // -------- what agents such as Codex CLI send --------
+
+    @Test
+    void whatOnlyTunesOrAsksForReasoningOutput_isAccepted() {
+        ResponseRequest r = ResponseRequest.builder().model("m").input("hi")
+                .reasoning(Map.of("effort", "high", "summary", "auto")).include(List.of("reasoning.encrypted_content"))
+                .parallelToolCalls(true).serviceTier("auto").store(false)
+                .clientMetadata(Map.of("session_id", "s-1")).streamOptions(Map.of("reasoning_summary_delivery", "sequential_cutoff"))
+                .build();
+
+        controller.rejectUnsupported(r);
+        ChatRequest internal = controller.toInternal(r);
+
+        assertThat(internal.getReasoningEffort()).isEqualTo("high");
+    }
+
+    @Test
+    void verbosityAndThePromptCacheKey_areCarried() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m").input("hi")
+                .text(Map.of("verbosity", "low")).promptCacheKey("thread-1").build());
+
+        assertThat(internal.getVerbosity()).isEqualTo("low");
+        assertThat(internal.getPromptCacheKey()).isEqualTo("thread-1");
+        assertThat(internal.getResponseFormat()).isNull();
+    }
+
+    @Test
+    void reasoningThatIsNotAnObject_isInvalid() {
+        assertThatThrownBy(() -> controller.rejectUnsupported(ResponseRequest.builder().model("m").input("hi")
+                .reasoning("high").build()))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("INVALID_REQUEST"));
+    }
+
+    @Test
+    void aDeveloperMessage_isASystemMessage() {
+        // Providers other than OpenAI know no developer role, and some refuse it.
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m")
+                .input(List.of(Map.of("type", "message", "role", "developer",
+                                "content", List.of(Map.of("type", "input_text", "text", "Be terse."))),
+                        Map.of("role", "user", "content", "hi")))
+                .build());
+
+        assertThat(internal.getMessages()).extracting(MultimodalMessage::getRole).containsExactly("system", "user");
+    }
+
+    @Test
+    void aReasoningItem_isLeftOut() {
+        ChatRequest internal = controller.toInternal(ResponseRequest.builder().model("m")
+                .input(List.of(Map.of("role", "user", "content", "hi"),
+                        Map.of("type", "reasoning", "id", "rs_1", "summary", List.of(), "encrypted_content", "opaque"),
+                        Map.of("type", "function_call", "call_id", "call_1", "name", "f", "arguments", "{}"),
+                        Map.of("type", "function_call_output", "call_id", "call_1", "output", "ok")))
+                .build());
+
+        assertThat(internal.getMessages()).extracting(MultimodalMessage::getRole)
+                .containsExactly("user", "assistant", "tool");
+        assertThat(internal.getMessages()).allSatisfy(m -> assertThat(m.textContent()).doesNotContain("opaque"));
+    }
+
     // -------- reject unsupported --------
 
     @Test
     void unsupportedFeatures_rejectWithUnsupportedCapability() {
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").store(true).build());
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").previousResponseId("resp_1").build());
-        assertUnsupported(ResponseRequest.builder().model("m").input("hi").reasoning(Map.of("effort", "high")).build());
+        assertUnsupported(ResponseRequest.builder().model("m").input("hi").reasoning(Map.of("mode", "deep")).build());
+        assertUnsupported(ResponseRequest.builder().model("m").input("hi")
+                .include(List.of("reasoning.encrypted_content", "message.output_text.logprobs")).build());
+        assertUnsupported(ResponseRequest.builder().model("m").input("hi").parallelToolCalls(false).build());
+        assertUnsupported(ResponseRequest.builder().model("m").input("hi").serviceTier("priority").build());
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").background(true).build());
         assertUnsupported(ResponseRequest.builder().model("m").input("hi").prompt(Map.of("id", "p_1")).build());
     }
