@@ -67,6 +67,26 @@ public class ToolDefinition {
         this(name, description, parameters, null, false, null);
     }
 
+    /**
+     * The name a tool declared in a namespace travels under: {@code namespace__name}, made safe for a function
+     * name and cut to the 64 characters providers allow, with a hash of the whole to keep it unique. The same
+     * for the tool and for every call to it.
+     */
+    public static String namespaced(String namespace, String name) {
+        String joined = namespace.endsWith("_") ? namespace + name : namespace + "__" + name;
+        joined = joined.replaceAll("[^A-Za-z0-9_-]", "_");
+        if (joined.length() <= 64) {
+            return joined;
+        }
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(joined.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return joined.substring(0, 55) + "_" + java.util.HexFormat.of().formatHex(digest, 0, 4);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /** The one argument a custom tool's input travels in when it is given to a provider as a function. */
     public static final String CUSTOM_INPUT = "input";
 

@@ -101,6 +101,13 @@ public class ChatRequest {
      * every other doorway. The dispatcher refuses a request that asks for thinking on any other provider.
      */
     private AnthropicPassthrough anthropic;
+    /**
+     * A Responses API request body kept as it came, for an OpenAI or Azure OpenAI provider to send to its own
+     * {@code /responses} with only the governed edits. Null for every other doorway. Any other provider is sent
+     * the gateway's translation, {@link #messages}.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private OpenAiResponsesBody openAiResponses;
 
     /**
      * Whether only an Anthropic provider can serve this request: see {@link #anthropicOnly()}.

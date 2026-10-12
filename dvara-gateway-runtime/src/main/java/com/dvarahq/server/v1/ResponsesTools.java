@@ -67,18 +67,7 @@ final class ResponsesTools {
 
         /** The name a namespace's tool travels under. The same for the tool and for every call to it. */
         static String joined(String namespace, String name) {
-            String joined = namespace.endsWith("_") ? namespace + name : namespace + "__" + name;
-            joined = joined.replaceAll("[^A-Za-z0-9_-]", "_");
-            if (joined.length() <= 64) {
-                return joined;
-            }
-            try {
-                byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
-                        .digest(joined.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                return joined.substring(0, 55) + "_" + java.util.HexFormat.of().formatHex(digest, 0, 4);
-            } catch (java.security.NoSuchAlgorithmException e) {
-                throw new IllegalStateException(e);
-            }
+            return ToolDefinition.namespaced(namespace, name);
         }
 
         private void add(String travelling, String namespace, String name, boolean isCustom) {

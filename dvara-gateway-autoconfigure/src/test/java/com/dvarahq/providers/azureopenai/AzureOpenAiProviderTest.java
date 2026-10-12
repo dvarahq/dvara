@@ -367,4 +367,36 @@ class AzureOpenAiProviderTest {
 
         server.verify();
     }
+
+    // -------- the Responses API, sent on as it came --------
+
+    @Test
+    void aResponsesBody_goesToTheV1Path_withTheDeploymentAsModel() {
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo(
+                        "https://my-resource.openai.azure.com/openai/v1/responses"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath("$.model").value("gpt-5-mini"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.input[1].encrypted_content").value("gAAAAAB-opaque"))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess(
+                        com.dvarahq.providers.openai.OpenAiResponsesRouteTestAccess.ANSWER,
+                        org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.chat(com.dvarahq.providers.openai.OpenAiResponsesRouteTestAccess.request("azure/gpt-5-mini"));
+
+        server.verify();
+    }
+
+    @Test
+    void aResponsesApiVersion_whenSet_isSent() {
+        provider.responsesApiVersion("preview");
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo(
+                        "https://my-resource.openai.azure.com/openai/v1/responses?api-version=preview"))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess(
+                        com.dvarahq.providers.openai.OpenAiResponsesRouteTestAccess.ANSWER,
+                        org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.chat(com.dvarahq.providers.openai.OpenAiResponsesRouteTestAccess.request("azure/gpt-5-mini"));
+
+        server.verify();
+    }
 }

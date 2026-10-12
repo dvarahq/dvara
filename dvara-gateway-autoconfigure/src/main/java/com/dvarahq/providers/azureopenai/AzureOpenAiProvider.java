@@ -74,6 +74,36 @@ public class AzureOpenAiProvider extends AbstractOpenAiCompatibleProvider {
         super("azure-openai", restClient);
     }
 
+    /**
+     * The {@code api-version} sent with a Responses API call, or null for none. Azure's v1 path,
+     * {@code /openai/v1/responses}, takes the deployment as the body's {@code model} and needs no version
+     * (https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/responses); a version such as
+     * {@code preview} turns on features Azure has not made general yet.
+     */
+    private String responsesApiVersion;
+
+    public AzureOpenAiProvider responsesApiVersion(String version) {
+        this.responsesApiVersion = version == null || version.isBlank() ? null : version.trim();
+        return this;
+    }
+
+    /** Relative to the configured base URL, which ends in {@code /openai}. */
+    @Override
+    protected String responsesUri() {
+        return responsesApiVersion == null ? "/v1/responses" : "/v1/responses?api-version={apiVersion}";
+    }
+
+    @Override
+    protected Object[] responsesUriVars(ChatRequest request) {
+        return responsesApiVersion == null ? new Object[0] : new Object[] { responsesApiVersion };
+    }
+
+    /** On Azure the body's model is the deployment. */
+    @Override
+    protected String responsesModel(ChatRequest request) {
+        return extractDeployment(request.getModel());
+    }
+
     // -------------------------------------------------------------------------
     // Override points — Azure-shaped URI + model-in-URL behaviour
     // -------------------------------------------------------------------------

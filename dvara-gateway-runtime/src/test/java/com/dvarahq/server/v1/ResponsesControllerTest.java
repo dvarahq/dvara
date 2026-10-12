@@ -509,6 +509,172 @@ class ResponsesControllerTest {
                 && "low".equals(r.getVerbosity()) && r.getTools().size() == 1));
     }
 
+    // -------- a route to OpenAI: the body sent to OpenAI's own Responses API --------
+
+    private static final String OPENAI_ANSWER = """
+            {"id":"resp_9","object":"response","created_at":1760000000,"status":"completed","model":"gpt-5.5",
+             "output":[{"type":"reasoning","id":"rs_2","summary":[],"encrypted_content":"gAAAAAB-next"},
+                       {"type":"message","id":"msg_1","status":"completed","role":"assistant",
+                        "content":[{"type":"output_text","text":"Mail ann@example.com","annotations":[]}]}],
+             "usage":{"input_tokens":1200,"input_tokens_details":{"cached_tokens":1024},
+                      "output_tokens":80,"output_tokens_details":{"reasoning_tokens":64},"total_tokens":1280}}
+            """;
+
+    @Test
+    void direct_theGovernedInputIsWrittenBackIntoTheBody_andEncryptedReasoningGoesOnAsItCame() throws Exception {
+        // Input governance (a redaction) changes the user's text; the body sent on carries the change in place.
+        when(requestPipeline.preDispatch(any(ChatRequest.class), any(FilterContext.class))).thenAnswer(inv -> {
+            ChatRequest r = inv.getArgument(0);
+            List<MultimodalMessage> messages = new java.util.ArrayList<>(r.getMessages());
+            messages.set(1, MultimodalMessage.builder().role("user")
+                    .content(List.of(new com.dvarahq.core.model.ContentBlock.TextBlock("List the files in [REDACTED]."))).build());
+            return r.toBuilder().messages(messages).build();
+        });
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("c1").model("team-coder").delta("ok").finishReason("stop").done(true).build()).iterator());
+
+        streamEvents(fixture("tool-turn.json").replace("List the files in this folder.", "List the files in /home/ann."));
+
+        org.mockito.ArgumentCaptor<ChatRequest> sent = org.mockito.ArgumentCaptor.forClass(ChatRequest.class);
+        verify(dispatcher).streamChat(sent.capture());
+        com.fasterxml.jackson.databind.JsonNode body = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                sent.getValue().getOpenAiResponses().governedJson(sent.getValue(), "gpt-5.5", true));
+        assertThat(body.at("/input/1/content/0/text").asText()).isEqualTo("List the files in [REDACTED].");
+        assertThat(body.at("/input/2/type").asText()).isEqualTo("reasoning");
+        assertThat(body.at("/input/2/encrypted_content").asText()).isEqualTo("gAAAAAB-opaque");
+        assertThat(body.at("/input/3/arguments").asText()).isEqualTo("{\"cmd\":\"ls\"}");
+        assertThat(body.at("/client_metadata/session_id").asText()).isEqualTo("sess-1");
+        assertThat(body.at("/model").asText()).isEqualTo("gpt-5.5");
+    }
+
+    @Test
+    void direct_aPolicyRefusal_stopsTheCallBeforeAnyProvider() throws Exception {
+        when(requestPipeline.preDispatch(any(ChatRequest.class), any(FilterContext.class)))
+                .thenThrow(new com.dvarahq.core.exception.GatewayException("POLICY_DENIED", "model not allowed"));
+
+        mockMvc.perform(post("/v1/responses").contentType(MediaType.APPLICATION_JSON).content(fixture("tool-turn.json")))
+                .andExpect(status().is4xxClientError());
+
+        verify(dispatcher, org.mockito.Mockito.never()).streamChat(any());
+        verify(dispatcher, org.mockito.Mockito.never()).chat(any());
+    }
+
+    @Test
+    void direct_sync_returnsOpenAisOwnResponse_withTheGovernedOutputWrittenBack() throws Exception {
+        when(dispatcher.chat(any())).thenAnswer(inv -> {
+            ChatRequest r = inv.getArgument(0);
+            com.fasterxml.jackson.databind.node.ObjectNode answer =
+                    com.dvarahq.core.model.OpenAiResponsesBody.parseResponse(OPENAI_ANSWER);
+            r.getOpenAiResponses().upstreamResponse(answer);
+            return ChatResponse.builder().id("resp_9").model("gpt-5.5").created(1760000000L)
+                    .choices(List.of(ChatResponse.Choice.builder().index(0)
+                            .message(com.dvarahq.core.model.OpenAiResponsesBody.responseMessage(answer))
+                            .finishReason("stop").build()))
+                    .usage(com.dvarahq.core.model.OpenAiResponsesBody.usage(answer.get("usage")))
+                    .build();
+        });
+        // Output governance redacts the address.
+        when(requestPipeline.postDispatch(any(ChatRequest.class), any(ChatResponse.class), any(FilterContext.class)))
+                .thenAnswer(inv -> {
+                    ChatResponse r = inv.getArgument(1);
+                    return r.toBuilder().choices(List.of(ChatResponse.Choice.builder().index(0)
+                            .message(MultimodalMessage.assistant("Mail [EMAIL]")).finishReason("stop").build())).build();
+                });
+
+        mockMvc.perform(post("/v1/responses").contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model": "gpt-5.5", "input": "hi", "store": false,
+                                 "include": ["reasoning.encrypted_content"], "reasoning": {"effort": "high"}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("resp_9"))
+                .andExpect(jsonPath("$.output[0].type").value("reasoning"))
+                .andExpect(jsonPath("$.output[0].encrypted_content").value("gAAAAAB-next"))
+                .andExpect(jsonPath("$.output[1].content[0].text").value("Mail [EMAIL]"))
+                .andExpect(jsonPath("$.usage.input_tokens_details.cached_tokens").value(1024))
+                .andExpect(jsonPath("$.usage.output_tokens_details.reasoning_tokens").value(64));
+    }
+
+    private static List<SseChunk> openAiEvents() {
+        String[][] events = {
+                {"response.created", "{\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_9\",\"status\":\"in_progress\",\"output\":[]}}"},
+                {"response.output_item.done", "{\"type\":\"response.output_item.done\",\"sequence_number\":1,\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs_2\",\"summary\":[],\"encrypted_content\":\"gAAAAAB-next\"}}"},
+                {"response.output_text.delta", "{\"type\":\"response.output_text.delta\",\"sequence_number\":2,\"item_id\":\"msg_1\",\"output_index\":1,\"content_index\":0,\"delta\":\"One file.\"}"},
+                {"response.completed", "{\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"id\":\"resp_9\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":4},\"output_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":3},\"total_tokens\":15}}}"}};
+        List<SseChunk> chunks = new java.util.ArrayList<>();
+        for (int i = 0; i < events.length; i++) {
+            SseChunk.SseChunkBuilder c = SseChunk.builder().model("gpt-5.5")
+                    .responsesEvent(new com.dvarahq.core.model.ResponsesEvent(events[i][0], events[i][1]));
+            if (i == 2) c.delta("One file.");
+            if (i == 3) c.done(true).finishReason("stop").usage(new ChatResponse.Usage(10, 5, 15, 4, 0, 3));
+            chunks.add(c.build());
+        }
+        return chunks;
+    }
+
+    @Test
+    void direct_stream_relaysOpenAisEventsAsTheyCame_andMetersItsUsage() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(openAiEvents().iterator());
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(fixture("tool-turn.json"));
+
+        assertThat(events).extracting(e -> e.get("type").asText()).containsExactly(
+                "response.created", "response.output_item.done", "response.output_text.delta", "response.completed");
+        assertThat(events.get(0).at("/response/id").asText()).isEqualTo("resp_9");
+        assertThat(events.get(1).at("/item/encrypted_content").asText()).isEqualTo("gAAAAAB-next");
+        verify(tokenUsageRepository, timeout(2000)).save(argThat(r -> r != null && !r.isEstimated()
+                && r.getInputTokens() == 10 && r.getCachedInputTokens() == 4 && r.getReasoningTokens() == 3));
+    }
+
+    @Test
+    void direct_stream_aCutOffEndsWithAFailureAfterTheRelayedEvents() throws Exception {
+        List<SseChunk> first = openAiEvents().subList(0, 2);
+        java.util.Iterator<SseChunk> cut = new java.util.Iterator<>() {
+            int i;
+            @Override public boolean hasNext() {
+                if (i < first.size()) return true;
+                throw new com.dvarahq.core.exception.GatewayException("PROVIDER_ERROR", "connection reset");
+            }
+            @Override public SseChunk next() { return first.get(i++); }
+        };
+        when(dispatcher.streamChat(any())).thenReturn(cut);
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(fixture("tool-turn.json"));
+
+        assertThat(events).extracting(e -> e.get("type").asText())
+                .containsExactly("response.created", "response.output_item.done", "response.failed");
+        assertThat(events.get(2).get("sequence_number").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void direct_stream_whenTheGuardHoldsContent_theAnswerIsRenderedAndTheReasoningKept() throws Exception {
+        List<SseChunk> upstreamChunks = openAiEvents();
+        // A guard that holds content: OpenAI's events with no content pass, the text comes later as its own chunk.
+        class Held implements java.util.Iterator<SseChunk>, com.dvarahq.core.model.HeldDelivery {
+            final java.util.Iterator<SseChunk> out = List.of(upstreamChunks.get(0), upstreamChunks.get(1),
+                    SseChunk.builder().model("gpt-5.5").delta("One file.").build(),
+                    SseChunk.builder().model("gpt-5.5").done(true).finishReason("stop")
+                            .usage(new ChatResponse.Usage(10, 5, 15, 4, 0, 3)).build()).iterator();
+            @Override public boolean hasNext() { return out.hasNext(); }
+            @Override public SseChunk next() { return out.next(); }
+            @Override public boolean holdsContent() { return true; }
+        }
+        when(dispatcher.streamChat(any())).thenReturn(upstreamChunks.iterator());
+        when(streamingResponseEnforcer.wrap(any(), any(), any())).thenAnswer(i -> new Held());
+
+        List<com.fasterxml.jackson.databind.JsonNode> events = streamEvents(fixture("tool-turn.json"));
+
+        assertThat(events.get(0).get("type").asText()).isEqualTo("response.created");
+        assertThat(events.get(0).at("/response/id").asText()).isNotEqualTo("resp_9");
+        com.fasterxml.jackson.databind.JsonNode output = events.get(events.size() - 1).at("/response/output");
+        assertThat(output.get(0).get("type").asText()).isEqualTo("reasoning");
+        assertThat(output.get(0).get("encrypted_content").asText()).isEqualTo("gAAAAAB-next");
+        assertThat(output.get(1).at("/content/0/text").asText()).isEqualTo("One file.");
+        for (int i = 0; i < events.size(); i++) {
+            assertThat(events.get(i).get("sequence_number").asInt()).isEqualTo(i);
+        }
+    }
+
     /** The SSE events of a streamed request, each as its JSON. */
     private List<com.fasterxml.jackson.databind.JsonNode> streamEvents(String body) throws Exception {
         MvcResult mvcResult = mockMvc.perform(post("/v1/responses")

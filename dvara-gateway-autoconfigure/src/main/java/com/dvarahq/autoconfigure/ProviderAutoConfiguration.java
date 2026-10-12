@@ -255,7 +255,8 @@ public class ProviderAutoConfiguration {
                                                     RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getAzureOpenai();
         RestClient.Builder builder = clientFor("azure-openai", restClientBuilder, secretProvider);
-        return new AzureOpenAiProvider(secretProvider, cfg.getBaseUrl(), builder);
+        return new AzureOpenAiProvider(secretProvider, cfg.getBaseUrl(), builder)
+                .responsesApiVersion(cfg.getResponsesApiVersion());
     }
 
     @Bean

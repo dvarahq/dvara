@@ -275,14 +275,22 @@ key as its API key.
   - A tool's output can hold text and images. A provider that cannot take an image in a tool result
     (anything but Anthropic and Bedrock) gets it in a user message right after the results.
 
-  On a provider that is not OpenAI the calls are translated, as on chat. The gateway runs no tool; your code
-  does. Built-in tools (`web_search`, `file_search`, `code_interpreter`, `computer_use`, `mcp` and the rest)
+  On a route to OpenAI or Azure OpenAI the request goes to the provider's own Responses API as you sent it:
+  every field, tool and input item, including encrypted reasoning from an earlier answer
+  (`include: ["reasoning.encrypted_content"]` and `reasoning` items), with only the edits governance makes
+  (redacted text, the routed model, a token limit). The answer, whole or streamed event by event, comes
+  back as OpenAI sent it, with redacted text written back in place; usage counts cached and reasoning tokens.
+  When the streaming guard holds content back, the answer is rebuilt in the Responses shape and reasoning
+  items are kept. On Azure the call goes to `{base-url}/v1/responses` with the deployment as `model`;
+  `dvara.llm-gateway.providers.azure-openai.responses-api-version` adds an `api-version` (none by default).
+  On any other provider the request is translated to its chat API, as on chat. The gateway runs no tool;
+  your code does. Built-in tools (`web_search`, `file_search`, `code_interpreter`, `computer_use`, `mcp` and the rest)
   run at the provider, outside the gateway's checks, so they are refused; with Codex CLI, set
   `web_search = "disabled"`. So are `store: true`, `previous_response_id`, `background`, a `service_tier`
   other than `auto` or `default`, `parallel_tool_calls: false`, file parts, and input item types the
-  gateway does not read. `reasoning.effort`, `text.verbosity` and `prompt_cache_key` are sent to OpenAI and
-  not to other providers (logged at DEBUG when left out). The gateway calls each provider's chat API, which
-  returns no reasoning, so what only asks for reasoning output is accepted and the answer has none:
+  gateway does not read. On a translated route, `reasoning.effort`, `text.verbosity` and
+  `prompt_cache_key` are sent to OpenAI-shaped chat only where the provider takes them (logged at DEBUG
+  when left out), and what only asks for reasoning output is accepted with no reasoning in the answer:
   `reasoning.summary`, `include: ["reasoning.encrypted_content"]`, `stream_options`, and `reasoning` items
   in `input`, which are left out. A `developer` message is a system message. `client_metadata` is accepted
   and not sent. When the provider reports usage, `response.completed` carries it.

@@ -22,6 +22,7 @@ import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
 import com.dvarahq.core.model.MultimodalMessage;
+import com.dvarahq.core.model.OpenAiResponsesBody;
 import com.dvarahq.core.model.ResponseFormat;
 import com.dvarahq.providers.support.OpenAiCompatibleStreamDecoder;
 import com.dvarahq.providers.support.StreamTransport;
@@ -127,6 +128,9 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
 
     @Override
     public ChatResponse chat(ChatRequest request) {
+        if (request.getOpenAiResponses() != null && responsesUri() != null) {
+            return responsesChat(request);
+        }
         Map<String, Object> body = buildChatBody(request);
 
         OaiChatResponse oai = restClient.post()
@@ -140,6 +144,72 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
                 .body(OaiChatResponse.class);
 
         return mapChatResponse(oai);
+    }
+
+    // -------------------------------------------------------------------------
+    // The Responses API, sent on as the caller sent it
+    // -------------------------------------------------------------------------
+
+    /**
+     * This upstream's Responses API path, or null when it has none. A Responses API request on a route to an
+     * upstream that has one is sent there as it came, with only the governed edits ({@link OpenAiResponsesBody});
+     * otherwise it goes through Chat Completions like any other request.
+     */
+    protected String responsesUri() {
+        return null;
+    }
+
+    protected Object[] responsesUriVars(ChatRequest request) {
+        return new Object[0];
+    }
+
+    /** The model as this upstream names it in a Responses API body. */
+    protected String responsesModel(ChatRequest request) {
+        return request.getModel();
+    }
+
+    private ChatResponse responsesChat(ChatRequest request) {
+        OpenAiResponsesBody passthrough = request.getOpenAiResponses();
+        String answer = restClient.post()
+                .uri(responsesUri(), responsesUriVars(request))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(passthrough.governedJson(request, responsesModel(request), false))
+                .retrieve()
+                .onStatus(status -> status.isError(), (req, res) -> {
+                    throw ProviderErrors.refusal(upstreamLabel(), res, upstreamLabel() + " API error");
+                })
+                .body(String.class);
+        com.fasterxml.jackson.databind.node.ObjectNode response = OpenAiResponsesBody.parseResponse(answer);
+        MultimodalMessage message = OpenAiResponsesBody.responseMessage(response);
+        String finish = "incomplete".equals(response.path("status").asText(""))
+                ? "length" : message.getToolCalls() != null ? "tool_calls" : "stop";
+        ChatResponse out = ChatResponse.builder()
+                .id(response.path("id").asText(null))
+                .object("chat.completion")
+                .created(response.path("created_at").asLong(java.time.Instant.now().getEpochSecond()))
+                .model(request.getModel())
+                .choices(List.of(ChatResponse.Choice.builder().index(0).message(message).finishReason(finish).build()))
+                .usage(OpenAiResponsesBody.usage(response.get("usage")))
+                .build();
+        passthrough.upstreamResponse(response);
+        return out;
+    }
+
+    private Iterator<SseChunk> responsesStream(ChatRequest request) {
+        OpenAiResponsesBody passthrough = request.getOpenAiResponses();
+        return restClient.post()
+                .uri(responsesUri(), responsesUriVars(request))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(passthrough.governedJson(request, responsesModel(request), true))
+                .exchange((req, res) -> {
+                    if (res.getStatusCode().isError()) {
+                        throw ProviderErrors.refusal(upstreamLabel(), res, upstreamLabel() + " streaming error");
+                    }
+                    java.io.InputStream responseBody = res.getBody();
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(responseBody, StandardCharsets.UTF_8));
+                    return new com.dvarahq.providers.support.OpenAiResponsesStreamDecoder(
+                            () -> StreamTransport.release(res, responseBody), reader, request.getModel(), upstreamLabel());
+                }, false);
     }
 
     // -------------------------------------------------------------------------
@@ -249,6 +319,9 @@ public abstract class AbstractOpenAiCompatibleProvider extends AbstractLlmProvid
 
     @Override
     public Iterator<SseChunk> streamChat(ChatRequest request) {
+        if (request.getOpenAiResponses() != null && responsesUri() != null) {
+            return responsesStream(request);
+        }
         Map<String, Object> body = buildChatBody(request);
         body.put("stream", true);
         // Ask for real usage. Without this the upstream sends no usage block on a stream and the
