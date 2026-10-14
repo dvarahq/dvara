@@ -81,7 +81,8 @@ public class DefaultPolicyEngine implements PolicyEngine {
             if ("WARN_AGENT".equalsIgnoreCase(rule.action())) {
                 String message = rule.message() != null ? rule.message()
                         : "Warning from policy rule: " + rule.ruleId();
-                warnings.add(new PolicyWarning("WARN_AGENT", message, policy.policyId(), rule.ruleId()));
+                warnings.add(new PolicyWarning(rule.budget() ? PolicyWarning.BUDGET : "WARN_AGENT", message,
+                        policy.policyId(), rule.ruleId()));
             }
         }
 

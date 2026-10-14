@@ -1316,21 +1316,39 @@ class ChatCompletionControllerTest {
                 .andExpect(header().doesNotExist("X-Budget-Remaining-Tokens"));
     }
 
-    @Test
-    void budgetWarningHeader_present_whenPolicyWarns() throws Exception {
+    private void policyWarns(String type) {
         when(requestPipeline.preDispatch(any(ChatRequest.class), any(FilterContext.class)))
                 .thenAnswer(inv -> {
                     FilterContext ctx = inv.getArgument(1);
                     ctx.setPolicyDecision(PolicyDecision.allowWithWarnings(List.of(
-                            new com.dvarahq.core.policy.PolicyWarning("WARN_AGENT", "Budget at 80%", "p-1", "r-1"))));
+                            new com.dvarahq.core.policy.PolicyWarning(type, "warned", "p-1", "r-1"))));
                     return inv.getArgument(0);
                 });
         when(dispatcher.chat(any())).thenReturn(chatResponse("id", "gpt-4o", "ok"));
+    }
+
+    @Test
+    void budgetWarningHeader_present_whenABudgetRuleWarns() throws Exception {
+        policyWarns(com.dvarahq.core.policy.PolicyWarning.BUDGET);
 
         mockMvc.perform(post("/v1/chat/completions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validBody()))
                 .andExpect(status().isOk())
+                .andExpect(header().string("X-Policy-Warning", "true"))
+                .andExpect(header().string("X-Budget-Warning", "true"));
+    }
+
+    @Test
+    void aModelOrToolWarningSetsThePolicyHeader_andTheBudgetHeaderStillThrough19() throws Exception {
+        policyWarns("WARN_AGENT");
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validBody()))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Policy-Warning", "true"))
+                // Kept for clients that read it for every warning; budget warnings only from 1.10.0.
                 .andExpect(header().string("X-Budget-Warning", "true"));
     }
 

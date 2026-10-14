@@ -191,7 +191,19 @@ public class PolicyCompiler {
                 rule.getPriority(),
                 normalizedAction,
                 message,
-                matcher);
+                matcher,
+                testsBudget(rule));
+    }
+
+    /**
+     * Whether a rule tests budget use: a {@code budget_utilization} condition, or an expression that reads a
+     * {@code budget.} variable. Its warning is then a budget warning; any other rule's is a policy warning.
+     */
+    static boolean testsBudget(RuleDsl rule) {
+        if (rule.getConditions() != null && rule.getConditions().getBudgetUtilization() != null) {
+            return true;
+        }
+        return rule.getExpression() != null && rule.getExpression().contains("budget.");
     }
 
     private PolicyRule buildMatcher(RuleDsl rule) {

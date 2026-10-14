@@ -22,5 +22,12 @@ import com.dvarahq.policy.rule.PolicyRule;
  * rule's {@code warn_message} for WARN_AGENT, its {@code deny_message} for DENY, or null when the
  * author wrote neither, in which case the engine supplies a default naming the rule.
  */
-public record CompiledRule(String ruleId, int priority, String action, String message, PolicyRule matcher) {
+public record CompiledRule(String ruleId, int priority, String action, String message, PolicyRule matcher,
+                           boolean budget) {
+
+    /** A rule that does not test budget use. */
+    public CompiledRule(String ruleId, int priority, String action, String message, PolicyRule matcher) {
+        this(ruleId, priority, action, message, matcher, false);
+    }
+
 }
