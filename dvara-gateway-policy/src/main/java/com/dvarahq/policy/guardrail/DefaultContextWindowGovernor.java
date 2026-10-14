@@ -123,14 +123,25 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
             int prunedTokens = tokenEstimator.estimateTokens(prunedRequest);
             int prunedPct = (int) ((long) prunedTokens * 100 / maxContextTokens);
 
+            // The system messages and the turns pruning must keep can on their own be over the limit. Such a
+            // request is refused, not sent: a returned request is not proof that pruning got it under.
+            if (prunedPct >= hardThreshold) {
+                writeAuditEvent(workspaceId, "CONTEXT_WINDOW_EXCEEDED", estimatedTokens, maxContextTokens,
+                        utilizationPct, pruningStrategy.name(), prunedTokens);
+                log.info("Context window still exceeded after pruning: {} -> {} tokens ({}% -> {}%), strategy={}",
+                        estimatedTokens, prunedTokens, utilizationPct, prunedPct, pruningStrategy);
+                return new ContextWindowResult(prunedTokens, maxContextTokens, prunedPct,
+                        true, true, null, pruningStrategy);
+            }
+
             writeAuditEvent(workspaceId, "CONTEXT_WINDOW_PRUNED", estimatedTokens, maxContextTokens,
-                    utilizationPct, pruningStrategy.name());
+                    utilizationPct, pruningStrategy.name(), prunedTokens);
 
             log.info("Context window pruned: {} -> {} tokens ({}% -> {}%), strategy={}",
                     estimatedTokens, prunedTokens, utilizationPct, prunedPct, pruningStrategy);
 
             return new ContextWindowResult(prunedTokens, maxContextTokens, prunedPct,
-                    true, true, prunedRequest);
+                    true, true, prunedRequest, pruningStrategy);
         }
 
         return ContextWindowResult.withinLimits(estimatedTokens, maxContextTokens);
@@ -232,6 +243,11 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
 
     private void writeAuditEvent(String workspaceId, String eventType, int estimatedTokens,
                                   int maxTokens, int utilizationPct, String strategy) {
+        writeAuditEvent(workspaceId, eventType, estimatedTokens, maxTokens, utilizationPct, strategy, null);
+    }
+
+    private void writeAuditEvent(String workspaceId, String eventType, int estimatedTokens,
+                                  int maxTokens, int utilizationPct, String strategy, Integer prunedTokens) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("workspace_id", workspaceId);
         payload.put("estimated_tokens", estimatedTokens);
@@ -239,6 +255,9 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
         payload.put("utilization_pct", utilizationPct);
         if (strategy != null) {
             payload.put("pruning_strategy", strategy);
+        }
+        if (prunedTokens != null) {
+            payload.put("estimated_tokens_after_pruning", prunedTokens);
         }
 
         auditWriter.write(new AuditEvent(

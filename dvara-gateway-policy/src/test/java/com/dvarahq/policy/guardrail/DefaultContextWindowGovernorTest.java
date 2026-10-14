@@ -110,6 +110,46 @@ class DefaultContextWindowGovernorTest {
     }
 
     @Test
+    void aRequestStillOverTheLimitAfterPruningIsRefusedNotSent() {
+        // One irreducibly large message: every estimate, before and after pruning, stays over the hard threshold.
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(127000);
+        for (String strategy : new String[]{"TRUNCATE_OLDEST", "TRUNCATE_MIDDLE"}) {
+            Workspace workspace = Workspace.builder().id("workspace-1")
+                    .metadata(Map.of("guardrail.context.pruning-strategy", strategy,
+                            "guardrail.context.hard-threshold-pct", "90"))
+                    .build();
+            when(workspaceRepository.findById("workspace-1")).thenReturn(Optional.of(workspace));
+
+            ContextWindowResult result = governor.evaluate(buildRequest(5), 128000, "workspace-1");
+
+            assertThat(result.hardThresholdBreached()).as(strategy).isTrue();
+            assertThat(result.prunedRequest()).as(strategy + ": nothing to send").isNull();
+            assertThat(result.pruningStrategy()).as(strategy).hasToString(strategy);
+        }
+        var events = org.mockito.ArgumentCaptor.forClass(com.dvarahq.core.audit.AuditEvent.class);
+        verify(auditWriter, org.mockito.Mockito.times(2)).write(events.capture());
+        assertThat(events.getAllValues()).allSatisfy(e -> {
+            assertThat(e.eventType()).isEqualTo("CONTEXT_WINDOW_EXCEEDED");
+            assertThat(e.payload()).containsEntry("estimated_tokens_after_pruning", 127000);
+        });
+    }
+
+    @Test
+    void aSuccessfulPruneNamesItsStrategy() {
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(120000).thenReturn(50000);
+        Workspace workspace = Workspace.builder().id("workspace-1")
+                .metadata(Map.of("guardrail.context.pruning-strategy", "TRUNCATE_MIDDLE",
+                        "guardrail.context.hard-threshold-pct", "90"))
+                .build();
+        when(workspaceRepository.findById("workspace-1")).thenReturn(Optional.of(workspace));
+
+        ContextWindowResult result = governor.evaluate(buildRequest(5), 128000, "workspace-1");
+
+        assertThat(result.prunedRequest()).isNotNull();
+        assertThat(result.pruningStrategy()).hasToString("TRUNCATE_MIDDLE");
+    }
+
+    @Test
     void customThresholds_fromWorkspaceMetadata() {
         // 50000 / 128000 = ~39% — with custom warning threshold of 30%, this should breach
         when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(50000);
