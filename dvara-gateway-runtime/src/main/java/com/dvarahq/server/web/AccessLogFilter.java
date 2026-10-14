@@ -49,6 +49,11 @@ public class AccessLogFilter extends OncePerRequestFilter {
     public static final String ATTR_MODEL = "gateway.model";
     public static final String ATTR_PROVIDER = "gateway.provider";
     public static final String ATTR_CACHE_STATUS = "gateway.cacheStatus";
+    /**
+     * How close the cached request was to this one, 0 to 1, set by a response cache on a hit: 1 for an exact
+     * match, the measured score for a match by similarity. Absent when the cache sets none.
+     */
+    public static final String ATTR_CACHE_SIMILARITY = "gateway.cacheSimilarity";
     public static final String ATTR_TOKENS_PROMPT = "gateway.tokensPrompt";
     public static final String ATTR_TOKENS_COMPLETION = "gateway.tokensCompletion";
     public static final String ATTR_TOKENS_TOTAL = "gateway.tokensTotal";
