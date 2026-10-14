@@ -18,10 +18,18 @@ package com.dvarahq.core.policy;
 /**
  * A non-blocking warning produced by policy evaluation (e.g. WARN_AGENT action).
  *
- * @param type      warning type (e.g. "WARN_AGENT")
+ * @param type      warning type: {@link #BUDGET} for a rule on budget use, otherwise {@code WARN_AGENT}
  * @param message   human-readable warning message
  * @param policyId  the policy that produced this warning
  * @param ruleId    the rule within the policy
  */
 public record PolicyWarning(String type, String message, String policyId, String ruleId) {
+
+    /** The type of a warning from a rule that tests budget use. Every other warning is {@code WARN_AGENT}. */
+    public static final String BUDGET = "BUDGET_WARNING";
+
+    /** Whether this warning is about budget use, as opposed to a model, tool, region or other policy rule. */
+    public boolean isBudget() {
+        return BUDGET.equals(type);
+    }
 }

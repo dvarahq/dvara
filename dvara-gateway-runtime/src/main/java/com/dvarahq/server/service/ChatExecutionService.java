@@ -666,7 +666,11 @@ public class ChatExecutionService {
 
     private void auditBudgetWarning(HttpServletRequest httpRequest, PolicyDecision policyDecision, String workspaceId) {
         for (PolicyWarning warning : policyDecision.warnings()) {
-            metrics.recordBudgetWarning(workspaceId, warning.policyId());
+            // Only a warning from a rule on budget use is a budget warning. Every warning is a policy warning.
+            metrics.recordPolicyWarning(workspaceId, warning.policyId(), warning.type());
+            if (warning.isBudget()) {
+                metrics.recordBudgetWarning(workspaceId, warning.policyId());
+            }
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("warning_type", warning.type());
@@ -680,7 +684,7 @@ public class ChatExecutionService {
                     Ids.newId(),
                     Instant.now(),
                     workspaceId,
-                    "BUDGET_CAP_WARNING",
+                    warning.isBudget() ? "BUDGET_CAP_WARNING" : "POLICY_WARNING",
                     payload));
         }
     }

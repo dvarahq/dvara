@@ -386,4 +386,24 @@ class PolicyCompilerTest {
                 .updatedAt(Instant.now())
                 .build();
     }
+
+    /** A warning is a budget warning only when its rule tests budget use. */
+    @Test
+    void onlyARuleOnBudgetUseIsABudgetRule() {
+        var model = new com.dvarahq.policy.dsl.RuleDsl();
+        model.setConditions(new com.dvarahq.policy.dsl.ConditionDsl());
+        model.getConditions().setModel(new com.dvarahq.policy.dsl.ModelConditionDsl());
+        var budget = new com.dvarahq.policy.dsl.RuleDsl();
+        budget.setConditions(new com.dvarahq.policy.dsl.ConditionDsl());
+        budget.getConditions().setBudgetUtilization(new com.dvarahq.policy.dsl.BudgetUtilizationConditionDsl());
+        var celBudget = new com.dvarahq.policy.dsl.RuleDsl();
+        celBudget.setExpression("budget.utilization_pct > 80.0");
+        var celModel = new com.dvarahq.policy.dsl.RuleDsl();
+        celModel.setExpression("request.model == 'gpt-4o'");
+
+        assertThat(PolicyCompiler.testsBudget(model)).isFalse();
+        assertThat(PolicyCompiler.testsBudget(budget)).isTrue();
+        assertThat(PolicyCompiler.testsBudget(celBudget)).isTrue();
+        assertThat(PolicyCompiler.testsBudget(celModel)).isFalse();
+    }
 }

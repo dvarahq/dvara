@@ -180,14 +180,26 @@ public class GatewayMetrics {
 
 
     /**
-     * A WARN_AGENT policy warning, despite the name. Budget enforcement is not part of this module;
-     * a module that provides it records its own counters.
+     * A WARN_AGENT warning from a rule that tests budget use. A warning from any other rule is counted only by
+     * {@link #recordPolicyWarning}. Budget enforcement is not part of this module; a module that provides it
+     * records its own counters.
      */
     public void recordBudgetWarning(String workspace, String budgetId) {
         Counter.builder("gateway_budget_warning_total")
-                .description("Total budget warning events (WARN_AGENT policy)")
+                .description("Total budget warning events (WARN_AGENT policy rules on budget use)")
                 .tag("workspace", safe(workspace))
                 .tag("budget_id", safe(budgetId))
+                .register(registry)
+                .increment();
+    }
+
+    /** Every WARN_AGENT policy warning, by the policy that raised it and its type (budget or other). */
+    public void recordPolicyWarning(String workspace, String policyId, String type) {
+        Counter.builder("gateway_policy_warning_total")
+                .description("Total policy warning events (WARN_AGENT)")
+                .tag("workspace", safe(workspace))
+                .tag("policy_id", safe(policyId))
+                .tag("type", safe(type))
                 .register(registry)
                 .increment();
     }
