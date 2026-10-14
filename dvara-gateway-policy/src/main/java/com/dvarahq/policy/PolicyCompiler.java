@@ -114,13 +114,21 @@ public class PolicyCompiler {
      */
     public PolicyDsl parseDsl(String dslString) {
         try {
-            return yamlMapper.readValue(dslString, PolicyDsl.class);
+            PolicyDsl dsl = yamlMapper.readValue(dslString, PolicyDsl.class);
+            requireSupportedVersion(dsl);
+            return dsl;
+        } catch (PolicyCompilationException e) {
+            throw e;
         } catch (UnrecognizedPropertyException e) {
             // Name the unknown key and add a hint. Jackson's own message for an unknown
             // property is a dense stack trace, and a typo on a known field (or a key that is
             // not part of the DSL, such as `conditions: { workspace: X }`) is the most common
             // authoring mistake.
             String key = e.getPropertyName();
+            if (key != null && RESERVED_KEYS.contains(key.toLowerCase())) {
+                throw new PolicyCompilationException("'" + key + "' is reserved for a later version of the policy "
+                        + "DSL and cannot be used in version " + SUPPORTED_VERSION + locationSuffix(e) + ".", e);
+            }
             String hint = hintForUnknownKey(key);
             throw new PolicyCompilationException(
                     "Unknown key '" + key + "' in policy DSL"
@@ -133,6 +141,29 @@ public class PolicyCompiler {
                     e);
         } catch (Exception e) {
             throw new PolicyCompilationException("Failed to parse policy DSL: " + e.getMessage(), e);
+        }
+    }
+
+    /** The DSL version this compiler reads. A policy that names no version is read as this one. */
+    public static final String SUPPORTED_VERSION = "1";
+
+    /**
+     * Keys a later DSL version will give a meaning to: extension and version predicates, retention floors, residency
+     * modes, fail-mode declarations, evaluation gates and semantic predicates. They are refused in version 1, with a
+     * message that says why, so a policy written today cannot use one in a way a later version reads differently.
+     * The published grammar ({@code policy-dsl/v1.schema.json}) lists them.
+     */
+    public static final Set<String> RESERVED_KEYS = Set.of("extension", "extensions", "protocol_version",
+            "retention", "retention_floor", "residency_mode", "fail_mode", "eval_gate", "semantic", "intent");
+
+    private static void requireSupportedVersion(PolicyDsl dsl) {
+        if (dsl == null || dsl.getVersion() == null) {
+            return;
+        }
+        String version = dsl.getVersion().trim();
+        if (!version.equals(SUPPORTED_VERSION) && !version.equals(SUPPORTED_VERSION + ".0")) {
+            throw new PolicyCompilationException("Policy DSL version '" + version + "' is not supported: this "
+                    + "gateway reads version " + SUPPORTED_VERSION + ".", null);
         }
     }
 

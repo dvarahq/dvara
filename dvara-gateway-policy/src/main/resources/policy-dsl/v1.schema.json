@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dvarahq.com/schemas/policy-dsl/v1.json",
+  "title": "DVARA policy DSL, version 1",
+  "description": "The YAML a DVARA policy is written in. A key outside this schema is refused; keys reserved for later versions are refused with a message that says so.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rules"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "enum": [
+        "1",
+        "1.0"
+      ],
+      "description": "The DSL version. Omitted means 1."
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer",
+          "default": 100
+        },
+        "action": {
+          "type": "string",
+          "description": "DENY (default) or WARN_AGENT, case-insensitive."
+        },
+        "deny_message": {
+          "type": "string"
+        },
+        "warn_message": {
+          "type": "string"
+        },
+        "conditions": {
+          "$ref": "#/$defs/conditions"
+        },
+        "expression": {
+          "type": "string",
+          "description": "A CEL expression, instead of conditions. Needs a distribution that compiles expressions."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "conditions"
+          ]
+        },
+        {
+          "required": [
+            "expression"
+          ]
+        }
+      ]
+    },
+    "conditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Every condition given must match for the rule to fire. Which kinds compile depends on the distribution; one it cannot compile is refused, never ignored.",
+      "properties": {
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowlist": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "denylist": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "max_tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "limit"
+          ],
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowlist": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "denylist": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "data_residency": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowed_regions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "time_of_day": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "timezone": {
+              "type": "string"
+            },
+            "deny_hours": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+                  },
+                  "end": {
+                    "type": "string",
+                    "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+                  }
+                }
+              }
+            },
+            "deny_days": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "mcp_server": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowlist": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "denylist": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "mcp_tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowlist": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "denylist": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "mcp_arg": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  },
+                  "denylist": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "allowlist": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "budget_utilization": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "threshold_pct": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 75
+            }
+          }
+        }
+      }
+    }
+  },
+  "$comment": "Reserved for later versions, refused in version 1 with a message that says so: extension, extensions, protocol_version, retention, retention_floor, residency_mode, fail_mode, eval_gate, semantic, intent. Kept in step with PolicyCompiler.RESERVED_KEYS by PolicyDslGrammarTest.",
+  "x-reserved-keys": [
+    "extension",
+    "extensions",
+    "protocol_version",
+    "retention",
+    "retention_floor",
+    "residency_mode",
+    "fail_mode",
+    "eval_gate",
+    "semantic",
+    "intent"
+  ]
+}
