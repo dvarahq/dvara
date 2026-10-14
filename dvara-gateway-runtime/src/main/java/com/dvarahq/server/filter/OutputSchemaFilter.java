@@ -48,7 +48,9 @@ public class OutputSchemaFilter implements ChatFilter {
             throw new GatewayException("SCHEMA_VALIDATION_FAILED",
                     "Output schema validation failed: " + String.join("; ", result.errors()));
         }
-        metrics.recordSchemaValidation(ctx.getWorkspaceId(), request.getModel(), "valid");
+        // A response that was only tool calls had nothing to check; it is counted apart from one that passed.
+        metrics.recordSchemaValidation(ctx.getWorkspaceId(), request.getModel(),
+                result.validated() ? "valid" : "unvalidated");
         return response;
     }
 }
