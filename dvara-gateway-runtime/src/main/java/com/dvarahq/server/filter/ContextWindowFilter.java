@@ -93,7 +93,9 @@ public class ContextWindowFilter implements ChatFilter {
 
         if (result.hardThresholdBreached()) {
             if (result.prunedRequest() != null) {
-                metrics.recordContextWindowPruned(ctx.getWorkspaceId(), request.getModel(), "pruned");
+                // The strategy that ran, so the two algorithms can be told apart, as the audit record already can.
+                metrics.recordContextWindowPruned(ctx.getWorkspaceId(), request.getModel(),
+                        result.pruningStrategy() != null ? result.pruningStrategy().name() : "pruned");
                 return result.prunedRequest();
             }
             throw new GatewayException("CONTEXT_WINDOW_EXCEEDED",

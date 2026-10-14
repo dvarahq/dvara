@@ -26,6 +26,7 @@ import com.dvarahq.core.model.ChatRequest;
  * @param warningThresholdBreached whether the warning threshold was breached
  * @param hardThresholdBreached    whether the hard threshold was breached
  * @param prunedRequest            the pruned request if pruning was applied, null otherwise
+ * @param pruningStrategy          the strategy that pruned or tried to prune, null when none ran
  */
 public record ContextWindowResult(
         int estimatedTokens,
@@ -33,7 +34,15 @@ public record ContextWindowResult(
         int utilizationPct,
         boolean warningThresholdBreached,
         boolean hardThresholdBreached,
-        ChatRequest prunedRequest) {
+        ChatRequest prunedRequest,
+        PruningStrategy pruningStrategy) {
+
+    public ContextWindowResult(int estimatedTokens, int maxTokens, int utilizationPct,
+                               boolean warningThresholdBreached, boolean hardThresholdBreached,
+                               ChatRequest prunedRequest) {
+        this(estimatedTokens, maxTokens, utilizationPct, warningThresholdBreached, hardThresholdBreached,
+                prunedRequest, null);
+    }
 
     public static ContextWindowResult withinLimits(int estimatedTokens, int maxTokens) {
         int pct = maxTokens > 0 ? (int) ((long) estimatedTokens * 100 / maxTokens) : 0;
