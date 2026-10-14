@@ -24,9 +24,19 @@ import java.util.List;
  * @param errors   list of validation error messages
  * @param schemaId identifier of the schema used for validation
  */
-public record OutputSchemaResult(boolean valid, List<String> errors, String schemaId) {
+public record OutputSchemaResult(boolean valid, List<String> errors, String schemaId, boolean validated) {
 
     public static final OutputSchemaResult VALID = new OutputSchemaResult(true, List.of(), null);
+
+    /**
+     * A schema applied, but the response had nothing it could check: every choice was a tool call. Allowed, and
+     * counted apart from a response that was checked and passed.
+     */
+    public static final OutputSchemaResult UNVALIDATED = new OutputSchemaResult(true, List.of(), null, false);
+
+    public OutputSchemaResult(boolean valid, List<String> errors, String schemaId) {
+        this(valid, errors, schemaId, true);
+    }
 
     public static OutputSchemaResult invalid(List<String> errors, String schemaId) {
         return new OutputSchemaResult(false, errors, schemaId);

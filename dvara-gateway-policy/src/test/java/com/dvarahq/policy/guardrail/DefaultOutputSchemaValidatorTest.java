@@ -210,6 +210,77 @@ class DefaultOutputSchemaValidatorTest {
                 .build();
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Every choice is checked, a blank answer is not valid, and a tool-call-only answer is unvalidated.
+    // ---------------------------------------------------------------------------------------------
+
+    private void nameSchema() {
+        when(schemaRepository.findAll()).thenReturn(List.of(OutputSchemaConfig.builder()
+                .id("schema-1").modelPattern("gpt-4o*").enabled(true)
+                .schema(Map.of("type", "object", "properties", Map.of("name", Map.of("type", "string")),
+                        "required", List.of("name")))
+                .build()));
+    }
+
+    private static ChatResponse.Choice choice(int index, MultimodalMessage message) {
+        return ChatResponse.Choice.builder().index(index).message(message).finishReason("stop").build();
+    }
+
+    private static MultimodalMessage text(String... blocks) {
+        return MultimodalMessage.builder().role("assistant")
+                .content(java.util.Arrays.stream(blocks).<ContentBlock>map(ContentBlock.TextBlock::new).toList())
+                .build();
+    }
+
+    @Test
+    void aBadSecondChoiceIsInvalid() {
+        nameSchema();
+        ChatResponse two = ChatResponse.builder().id("r").model("gpt-4o").choices(List.of(
+                choice(0, text("{\"name\":\"Alice\"}")), choice(1, text("{\"age\":3}")))).build();
+
+        OutputSchemaResult result = validator.validate(buildRequest("gpt-4o"), two, "workspace-1", null);
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.errors()).allMatch(e -> e.startsWith("choice 1: "));
+    }
+
+    @Test
+    void blankOrMissingContentIsInvalid() {
+        nameSchema();
+
+        assertThat(validator.validate(buildRequest("gpt-4o"), buildResponse("   "), "workspace-1", null).valid())
+                .isFalse();
+        ChatResponse noContent = ChatResponse.builder().id("r").model("gpt-4o").choices(List.of(
+                choice(0, MultimodalMessage.builder().role("assistant").build()))).build();
+        assertThat(validator.validate(buildRequest("gpt-4o"), noContent, "workspace-1", null).valid()).isFalse();
+        ChatResponse noChoices = ChatResponse.builder().id("r").model("gpt-4o").choices(List.of()).build();
+        assertThat(validator.validate(buildRequest("gpt-4o"), noChoices, "workspace-1", null).valid()).isFalse();
+    }
+
+    @Test
+    void textSplitAcrossBlocksIsCheckedWhole() {
+        nameSchema();
+        ChatResponse split = ChatResponse.builder().id("r").model("gpt-4o").choices(List.of(
+                choice(0, text("{\"name\":", "\"Alice\"}")))).build();
+
+        assertThat(validator.validate(buildRequest("gpt-4o"), split, "workspace-1", null).valid()).isTrue();
+    }
+
+    @Test
+    void aToolCallOnlyAnswerIsAllowedButNotCountedAsValidated() {
+        nameSchema();
+        ChatResponse toolOnly = ChatResponse.builder().id("r").model("gpt-4o").choices(List.of(
+                choice(0, MultimodalMessage.builder().role("assistant")
+                        .toolCalls(List.of(com.dvarahq.core.model.ToolCall.builder().id("c1").name("lookup")
+                                .arguments("{}").build()))
+                        .build()))).build();
+
+        OutputSchemaResult result = validator.validate(buildRequest("gpt-4o"), toolOnly, "workspace-1", null);
+
+        assertThat(result.valid()).isTrue();
+        assertThat(result.validated()).isFalse();
+    }
+
     private ChatResponse buildResponse(String text) {
         return ChatResponse.builder()
                 .id("resp-1")

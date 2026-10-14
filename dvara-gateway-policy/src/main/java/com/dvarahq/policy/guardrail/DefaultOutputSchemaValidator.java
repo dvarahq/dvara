@@ -72,12 +72,40 @@ public class DefaultOutputSchemaValidator implements OutputSchemaValidator {
             return OutputSchemaResult.VALID;
         }
 
-        // Extract response text
-        String responseText = extractResponseText(response);
-        if (responseText == null || responseText.isBlank()) {
-            return OutputSchemaResult.VALID;
+        // Every choice is checked, not the first one only. A choice's text is all of its text blocks together. A
+        // choice that is only tool calls has no text answer for the schema to check. A text answer that is
+        // missing or blank does not match a schema that asks for JSON, so it is not valid.
+        List<String> errorMessages = new java.util.ArrayList<>();
+        int checked = 0;
+        var choices = response.getChoices() == null ? List.<com.dvarahq.core.model.ChatResponse.Choice>of() : response.getChoices();
+        for (int i = 0; i < choices.size(); i++) {
+            var message = choices.get(i).getMessage();
+            boolean toolCallsOnly = message != null && message.getToolCalls() != null
+                    && !message.getToolCalls().isEmpty() && isBlank(textOf(message));
+            if (toolCallsOnly) {
+                continue;
+            }
+            checked++;
+            String prefix = choices.size() > 1 ? "choice " + i + ": " : "";
+            String text = message == null ? null : textOf(message);
+            if (isBlank(text)) {
+                errorMessages.add(prefix + "Response has no content to validate");
+                continue;
+            }
+            errorMessages.addAll(validateText(text, config, request).stream().map(e -> prefix + e).toList());
         }
+        if (checked == 0) {
+            return choices.isEmpty()
+                    ? OutputSchemaResult.invalid(List.of("Response has no content to validate"), config.getId())
+                    : OutputSchemaResult.UNVALIDATED;
+        }
+        return errorMessages.isEmpty()
+                ? OutputSchemaResult.VALID
+                : OutputSchemaResult.invalid(errorMessages, config.getId());
+    }
 
+    /** The schema errors for one text answer; empty when it matches. */
+    private List<String> validateText(String responseText, OutputSchemaConfig config, ChatRequest request) {
         try {
             // Reject non-JSON early with a clear message (networknt parses internally,
             // but we keep the explicit "not valid JSON" result for the caller).
@@ -87,28 +115,19 @@ public class DefaultOutputSchemaValidator implements OutputSchemaValidator {
             // is on Jackson 2 — so pass the raw JSON string and let networknt parse it,
             // never bridging Jackson 2 <-> 3 node types.
             Schema schema = getOrCompileSchema(config);
-            List<com.networknt.schema.Error> errors = schema.validate(responseText, InputFormat.JSON);
-
-            if (errors.isEmpty()) {
-                return OutputSchemaResult.VALID;
-            }
-
-            List<String> errorMessages = errors.stream()
+            return schema.validate(responseText, InputFormat.JSON).stream()
                     .map(com.networknt.schema.Error::getMessage)
                     .toList();
-
-            return OutputSchemaResult.invalid(errorMessages, config.getId());
-
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            return OutputSchemaResult.invalid(
-                    List.of("Response is not valid JSON: " + e.getMessage()),
-                    config.getId());
+            return List.of("Response is not valid JSON: " + e.getMessage());
         } catch (Exception e) {
             log.error("Schema validation error for model {}: {}", request.getModel(), e.getMessage());
-            return OutputSchemaResult.invalid(
-                    List.of("Schema validation error: " + e.getMessage()),
-                    config.getId());
+            return List.of("Schema validation error: " + e.getMessage());
         }
+    }
+
+    private static boolean isBlank(String text) {
+        return text == null || text.isBlank();
     }
 
     /**
@@ -184,19 +203,20 @@ public class DefaultOutputSchemaValidator implements OutputSchemaValidator {
         }
     }
 
-    private String extractResponseText(ChatResponse response) {
-        if (response.getChoices() == null || response.getChoices().isEmpty()) {
+    /** All of a message's text blocks, in order; null when it has none. */
+    private static String textOf(com.dvarahq.core.model.MultimodalMessage message) {
+        if (message.getContent() == null) {
             return null;
         }
-        var firstChoice = response.getChoices().get(0);
-        if (firstChoice.getMessage() == null || firstChoice.getMessage().getContent() == null) {
-            return null;
+        StringBuilder text = new StringBuilder();
+        boolean any = false;
+        for (ContentBlock block : message.getContent()) {
+            if (block instanceof ContentBlock.TextBlock tb && tb.text() != null) {
+                text.append(tb.text());
+                any = true;
+            }
         }
-        return firstChoice.getMessage().getContent().stream()
-                .filter(b -> b instanceof ContentBlock.TextBlock)
-                .map(b -> ((ContentBlock.TextBlock) b).text())
-                .findFirst()
-                .orElse(null);
+        return any ? text.toString() : null;
     }
 
     static boolean matchesGlob(String pattern, String text) {
