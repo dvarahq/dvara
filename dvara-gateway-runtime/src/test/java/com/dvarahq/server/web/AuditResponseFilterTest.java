@@ -69,6 +69,28 @@ class AuditResponseFilterTest {
         verify(auditWriter).write(org.mockito.ArgumentMatchers.any(AuditEvent.class));
     }
 
+    /** A cached answer's record says it was a hit and how close the cached request was. */
+    @Test
+    void aCacheHitRecordsItsStatusAndSimilarity() throws Exception {
+        MockHttpServletRequest hit = new MockHttpServletRequest("POST", "/v1/chat/completions");
+        filter.doFilter(hit, new MockHttpServletResponse(), (req, res) -> {
+            req.setAttribute(AccessLogFilter.ATTR_CACHE_STATUS, "HIT");
+            req.setAttribute(AccessLogFilter.ATTR_CACHE_SIMILARITY, 0.97);
+        });
+        MockHttpServletRequest miss = new MockHttpServletRequest("POST", "/v1/chat/completions");
+        filter.doFilter(miss, new MockHttpServletResponse(), (req, res) -> {
+            req.setAttribute(AccessLogFilter.ATTR_CACHE_STATUS, "MISS");
+            req.setAttribute(AccessLogFilter.ATTR_CACHE_SIMILARITY, 0.5);
+        });
+
+        ArgumentCaptor<AuditEvent> events = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditWriter, org.mockito.Mockito.times(2)).write(events.capture());
+        assertThat(events.getAllValues().get(0).payload())
+                .containsEntry("cache_status", "HIT").containsEntry("cache_similarity", 0.97);
+        assertThat(events.getAllValues().get(1).payload())
+                .containsEntry("cache_status", "MISS").doesNotContainKey("cache_similarity");
+    }
+
     /** What the chain throws after starting async must propagate; a return inside finally would eat it. */
     @Test
     void anExceptionAfterAsyncStarted_propagatesAndNothingIsAudited() {

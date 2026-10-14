@@ -86,6 +86,12 @@ public class AuditResponseFilter extends OncePerRequestFilter {
                     (String) request.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR)));
 
             putIfPresent(payload, "tokens_total", request.getAttribute(AccessLogFilter.ATTR_TOKENS_TOTAL));
+            // Whether the answer came from the response cache, and on a hit how close the cached request was,
+            // so a disputed cached answer can be explained from the record.
+            putIfPresent(payload, "cache_status", request.getAttribute(AccessLogFilter.ATTR_CACHE_STATUS));
+            if ("HIT".equals(request.getAttribute(AccessLogFilter.ATTR_CACHE_STATUS))) {
+                putIfPresent(payload, "cache_similarity", request.getAttribute(AccessLogFilter.ATTR_CACHE_SIMILARITY));
+            }
             putIfPresent(payload, "error_code", request.getAttribute(AccessLogFilter.ATTR_ERROR_CODE));
             putIfPresent(payload, "policy_decision", request.getAttribute("policy.decision"));
             putIfPresent(payload, "policy_id", request.getAttribute("policy.policyId"));
