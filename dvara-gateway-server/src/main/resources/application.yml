@@ -78,29 +78,41 @@ dvara:
   llm-gateway:
     providers:
       openai:
+        enabled: ${OPENAI_ENABLED:false}
         api-key: ${OPENAI_API_KEY:}
       anthropic:
+        enabled: ${ANTHROPIC_ENABLED:false}
         api-key: ${ANTHROPIC_API_KEY:}
       gemini:
+        enabled: ${GEMINI_ENABLED:false}
         api-key: ${GEMINI_API_KEY:}
       azure-openai:
+        enabled: ${AZURE_OPENAI_ENABLED:false}
         api-key: ${AZURE_OPENAI_API_KEY:}
         base-url: ${AZURE_OPENAI_BASE_URL:}
       mistral:
+        enabled: ${MISTRAL_ENABLED:false}
         api-key: ${MISTRAL_API_KEY:}
       cohere:
+        enabled: ${COHERE_ENABLED:false}
         api-key: ${COHERE_API_KEY:}
       groq:
+        enabled: ${GROQ_ENABLED:false}
         api-key: ${GROQ_API_KEY:}
       qwen:
+        enabled: ${QWEN_ENABLED:false}
         api-key: ${QWEN_API_KEY:}
       deepseek:
+        enabled: ${DEEPSEEK_ENABLED:false}
         api-key: ${DEEPSEEK_API_KEY:}
       moonshot:
+        enabled: ${MOONSHOT_ENABLED:false}
         api-key: ${MOONSHOT_API_KEY:}
       chatglm:
+        enabled: ${ZHIPU_ENABLED:false}
         api-key: ${ZHIPU_API_KEY:}
       grok:
+        enabled: ${XAI_ENABLED:false}
         api-key: ${XAI_API_KEY:}
       ollama:
         enabled: ${OLLAMA_ENABLED:false}

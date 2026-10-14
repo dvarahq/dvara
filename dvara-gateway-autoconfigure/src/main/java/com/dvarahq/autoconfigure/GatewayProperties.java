@@ -76,6 +76,11 @@ public class GatewayProperties {
 
     @Data
     public static class ProviderConfig {
+        /**
+         * Registers the provider with no api-key in configuration, so its key can live only in a secret store.
+         * A provider whose api-key has text is registered either way.
+         */
+        private boolean enabled;
         private String apiKey;
         private String baseUrl;
         /** Azure OpenAI only: the {@code api-version} sent with a Responses API call; none when blank. */
