@@ -222,7 +222,10 @@ public class ResilienceAutoConfiguration {
             Integer status = ge.getUpstreamStatus();
             return status == null || status >= 500 || status == 408 || status == 429;
         }
-        return true;   // network errors and other unexpected failures
+        // A network error or timeout, or an upstream answer that never became a GatewayException. Anything
+        // else failed inside the gateway (reading the answer, a bug), and sending the call again would only
+        // pay the provider for the same failure.
+        return isUpstreamFault(throwable, true);
     }
 
     /**
@@ -241,7 +244,50 @@ public class ResilienceAutoConfiguration {
             Integer status = ge.getUpstreamStatus();
             return status == null || status >= 500 || status == 408;
         }
-        return true;
+        // An error inside the gateway, such as failing to read the provider's answer, says nothing about the
+        // provider. Counting it opened the circuit for every caller while the provider was healthy.
+        return isUpstreamFault(throwable, false);
+    }
+
+    /**
+     * Whether a failure that is not a {@code GatewayException} came from the provider or the network: an
+     * I/O error or timeout anywhere in its causes, or an HTTP error answer of 5xx or 408 (and 429 when
+     * {@code countRateLimit}). A response that could not be read or converted is the gateway's failure,
+     * even though the conversion error may wrap an {@link java.io.IOException}.
+     */
+    static boolean isUpstreamFault(Throwable throwable, boolean countRateLimit) {
+        for (Throwable t = throwable; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (isConversionFailure(t)) {
+                return false;
+            }
+            if (t instanceof org.springframework.web.client.RestClientResponseException response) {
+                int status = response.getStatusCode().value();
+                return status >= 500 || status == 408 || (countRateLimit && status == 429);
+            }
+            if (t instanceof org.springframework.web.client.ResourceAccessException
+                    || t instanceof java.util.concurrent.TimeoutException) {
+                return true;
+            }
+            if (t instanceof java.io.IOException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isConversionFailure(Throwable t) {
+        if (t instanceof org.springframework.http.converter.HttpMessageConversionException
+                || t instanceof org.springframework.web.client.UnknownContentTypeException) {
+            return true;
+        }
+        for (Class<?> c = t.getClass(); c != null; c = c.getSuperclass()) {
+            String name = c.getName();
+            if (name.equals("com.fasterxml.jackson.core.JacksonException")
+                    || name.equals("tools.jackson.core.JacksonException")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isCancellation(Throwable throwable) {
