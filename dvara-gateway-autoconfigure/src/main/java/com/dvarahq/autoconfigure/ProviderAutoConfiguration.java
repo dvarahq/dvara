@@ -163,13 +163,15 @@ public class ProviderAutoConfiguration {
     }
 
     /**
-     * Register OpenAI only when the api-key property is present AND non-blank.
-     * An empty string (e.g. {@code OPENAI_API_KEY=} unset) will not trigger registration,
-     * giving the caller a clear 400 "no provider" error rather than a 502 from OpenAI.
+     * A provider that takes an API key registers when its {@code enabled} switch is on, or when its api-key
+     * property has text. The switch lets a provider be on while its key lives only in a secret store: the key is
+     * read on each call, never from this condition. A provider with neither gives the caller a clear 400
+     * "no provider" error rather than a 502 from upstream. The same rule holds for every key-based provider below.
      */
     @Bean
     @ConditionalOnMissingBean(OpenAiProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.openai.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.openai.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.openai.enabled:false}' == 'true'")
     public OpenAiProvider openAiProvider(GatewayProperties props, SecretProvider secretProvider,
                                          RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getOpenai();
@@ -180,7 +182,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(AnthropicProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.anthropic.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.anthropic.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.anthropic.enabled:false}' == 'true'")
     public AnthropicProvider anthropicProvider(GatewayProperties props, SecretProvider secretProvider,
                                                RestClient.Builder restClientBuilder) {
         RestClient.Builder builder = clientFor("anthropic", restClientBuilder, secretProvider);
@@ -214,7 +217,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(GeminiProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.gemini.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.gemini.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.gemini.enabled:false}' == 'true'")
     public GeminiProvider geminiProvider(GatewayProperties props, SecretProvider secretProvider,
                                          RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getGemini();
@@ -249,8 +253,9 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(AzureOpenAiProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.azure-openai.api-key:}') " +
-            "and T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.azure-openai.base-url:}')")
+    @ConditionalOnExpression("(T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.azure-openai.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.azure-openai.enabled:false}' == 'true') "
+            + "and T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.azure-openai.base-url:}')")
     public AzureOpenAiProvider azureOpenAiProvider(GatewayProperties props, SecretProvider secretProvider,
                                                     RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getAzureOpenai();
@@ -261,7 +266,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(MistralProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.mistral.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.mistral.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.mistral.enabled:false}' == 'true'")
     public MistralProvider mistralProvider(GatewayProperties props, SecretProvider secretProvider,
                                            RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getMistral();
@@ -272,7 +278,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(CohereProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.cohere.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.cohere.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.cohere.enabled:false}' == 'true'")
     public CohereProvider cohereProvider(GatewayProperties props, SecretProvider secretProvider,
                                          RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getCohere();
@@ -283,7 +290,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(GroqProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.groq.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.groq.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.groq.enabled:false}' == 'true'")
     public GroqProvider groqProvider(GatewayProperties props, SecretProvider secretProvider,
                                      RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getGroq();
@@ -301,7 +309,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(QwenProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.qwen.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.qwen.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.qwen.enabled:false}' == 'true'")
     public QwenProvider qwenProvider(GatewayProperties props, SecretProvider secretProvider,
                                      RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getQwen();
@@ -312,7 +321,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(DeepSeekProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.deepseek.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.deepseek.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.deepseek.enabled:false}' == 'true'")
     public DeepSeekProvider deepSeekProvider(GatewayProperties props, SecretProvider secretProvider,
                                               RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getDeepseek();
@@ -323,7 +333,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(MoonshotProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.moonshot.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.moonshot.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.moonshot.enabled:false}' == 'true'")
     public MoonshotProvider moonshotProvider(GatewayProperties props, SecretProvider secretProvider,
                                               RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getMoonshot();
@@ -334,7 +345,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(ChatGlmProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.chatglm.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.chatglm.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.chatglm.enabled:false}' == 'true'")
     public ChatGlmProvider chatGlmProvider(GatewayProperties props, SecretProvider secretProvider,
                                             RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getChatglm();
@@ -345,7 +357,8 @@ public class ProviderAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(GrokProvider.class)
-    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.grok.api-key:}')")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${dvara.llm-gateway.providers.grok.api-key:}') "
+            + "or '${dvara.llm-gateway.providers.grok.enabled:false}' == 'true'")
     public GrokProvider grokProvider(GatewayProperties props, SecretProvider secretProvider,
                                       RestClient.Builder restClientBuilder) {
         GatewayProperties.ProviderConfig cfg = props.getProviders().getGrok();

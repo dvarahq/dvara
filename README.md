@@ -741,6 +741,15 @@ The image `ghcr.io/dvarahq/dvara-gateway-oss` is the same jar with a JRE. Its wo
 environment variable above is passed with `-e`. To keep the audit log, mount a volume at
 `/var/lib/dvara` and point `DVARA_AUDIT_FILE_PATH` into it. Pin a version tag in production.
 
+### Providers without a key in the environment
+
+A provider that takes an API key is on when its key is set (`OPENAI_API_KEY`) or when its switch is
+(`OPENAI_ENABLED=true`). With the switch, no key has to be in the environment or the config: the key
+is looked up on each call, from wherever this build's secret provider reads it. Each provider has the
+pair: `ANTHROPIC_ENABLED`, `GEMINI_ENABLED`, `AZURE_OPENAI_ENABLED` (Azure still needs its base URL),
+`MISTRAL_ENABLED`, `COHERE_ENABLED`, `GROQ_ENABLED`, `QWEN_ENABLED`, `DEEPSEEK_ENABLED`,
+`MOONSHOT_ENABLED`, `ZHIPU_ENABLED` and `XAI_ENABLED`. Setting only the key works as before.
+
 ### Observability
 
 Health probes at `/actuator/health/liveness` and `/actuator/health/readiness` are open. Metrics at

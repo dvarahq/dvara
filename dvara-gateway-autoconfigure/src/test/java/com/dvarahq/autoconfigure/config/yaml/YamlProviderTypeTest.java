@@ -54,7 +54,10 @@ class YamlProviderTypeTest {
             YamlProviderType.Switch sw = null;
             while (matcher.find()) {
                 types.add(matcher.group(1));
-                sw = matcher.group(2).equals("api-key") ? YamlProviderType.Switch.API_KEY : YamlProviderType.Switch.ENABLED;
+                // A key-based provider also reads an enabled switch; reading its api-key at all makes it key-based.
+                if (sw != YamlProviderType.Switch.API_KEY) {
+                    sw = matcher.group(2).equals("api-key") ? YamlProviderType.Switch.API_KEY : YamlProviderType.Switch.ENABLED;
+                }
             }
             assertThat(types).as("%s gates on exactly one providers.<type>.api-key or .enabled property", m.getName()).hasSize(1);
             String type = types.iterator().next();
