@@ -67,16 +67,16 @@ public class ProviderAutoConfiguration {
     /** Spring profile names that suppress the "Mock enabled on non-dev profile" warning. */
     private static final Set<String> DEV_PROFILES = Set.of("dev", "test", "ci", "local", "default");
 
-    private static final String OPENAI_BASE_URL = "https://api.openai.com/v1";
-    private static final String GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
-    private static final String MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
-    private static final String COHERE_BASE_URL = "https://api.cohere.com/v2";
-    private static final String GROQ_BASE_URL = "https://api.groq.com/openai/v1";
-    private static final String QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
-    private static final String DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1";
-    private static final String MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1";
-    private static final String CHATGLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
-    private static final String GROK_BASE_URL = "https://api.x.ai/v1";
+    static final String OPENAI_BASE_URL = "https://api.openai.com/v1";
+    static final String GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+    static final String MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
+    static final String COHERE_BASE_URL = "https://api.cohere.com/v2";
+    static final String GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+    static final String QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+    static final String DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1";
+    static final String MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1";
+    static final String CHATGLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
+    static final String GROK_BASE_URL = "https://api.x.ai/v1";
 
     /**
      * Per-credential upstream rate-limit tracker, applied to each secret-based provider's RestClient
@@ -123,7 +123,7 @@ public class ProviderAutoConfiguration {
      * quota is per AWS key and region, but its credential is a key pair signed per request rather than one
      * {@code provider.<name>.api-key}, so the tracker, which keys on that single secret, is not applied.
      */
-    private RestClient.Builder tlsOnly(String provider, RestClient.Builder restClientBuilder) {
+    RestClient.Builder tlsOnly(String provider, RestClient.Builder restClientBuilder) {
         RestClient.Builder builder = sizeLimited(provider, restClientBuilder.clone());
         return tlsCustomizer == null ? builder : tlsCustomizer.customize(provider, builder);
     }
@@ -134,7 +134,7 @@ public class ProviderAutoConfiguration {
      * (added before the provider's own {@code CredentialInterceptor}), so it checks before the call and
      * observes the response headers.
      */
-    private RestClient.Builder clientFor(String provider, RestClient.Builder restClientBuilder,
+    RestClient.Builder clientFor(String provider, RestClient.Builder restClientBuilder,
                                          SecretProvider secretProvider) {
         RestClient.Builder builder = sizeLimited(provider, restClientBuilder.clone());
         if (tlsCustomizer != null) {
@@ -148,6 +148,25 @@ public class ProviderAutoConfiguration {
         return builder.requestInterceptor(new ProviderRateLimitInterceptor(
                 secretProvider, "provider." + provider + ".api-key", provider, rateLimitTracker,
                 rateLimitAuditWriter));
+    }
+
+    /**
+     * The providers registered at startup, read once on first use. A module that adds, replaces or removes providers
+     * while the gateway runs registers its own {@link com.dvarahq.core.provider.ProviderRegistry} instead.
+     */
+    @Bean
+    @ConditionalOnMissingBean(com.dvarahq.core.provider.ProviderRegistry.class)
+    public com.dvarahq.core.provider.ProviderRegistry providerRegistry(
+            ObjectProvider<com.dvarahq.core.provider.LlmProvider> providers) {
+        return com.dvarahq.core.provider.ProviderRegistry.lazily(() -> providers.orderedStream().toList());
+    }
+
+    /** Builds a provider at runtime, wired as the startup beans are: response limits, TLS and quota tracking. */
+    @Bean
+    @ConditionalOnMissingBean(ProviderFactory.class)
+    public ProviderFactory providerFactory(GatewayProperties props, ObjectProvider<SecretProvider> secretProvider,
+                                           ObjectProvider<RestClient.Builder> restClientBuilder) {
+        return new ProviderFactory(this, props, secretProvider, restClientBuilder);
     }
 
     /**
@@ -242,7 +261,7 @@ public class ProviderAutoConfiguration {
     }
 
     /** The image-URL fetcher for providers that take bytes only (#55); the disabled one unless turned on. */
-    private static com.dvarahq.providers.support.ImageFetcher imageFetcher(GatewayProperties props) {
+    static com.dvarahq.providers.support.ImageFetcher imageFetcher(GatewayProperties props) {
         GatewayProperties.ImageFetchConfig cfg = props.getImageFetch();
         if (!cfg.isEnabled()) {
             return com.dvarahq.providers.support.ImageFetcher.DISABLED;

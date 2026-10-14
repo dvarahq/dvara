@@ -53,19 +53,29 @@ public class ContextWindowFilter implements ChatFilter {
 
     private final ContextWindowGovernor governor;
     private final GatewayMetrics metrics;
-    private final List<LlmProvider> providers;
+    private final com.dvarahq.core.provider.ProviderRegistry registry;
     private final List<ModelContextLimits> modelLimits;
 
     @Autowired
+    public ContextWindowFilter(ContextWindowGovernor governor, GatewayMetrics metrics,
+                               ObjectProvider<com.dvarahq.core.provider.ProviderRegistry> registry,
+                               ObjectProvider<LlmProvider> providers,
+                               ObjectProvider<ModelContextLimits> modelLimits) {
+        this.governor = governor;
+        this.metrics = metrics;
+        // Asked on every request, as the dispatcher does, so providers added at runtime are known here too.
+        this.registry = com.dvarahq.server.service.ProviderRegistries.of(registry, providers);
+        // In order: the first source that knows the model decides its window.
+        this.modelLimits = modelLimits.orderedStream().toList();
+    }
+
+    /** The provider beans, read once on first use. */
     public ContextWindowFilter(ContextWindowGovernor governor, GatewayMetrics metrics,
                                ObjectProvider<LlmProvider> providers,
                                ObjectProvider<ModelContextLimits> modelLimits) {
         this.governor = governor;
         this.metrics = metrics;
-        // Snapshots, as the dispatcher takes: providers are registered at startup. ObjectProvider
-        // rather than a List parameter so a context with no provider configured still starts.
-        this.providers = providers.orderedStream().toList();
-        // In order: the first source that knows the model decides its window.
+        this.registry = com.dvarahq.core.provider.ProviderRegistry.lazily(() -> providers.orderedStream().toList());
         this.modelLimits = modelLimits.orderedStream().toList();
     }
 
@@ -74,7 +84,7 @@ public class ContextWindowFilter implements ChatFilter {
                                ObjectProvider<LlmProvider> providers) {
         this.governor = governor;
         this.metrics = metrics;
-        this.providers = providers.orderedStream().toList();
+        this.registry = com.dvarahq.core.provider.ProviderRegistry.lazily(() -> providers.orderedStream().toList());
         this.modelLimits = List.of();
     }
 
@@ -120,7 +130,7 @@ public class ContextWindowFilter implements ChatFilter {
      */
     private int resolveMaxContextTokens(ChatRequest request) {
         int smallest = Integer.MAX_VALUE;
-        for (LlmProvider provider : providers) {
+        for (LlmProvider provider : registry.current()) {
             if (!supportsQuietly(provider, request)) {
                 continue;
             }

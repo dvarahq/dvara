@@ -88,7 +88,8 @@ public class ProviderDispatcher {
             Map.entry("groq", "groq"),
             Map.entry("grok", "xai"));
 
-    private final List<LlmProvider> providers;
+    /** Asked on every use, so providers added or removed at runtime are seen at once. */
+    private final com.dvarahq.core.provider.ProviderRegistry registry;
     private final RoutingStrategy routingStrategy;
     private final ProviderHealthRegistry healthRegistry;
     private final FallbackResolver fallbackResolver;
@@ -112,6 +113,7 @@ public class ProviderDispatcher {
     @Value("${management.tracing.genai-semconv.enabled:true}")
     private boolean genaiSemconvEnabled = true;
 
+    /** The providers given, fixed: for tests and callers outside Spring. */
     public ProviderDispatcher(List<LlmProvider> providers,
                               RoutingStrategy routingStrategy,
                               ProviderHealthRegistry healthRegistry,
@@ -124,7 +126,47 @@ public class ProviderDispatcher {
                               CanaryMetricsCollector canaryMetricsCollector,
                               org.springframework.beans.factory.ObjectProvider<CostEstimator> costEstimator,
                               @org.springframework.lang.Nullable ShadowDispatcher shadowDispatcher) {
-        this.providers = providers;
+        this(com.dvarahq.core.provider.ProviderRegistry.of(providers), routingStrategy, healthRegistry,
+                fallbackResolver, metrics, regionContext, dataResidencyPolicy, observationRegistry, latencyTracker,
+                canaryMetricsCollector, costEstimator, shadowDispatcher);
+    }
+
+    /**
+     * The registry when one is registered; otherwise the provider beans, read once on first use. ObjectProviders, so
+     * a context with no provider configured still starts.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public ProviderDispatcher(org.springframework.beans.factory.ObjectProvider<com.dvarahq.core.provider.ProviderRegistry> registry,
+                              org.springframework.beans.factory.ObjectProvider<LlmProvider> providers,
+                              RoutingStrategy routingStrategy,
+                              ProviderHealthRegistry healthRegistry,
+                              FallbackResolver fallbackResolver,
+                              GatewayMetrics metrics,
+                              RegionContext regionContext,
+                              DataResidencyPolicy dataResidencyPolicy,
+                              ObservationRegistry observationRegistry,
+                              @org.springframework.lang.Nullable LatencyTracker latencyTracker,
+                              CanaryMetricsCollector canaryMetricsCollector,
+                              org.springframework.beans.factory.ObjectProvider<CostEstimator> costEstimator,
+                              @org.springframework.lang.Nullable ShadowDispatcher shadowDispatcher) {
+        this(ProviderRegistries.of(registry, providers), routingStrategy, healthRegistry,
+                fallbackResolver, metrics, regionContext, dataResidencyPolicy, observationRegistry, latencyTracker,
+                canaryMetricsCollector, costEstimator, shadowDispatcher);
+    }
+
+    public ProviderDispatcher(com.dvarahq.core.provider.ProviderRegistry registry,
+                              RoutingStrategy routingStrategy,
+                              ProviderHealthRegistry healthRegistry,
+                              FallbackResolver fallbackResolver,
+                              GatewayMetrics metrics,
+                              RegionContext regionContext,
+                              DataResidencyPolicy dataResidencyPolicy,
+                              ObservationRegistry observationRegistry,
+                              @org.springframework.lang.Nullable LatencyTracker latencyTracker,
+                              CanaryMetricsCollector canaryMetricsCollector,
+                              org.springframework.beans.factory.ObjectProvider<CostEstimator> costEstimator,
+                              @org.springframework.lang.Nullable ShadowDispatcher shadowDispatcher) {
+        this.registry = registry;
         this.routingStrategy = routingStrategy;
         this.healthRegistry = healthRegistry;
         this.fallbackResolver = fallbackResolver;
@@ -336,7 +378,7 @@ public class ProviderDispatcher {
      *                          isn't batch-capable.
      */
     public LlmProvider selectBatchProvider(String providerHint) {
-        List<LlmProvider> capable = providers.stream()
+        List<LlmProvider> capable = registry.current().stream()
                 .filter(p -> p.capabilities().supportsBatch())
                 .toList();
         if (capable.isEmpty()) {
@@ -355,7 +397,7 @@ public class ProviderDispatcher {
     }
 
     public EmbeddingResponse embed(EmbeddingRequest request) {
-        LlmProvider provider = providers.stream()
+        LlmProvider provider = registry.current().stream()
                 .filter(p -> p.supportsEmbedding(request.getModel()))
                 .findFirst()
                 .orElseThrow(() -> new GatewayException("NO_PROVIDER",
@@ -372,7 +414,7 @@ public class ProviderDispatcher {
             } catch (GatewayException e) {
                 if (isFallbackEligible(e)) {
                     // For embeddings, find other embedding-capable providers
-                    List<LlmProvider> fallbacks = providers.stream()
+                    List<LlmProvider> fallbacks = registry.current().stream()
                             .filter(p -> p.supportsEmbedding(request.getModel()))
                             .filter(p -> !p.name().equals(provider.name()))
                             .filter(p -> healthRegistry.isAvailable(p.name()))
@@ -396,7 +438,7 @@ public class ProviderDispatcher {
     }
 
     public List<LlmProvider> allProviders() {
-        return List.copyOf(providers);
+        return registry.current();
     }
 
     private ChatRequest applyResolvedModel(ChatRequest request, RequestContext ctx) {
@@ -415,10 +457,10 @@ public class ProviderDispatcher {
     private record Selection(LlmProvider provider, GatewayException unavailable) {}
 
     private Selection selectChat(ChatRequest request, RequestContext ctx) {
-        List<LlmProvider> capable = capabilityFilter(providers, request);
+        List<LlmProvider> capable = capabilityFilter(registry.current(), request);
         if (capable.isEmpty() && hasResponseFormatRequirement(request)) {
             String formatType = responseFormatTypeName(request.getResponseFormat());
-            List<String> providerNames = providers.stream().map(LlmProvider::name).toList();
+            List<String> providerNames = registry.current().stream().map(LlmProvider::name).toList();
             throw new GatewayException("NO_CAPABLE_PROVIDER",
                     "No provider supports response_format: " + formatType
                     + ". Providers on route: " + providerNames
@@ -427,7 +469,7 @@ public class ProviderDispatcher {
         if (capable.isEmpty() && hasToolsRequirement(request)) {
             // tools were requested but no provider on the route supports
             // function calling. Reject explicitly rather than drop the tools.
-            List<String> providerNames = providers.stream().map(LlmProvider::name).toList();
+            List<String> providerNames = registry.current().stream().map(LlmProvider::name).toList();
             throw new GatewayException("NO_CAPABLE_PROVIDER",
                     "No provider supports " + toolsRequirementName(request) + ". Providers on route: "
                     + providerNames + ". Capable providers: []");
@@ -621,7 +663,7 @@ public class ProviderDispatcher {
                         route.getId(), i + 1, target.describe(), attempts, fallbackMaxAttempts, fallbackDeadline);
                 break;
             }
-            LlmProvider provider = providers.stream().filter(p -> p.name().equals(target.provider())).findFirst().orElse(null);
+            LlmProvider provider = registry.current().stream().filter(p -> p.name().equals(target.provider())).findFirst().orElse(null);
             if (provider == null) {
                 log.warn("Route [{}]: fallback target {} names a provider that is not configured; skipped",
                         route.getId(), target.describe());
@@ -702,7 +744,7 @@ public class ProviderDispatcher {
      */
     private <T> T attemptRegistryFallback(ChatRequest request, LlmProvider failedProvider,
                                           GatewayException originalException, ProviderCall<T> call) {
-        List<LlmProvider> fallbacks = fallbackResolver.resolve(request, failedProvider, providers);
+        List<LlmProvider> fallbacks = fallbackResolver.resolve(request, failedProvider, registry.current());
 
         // Apply capability filtering to fallback candidates
         List<LlmProvider> capableFallbacks = capabilityFilter(fallbacks, request);
@@ -819,7 +861,7 @@ public class ProviderDispatcher {
                         + pausedForModel + " paused after too many recent failures. Retry shortly; each is"
                         + " tried again after a short cooldown.");
             }
-            List<String> servesModel = providers.stream()
+            List<String> servesModel = registry.current().stream()
                     .filter(p -> !capable.contains(p))
                     .filter(p -> p.supports(request))
                     .map(LlmProvider::name)
