@@ -49,7 +49,7 @@ import java.util.stream.Collectors;
 @Endpoint(id = "gateway-status")
 public class GatewayStatusEndpoint {
 
-    private final List<LlmProvider> providers;
+    private final com.dvarahq.core.provider.ProviderRegistry registry;
     private final ProviderHealthRegistry healthRegistry;
     private final RouteRepository routeRepository;
     private final GatewayProperties gatewayProperties;
@@ -67,9 +67,38 @@ public class GatewayStatusEndpoint {
                                   GatewayRegionProperties regionProperties,
                                   RegionContext regionContext,
                                   ApplicationContext applicationContext,
+                                  BuildProperties buildProperties,
+                                  ObjectProvider<GatewayStatusSection> sections) {
+        this(com.dvarahq.core.provider.ProviderRegistry.of(providers), healthRegistry, routeRepository,
+                gatewayProperties, regionProperties, regionContext, applicationContext, buildProperties, sections);
+    }
+
+    /** The registry is asked on every read, so providers added or removed at runtime show at once. */
+    @Autowired
+    public GatewayStatusEndpoint(ObjectProvider<com.dvarahq.core.provider.ProviderRegistry> registry,
+                                  ObjectProvider<LlmProvider> providers,
+                                  ProviderHealthRegistry healthRegistry,
+                                  RouteRepository routeRepository,
+                                  GatewayProperties gatewayProperties,
+                                  GatewayRegionProperties regionProperties,
+                                  RegionContext regionContext,
+                                  ApplicationContext applicationContext,
                                   @Autowired(required = false) BuildProperties buildProperties,
                                   ObjectProvider<GatewayStatusSection> sections) {
-        this.providers = providers;
+        this(com.dvarahq.server.service.ProviderRegistries.of(registry, providers), healthRegistry, routeRepository,
+                gatewayProperties, regionProperties, regionContext, applicationContext, buildProperties, sections);
+    }
+
+    public GatewayStatusEndpoint(com.dvarahq.core.provider.ProviderRegistry registry,
+                                  ProviderHealthRegistry healthRegistry,
+                                  RouteRepository routeRepository,
+                                  GatewayProperties gatewayProperties,
+                                  GatewayRegionProperties regionProperties,
+                                  RegionContext regionContext,
+                                  ApplicationContext applicationContext,
+                                  BuildProperties buildProperties,
+                                  ObjectProvider<GatewayStatusSection> sections) {
+        this.registry = registry;
         this.healthRegistry = healthRegistry;
         this.routeRepository = routeRepository;
         this.gatewayProperties = gatewayProperties;
@@ -93,7 +122,7 @@ public class GatewayStatusEndpoint {
             collectSection(section, sectionValues, claimedBy, warnings);
         }
 
-        List<GatewayStatusInfo.ProviderInfo> providerInfos = providers.stream()
+        List<GatewayStatusInfo.ProviderInfo> providerInfos = registry.current().stream()
                 .map(p -> {
                     ProviderHealthStatus health = healthRegistry.getHealth(p.name());
                     if (health == ProviderHealthStatus.UNHEALTHY) {

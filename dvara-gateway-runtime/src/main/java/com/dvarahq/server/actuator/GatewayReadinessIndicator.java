@@ -30,12 +30,22 @@ import java.util.List;
 @Component("gatewayReadiness")
 public class GatewayReadinessIndicator implements HealthIndicator {
 
-    private final List<LlmProvider> providers;
+    private final com.dvarahq.core.provider.ProviderRegistry registry;
     private final RegionContext regionContext;
 
-
     public GatewayReadinessIndicator(List<LlmProvider> providers, RegionContext regionContext) {
-        this.providers = providers;
+        this(com.dvarahq.core.provider.ProviderRegistry.of(providers), regionContext);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public GatewayReadinessIndicator(org.springframework.beans.factory.ObjectProvider<com.dvarahq.core.provider.ProviderRegistry> registry,
+                                     org.springframework.beans.factory.ObjectProvider<LlmProvider> providers,
+                                     RegionContext regionContext) {
+        this(com.dvarahq.server.service.ProviderRegistries.of(registry, providers), regionContext);
+    }
+
+    public GatewayReadinessIndicator(com.dvarahq.core.provider.ProviderRegistry registry, RegionContext regionContext) {
+        this.registry = registry;
         this.regionContext = regionContext;
     }
 
@@ -47,6 +57,7 @@ public class GatewayReadinessIndicator implements HealthIndicator {
         // credentials do not resolve gets a per-request NO_PROVIDER error from ProviderDispatcher.
         // A module that serves configuration from a bundle registers its own readiness indicator
         // for the case where no bundle is held, so this one only reports providers and region.
+        List<LlmProvider> providers = registry.current();
         Health.Builder builder = Health.up()
                 .withDetail("providerCount", providers.size())
                 .withDetail("mode", providers.isEmpty() ? "byok" : "mixed");
