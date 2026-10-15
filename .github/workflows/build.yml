@@ -72,7 +72,7 @@ jobs:
           docker rm -f jvm-flags >/dev/null
           # Here-strings, not pipes: grep -q stops at its first match, and under pipefail the writer's SIGPIPE
           # would fail a check that had matched.
-          for want in 'UseZGC *= true .*\{environment\}' 'AlwaysPreTouch *= true .*\{environment\}' \
+          for want in 'UseG1GC *= true .*\{environment\}' 'AlwaysPreTouch *= true .*\{environment\}' \
                       'ExitOnOutOfMemoryError *= true .*\{environment\}' 'MaxRAMPercentage *= 61\.0* .*\{command line\}' \
                       'AOTCache *= /app/app\.aot .*\{command line\}'; do
             grep -q -E " $want" <<< "$flags" || { echo "::error::no flag matching '$want'"; exit 1; }

@@ -136,6 +136,29 @@ class UpstreamHttpClientTest {
     }
 
     @Test
+    void withVirtualThreadsOnTheClientRunsItsWorkOnVirtualThreads() {
+        runner().withPropertyValues("spring.threads.virtual.enabled=true").run(context -> {
+            HttpClient client = client(context.getBean(ProviderAutoConfiguration.class).upstreamRequestFactory());
+
+            // Without an executor the JDK client uses its own cached pool of platform threads.
+            assertThat(client.executor()).isPresent();
+            java.util.concurrent.CompletableFuture<Boolean> virtual = new java.util.concurrent.CompletableFuture<>();
+            client.executor().get().execute(() -> virtual.complete(Thread.currentThread().isVirtual()));
+            assertThat(virtual.get(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThat(context.getBean(OpenAiProvider.class).chat(request()).getChoices()).hasSize(1);
+        });
+    }
+
+    @Test
+    void withVirtualThreadsOffTheClientKeepsTheJdkDefault() {
+        runner().run(context -> {
+            HttpClient client = client(context.getBean(ProviderAutoConfiguration.class).upstreamRequestFactory());
+
+            assertThat(client.executor()).isEmpty();
+        });
+    }
+
+    @Test
     void aGatewaySettingWinsOverTheApplicationsAndTheVersionIsApplied() {
         GatewayProperties.UpstreamHttpConfig config = new GatewayProperties.UpstreamHttpConfig();
         config.setConnectTimeout(Duration.ofSeconds(3));

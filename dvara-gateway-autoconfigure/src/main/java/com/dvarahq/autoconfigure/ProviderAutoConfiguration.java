@@ -64,7 +64,7 @@ import java.util.Set;
 
 @AutoConfiguration
 @EnableConfigurationProperties(GatewayProperties.class)
-public class ProviderAutoConfiguration {
+public class ProviderAutoConfiguration implements org.springframework.context.EnvironmentAware {
 
     private static final Logger log = LoggerFactory.getLogger(ProviderAutoConfiguration.class);
 
@@ -99,6 +99,19 @@ public class ProviderAutoConfiguration {
     private final ObjectProvider<HttpClientSettings> httpClientSettings;
     /** One upstream client for every provider, built on first use. Its connection pool is shared. */
     private volatile ClientHttpRequestFactory upstreamRequestFactory;
+    /**
+     * The executor the JDK client runs its work on: virtual threads when the application runs on them.
+     * Spring Boot gives its own JDK client the same; a client built here would otherwise fall back to
+     * the JDK's cached pool of platform threads, which grew to hundreds of threads under load.
+     */
+    private java.util.concurrent.Executor upstreamExecutor;
+
+    @Override
+    public void setEnvironment(Environment environment) {
+        this.upstreamExecutor = org.springframework.boot.thread.Threading.VIRTUAL.isActive(environment)
+                ? new org.springframework.core.task.VirtualThreadTaskExecutor("httpclient-")
+                : null;
+    }
 
     public ProviderAutoConfiguration(ObjectProvider<ProviderRateLimitTracker> rateLimitTracker,
                                      ObjectProvider<ProviderTlsCustomizer> tlsCustomizer,
@@ -128,7 +141,8 @@ public class ProviderAutoConfiguration {
                 factory = upstreamRequestFactory;
                 if (factory == null) {
                     GatewayProperties props = properties.getIfAvailable(GatewayProperties::new);
-                    factory = upstreamRequestFactory(props.getUpstreamHttp(), httpClientSettings.getIfAvailable());
+                    factory = upstreamRequestFactory(props.getUpstreamHttp(), httpClientSettings.getIfAvailable(),
+                            upstreamExecutor);
                     upstreamRequestFactory = factory;
                 }
             }
@@ -144,11 +158,21 @@ public class ProviderAutoConfiguration {
      */
     static ClientHttpRequestFactory upstreamRequestFactory(GatewayProperties.UpstreamHttpConfig config,
                                                            HttpClientSettings applicationSettings) {
+        return upstreamRequestFactory(config, applicationSettings, null);
+    }
+
+    /** As above, with the executor the client runs its work on; {@code null} keeps the JDK's default. */
+    static ClientHttpRequestFactory upstreamRequestFactory(GatewayProperties.UpstreamHttpConfig config,
+                                                           HttpClientSettings applicationSettings,
+                                                           java.util.concurrent.Executor executor) {
         HttpClientSettings settings = applicationSettings != null ? applicationSettings : HttpClientSettings.defaults();
         java.time.Duration connect = firstNonNull(config.getConnectTimeout(), settings.connectTimeout(),
                 DEFAULT_UPSTREAM_CONNECT_TIMEOUT);
         java.time.Duration read = firstNonNull(config.getReadTimeout(), settings.readTimeout(), null);
         JdkClientHttpRequestFactoryBuilder builder = ClientHttpRequestFactoryBuilder.jdk();
+        if (executor != null) {
+            builder = builder.withExecutor(executor);
+        }
         java.net.http.HttpClient.Version version = config.getVersion();
         if (version != null) {
             builder = builder.withHttpClientCustomizer(client -> client.version(version));
@@ -282,10 +306,13 @@ public class ProviderAutoConfiguration {
         if (props.getProviders().getOllama().isPerWorkspace()) {
             // #30 A6: each workspace's own endpoint. A client that follows no redirect, and not the platform
             // TLS settings, which are for the platform's providers, not a tenant's endpoint.
-            java.net.http.HttpClient http = java.net.http.HttpClient.newBuilder()
+            java.net.http.HttpClient.Builder httpBuilder = java.net.http.HttpClient.newBuilder()
                     .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
-                    .connectTimeout(java.time.Duration.ofSeconds(10))
-                    .build();
+                    .connectTimeout(java.time.Duration.ofSeconds(10));
+            if (upstreamExecutor != null) {
+                httpBuilder.executor(upstreamExecutor);
+            }
+            java.net.http.HttpClient http = httpBuilder.build();
             provider.usePerWorkspaceEndpoints(endpoints.getIfAvailable(), sizeLimited("ollama", restClientBuilder.clone())
                     .requestFactory(new org.springframework.http.client.JdkClientHttpRequestFactory(http))
                     .build());

@@ -744,21 +744,25 @@ environment variable above is passed with `-e`. To keep the audit log, mount a v
 ### JVM options in the image
 
 The image starts Java directly, with no shell, so `JAVA_OPTS` does nothing. Its defaults are in
-`JAVA_TOOL_OPTIONS`: `-XX:+UseZGC -XX:MaxRAMPercentage=75 -XX:+AlwaysPreTouch
+`JAVA_TOOL_OPTIONS`: `-XX:+UseG1GC -XX:MaxRAMPercentage=75 -XX:+AlwaysPreTouch
 -XX:+ExitOnOutOfMemoryError`. Add or change an option with `JDK_JAVA_OPTIONS`, which comes after the
 defaults, so its value wins: `-e JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=60`. Setting
-`JAVA_TOOL_OPTIONS` replaces all the defaults. To run G1, pass `-XX:-UseZGC -XX:+UseG1GC`; naming a
-second collector without turning ZGC off stops the boot. A wrong option always stops the boot with
+`JAVA_TOOL_OPTIONS` replaces all the defaults. G1 is the default collector: ZGC stalled under load
+when the gateway shared its cores with other work, and G1 did not. To run ZGC, pass
+`-XX:-UseG1GC -XX:+UseZGC`; naming a second collector without turning G1 off stops the boot with
+`Multiple garbage collectors selected`. A wrong option always stops the boot with
 `Unrecognized VM option`, so a typo cannot go unnoticed.
 
 The image carries an AOT cache (`/app/app.aot`), built when the image is built by starting the
-gateway once. It makes startup about a third faster. It was built under ZGC: under another collector
+gateway once. It makes startup about a third faster. It was built under G1: under another collector
 the JVM logs that it cannot use the cache and starts without it.
 
 ### Calls to providers
 
 Every provider is called through the JDK HTTP client. It keeps idle connections to each provider and
-opens another whenever all are busy, so calls do not queue for a small pool.
+opens another whenever all are busy, so calls do not queue for a small pool. When the application
+runs on virtual threads (`spring.threads.virtual.enabled`, on by default), so does the client's own
+work; otherwise it uses the JDK's default pool of platform threads.
 
 | Variable | Default | Meaning |
 |---|---|---|
