@@ -125,6 +125,11 @@ dvara:
         region: ${AWS_REGION:us-east-1}
       mock:
         enabled: ${MOCK_PROVIDER_ENABLED:false}
+    # The HTTP client every provider is called through. Empty falls back to spring.http.clients.*.
+    upstream-http:
+      version: ${DVARA_UPSTREAM_HTTP_VERSION:}
+      connect-timeout: ${DVARA_UPSTREAM_HTTP_CONNECT_TIMEOUT:}
+      read-timeout: ${DVARA_UPSTREAM_HTTP_READ_TIMEOUT:}
 
     pii:
       enabled: ${DVARA_LLM_GATEWAY_PII_ENABLED:true}

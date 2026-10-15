@@ -49,6 +49,10 @@ import com.dvarahq.core.resilience.ProviderRateLimitTracker;
 import com.dvarahq.providers.support.ProviderRateLimitInterceptor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
+import org.springframework.boot.http.client.HttpClientSettings;
+import org.springframework.boot.http.client.JdkClientHttpRequestFactoryBuilder;
+import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.nio.file.Path;
@@ -89,26 +93,81 @@ public class ProviderAutoConfiguration {
     /** Null when no module customises provider TLS. The builder is then used as it arrives. */
     private final ProviderTlsCustomizer tlsCustomizer;
     private final com.dvarahq.core.audit.AuditWriter rateLimitAuditWriter; // nullable — best-effort shed audit
-    /** Read when a provider's client is built, for the response size limits. */
+    /** Read when a provider's client is built, for the response size limits and the upstream client settings. */
     private final ObjectProvider<GatewayProperties> properties;
+    /** The application's {@code spring.http.clients.*} settings; the upstream client starts from them. */
+    private final ObjectProvider<HttpClientSettings> httpClientSettings;
+    /** One upstream client for every provider, built on first use. Its connection pool is shared. */
+    private volatile ClientHttpRequestFactory upstreamRequestFactory;
 
     public ProviderAutoConfiguration(ObjectProvider<ProviderRateLimitTracker> rateLimitTracker,
                                      ObjectProvider<ProviderTlsCustomizer> tlsCustomizer,
                                      ObjectProvider<com.dvarahq.core.audit.AuditWriter> auditWriter,
-                                     ObjectProvider<GatewayProperties> properties) {
+                                     ObjectProvider<GatewayProperties> properties,
+                                     ObjectProvider<HttpClientSettings> httpClientSettings) {
         // Resolved once. Absent means no interceptor and no customiser at all, rather than an
         // always-allow tracker or an identity customiser consulted on every call.
         this.rateLimitTracker = rateLimitTracker.getIfAvailable();
         this.tlsCustomizer = tlsCustomizer.getIfAvailable();
         this.rateLimitAuditWriter = auditWriter.getIfAvailable();
         this.properties = properties;
+        this.httpClientSettings = httpClientSettings;
     }
 
     /**
-     * Bounds the bytes read from every provider's responses. Every provider client is built through
-     * {@link #clientFor} or {@link #tlsOnly}, so this is the one place the limit is applied.
+     * The HTTP client every provider calls through: the JDK client, chosen here rather than left to
+     * whichever client library happens to be on the classpath. Left to the classpath, a build that
+     * carried Apache HttpComponents got its default pool of 5 connections per host, so calls to one
+     * provider queued behind each other well before the CPU was busy. The JDK client keeps idle
+     * connections to each host it calls and opens another whenever all are busy.
+     */
+    ClientHttpRequestFactory upstreamRequestFactory() {
+        ClientHttpRequestFactory factory = upstreamRequestFactory;
+        if (factory == null) {
+            synchronized (this) {
+                factory = upstreamRequestFactory;
+                if (factory == null) {
+                    GatewayProperties props = properties.getIfAvailable(GatewayProperties::new);
+                    factory = upstreamRequestFactory(props.getUpstreamHttp(), httpClientSettings.getIfAvailable());
+                    upstreamRequestFactory = factory;
+                }
+            }
+        }
+        return factory;
+    }
+
+    static final java.time.Duration DEFAULT_UPSTREAM_CONNECT_TIMEOUT = java.time.Duration.ofSeconds(10);
+
+    /**
+     * A setting under {@code dvara.llm-gateway.upstream-http} wins; else {@code spring.http.clients.*};
+     * else a 10 s connect timeout and no read timeout, since a slow model can take minutes to answer.
+     */
+    static ClientHttpRequestFactory upstreamRequestFactory(GatewayProperties.UpstreamHttpConfig config,
+                                                           HttpClientSettings applicationSettings) {
+        HttpClientSettings settings = applicationSettings != null ? applicationSettings : HttpClientSettings.defaults();
+        java.time.Duration connect = firstNonNull(config.getConnectTimeout(), settings.connectTimeout(),
+                DEFAULT_UPSTREAM_CONNECT_TIMEOUT);
+        java.time.Duration read = firstNonNull(config.getReadTimeout(), settings.readTimeout(), null);
+        JdkClientHttpRequestFactoryBuilder builder = ClientHttpRequestFactoryBuilder.jdk();
+        java.net.http.HttpClient.Version version = config.getVersion();
+        if (version != null) {
+            builder = builder.withHttpClientCustomizer(client -> client.version(version));
+        }
+        return builder.build(settings.withTimeouts(connect, read));
+    }
+
+    private static java.time.Duration firstNonNull(java.time.Duration first, java.time.Duration second,
+                                                   java.time.Duration fallback) {
+        return first != null ? first : second != null ? second : fallback;
+    }
+
+    /**
+     * Puts the provider on the shared upstream client and bounds the bytes read from its responses.
+     * Every provider client is built through {@link #clientFor} or {@link #tlsOnly}, so this is the one
+     * place both are applied. A TLS customiser that needs a client of its own replaces it afterwards.
      */
     private RestClient.Builder sizeLimited(String provider, RestClient.Builder builder) {
+        builder.requestFactory(upstreamRequestFactory());
         GatewayProperties props = properties.getIfAvailable(GatewayProperties::new);
         GatewayProperties.ResponseLimitsConfig limits = props.getResponseLimits();
         if (limits.getMaxBodyBytes() <= 0 && limits.getMaxStreamBytes() <= 0) {
