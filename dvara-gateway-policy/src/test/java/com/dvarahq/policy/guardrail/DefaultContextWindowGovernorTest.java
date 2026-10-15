@@ -52,6 +52,47 @@ class DefaultContextWindowGovernorTest {
         governor = new DefaultContextWindowGovernor(tokenEstimator, auditWriter, workspaceRepository);
 
         when(workspaceRepository.findById(any())).thenReturn(Optional.empty());
+        // A mock answers a default method with 0, which would put every request inside its window. These tests
+        // stub the count, so the bound says nothing and every request is counted.
+        when(tokenEstimator.upperBound(any(ChatRequest.class))).thenReturn(Integer.MAX_VALUE);
+    }
+
+    @Test
+    void aRequestWellInsideTheWindowIsNotCounted() {
+        when(tokenEstimator.upperBound(any(ChatRequest.class))).thenReturn(10_000);
+
+        ContextWindowResult result = governor.evaluate(buildRequest(1), 128000, "workspace-1");
+
+        assertThat(result.warningThresholdBreached()).isFalse();
+        assertThat(result.hardThresholdBreached()).isFalse();
+        verify(tokenEstimator, never()).estimateTokens(any(ChatRequest.class));
+    }
+
+    @Test
+    void aRequestWhoseBoundReachesAThresholdIsCounted() {
+        // The bound says the request may be at 70%; the count says it is not, and the count decides.
+        when(tokenEstimator.upperBound(any(ChatRequest.class))).thenReturn(90_000);
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(5_000);
+
+        ContextWindowResult result = governor.evaluate(buildRequest(1), 128000, "workspace-1");
+
+        assertThat(result.warningThresholdBreached()).isFalse();
+        assertThat(result.estimatedTokens()).isEqualTo(5_000);
+        verify(tokenEstimator).estimateTokens(any(ChatRequest.class));
+    }
+
+    @Test
+    void theBoundIsComparedWithTheWorkspacesOwnLowerThreshold() {
+        Workspace workspace = Workspace.builder().id("workspace-1").name("w")
+                .metadata(Map.of("guardrail.context.warning-threshold-pct", "5")).build();
+        when(workspaceRepository.findById("workspace-1")).thenReturn(Optional.of(workspace));
+        when(tokenEstimator.upperBound(any(ChatRequest.class))).thenReturn(10_000);   // 7% of the window
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(9_000);
+
+        ContextWindowResult result = governor.evaluate(buildRequest(1), 128000, "workspace-1");
+
+        assertThat(result.warningThresholdBreached()).isTrue();
+        verify(tokenEstimator).estimateTokens(any(ChatRequest.class));
     }
 
     @Test

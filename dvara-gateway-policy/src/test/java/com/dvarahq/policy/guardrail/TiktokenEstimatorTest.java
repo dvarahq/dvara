@@ -222,4 +222,20 @@ class TiktokenEstimatorTest {
             throw new IllegalStateException(e);
         }
     }
+
+    /**
+     * A special token's spelling in a caller's text is text. The plain count throws on it, which failed every request
+     * that quoted one, a request about tokenizers or a pasted log, wherever the request was counted.
+     */
+    @Test
+    void aSpecialTokensSpellingCountsAsText() {
+        assertThat(estimator.estimateTokens("the model printed <|endoftext|> and stopped")).isGreaterThan(5);
+        ChatRequest request = ChatRequest.builder().model("gpt-4o")
+                .messages(java.util.List.of(com.dvarahq.core.model.MultimodalMessage.builder().role("user")
+                        .content(java.util.List.of(new com.dvarahq.core.model.ContentBlock.TextBlock(
+                                "<|endoftext|><|fim_prefix|><|im_start|>")))
+                        .build()))
+                .build();
+        assertThat(estimator.estimateTokens(request)).isGreaterThan(7);
+    }
 }
