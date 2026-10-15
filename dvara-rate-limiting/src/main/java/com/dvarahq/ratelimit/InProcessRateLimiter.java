@@ -177,6 +177,13 @@ public class InProcessRateLimiter implements RateLimiter {
         return check(key, 1, estimatedTokens, override);
     }
 
+    /** Off, or no token cap for this workspace and none by default: nothing to count against. */
+    @Override
+    public boolean ignoresTokens(EffectiveRateLimit override) {
+        EffectiveRateLimit effective = override == null ? EffectiveRateLimit.NONE : override;
+        return !enabled || effective.tokenLimitOr(defaultTokenLimit) <= 0;
+    }
+
     /**
      * Charges the tokens the request actually used, after the response. Admission charged an
      * estimate; this is the correction. It lets the bucket go into deficit, so a caller that used

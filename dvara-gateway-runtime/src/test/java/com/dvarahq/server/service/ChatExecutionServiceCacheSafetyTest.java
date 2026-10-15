@@ -231,6 +231,36 @@ class ChatExecutionServiceCacheSafetyTest {
         assertThat(stored.getGatewayHeaders()).containsEntry("X-Gateway-Strict-Downgraded", "true");
     }
 
+    /**
+     * With no cache, or one that skips this workspace, the cache key is never built. Building it is a
+     * full PII scan of the request, the second one, and nothing would read the result.
+     */
+    @Test
+    void noCacheForTheWorkspace_buildsNoCacheKey() {
+        ResponseCache skipping = mock(ResponseCache.class);
+        when(skipping.skips("t1")).thenReturn(true);
+        for (ResponseCache cache : java.util.Arrays.asList(null, skipping)) {
+            ProviderDispatcher dispatcher = mock(ProviderDispatcher.class);
+            when(dispatcher.chat(any())).thenReturn(tokenizedResponse());
+            PiiEnforcer enforcer = org.mockito.Mockito.spy(new FakeDetokenizingEnforcer());
+            HttpServletRequest httpRequest = mock(HttpServletRequest.class);
+            when(httpRequest.getAttribute("workspaceId")).thenReturn("t1");
+            when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("key-1");
+            when(httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR)).thenReturn("key-1");
+
+            var result = serviceWith(enforcer, cache, dispatcher, passThroughPipeline())
+                    .executeSync(ChatRequest.builder().model("gpt-4o")
+                                    .messages(List.of(MultimodalMessage.user("hi"))).build(),
+                            FilterContext.builder().workspaceId("t1").build(), httpRequest);
+
+            assertThat(result.cacheHit()).isFalse();
+            verify(enforcer, never()).stripForCache(any(), any());
+            verify(dispatcher).chat(any());
+        }
+        verify(skipping, never()).get(any());
+        verify(skipping, never()).put(any(), any());
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void executeSync_cachesTokenisedFormButReturnsDetokenised() {

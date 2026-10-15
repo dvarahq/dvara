@@ -40,6 +40,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -233,6 +234,55 @@ class RateLimitServletFilterTest {
 
         verify(rateLimiter).checkLimit(eq("sk-test"), eq(500), any(EffectiveRateLimit.class));
         verify(chain).doFilter(any(), eq(response));
+    }
+
+    /**
+     * A limiter that is off, or caps no tokens for this workspace, would throw a count away, so none
+     * is made: the estimator is not asked, the body is not read here, and the request goes on as it
+     * came. Counting a 10 KB prompt cost more than the rest of the request path together.
+     */
+    @Test
+    void aLimiterThatIgnoresTokens_isNotGivenACount_andTheBodyIsNotRead() throws Exception {
+        TokenEstimator tokenEstimator = mock(TokenEstimator.class);
+        filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, null);
+        when(request.getRequestURI()).thenReturn("/v1/chat/completions");
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("sk-test");
+        when(rateLimiter.ignoresTokens(any(EffectiveRateLimit.class))).thenReturn(true);
+        when(rateLimiter.checkLimit(eq("sk-test"), any(EffectiveRateLimit.class)))
+                .thenReturn(RateLimitResult.allow());
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(tokenEstimator, never()).estimateTokens(any(ChatRequest.class));
+        verify(request, never()).getInputStream();
+        verify(request).setAttribute(RateLimitServletFilter.RESERVED_TOKENS_ATTR, 0);
+        verify(rateLimiter, never()).checkLimit(anyString(), anyInt(), any(EffectiveRateLimit.class));
+        verify(chain).doFilter(request, response);
+    }
+
+    /** The workspace's own override decides it: a token cap set there gets its count. */
+    @Test
+    void theWorkspacesOverride_isWhatTheLimiterIsAskedAbout() throws Exception {
+        TokenEstimator tokenEstimator = mock(TokenEstimator.class);
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(500);
+        WorkspaceRateLimitResolver resolver = mock(WorkspaceRateLimitResolver.class);
+        EffectiveRateLimit own = new EffectiveRateLimit(0, 2_000);
+        when(resolver.resolve("ws-1")).thenReturn(own);
+        filter = new RateLimitServletFilter(rateLimiter, tokenEstimator, resolver);
+        when(request.getRequestURI()).thenReturn("/v1/chat/completions");
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getAttribute(ApiKeyAuthFilter.API_KEY_ATTR)).thenReturn("sk-test");
+        when(request.getAttribute(ApiKeyAuthFilter.WORKSPACE_ID_ATTR)).thenReturn("ws-1");
+        when(request.getContentLength()).thenReturn(100);
+        when(request.getInputStream()).thenReturn(mockInputStream("{\"model\":\"gpt-4o\",\"messages\":[]}"));
+        when(rateLimiter.ignoresTokens(EffectiveRateLimit.NONE)).thenReturn(true);
+        when(rateLimiter.ignoresTokens(own)).thenReturn(false);
+        when(rateLimiter.checkLimit(eq("sk-test"), eq(500), eq(own))).thenReturn(RateLimitResult.allow());
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(rateLimiter).checkLimit("sk-test", 500, own);
     }
 
     /**

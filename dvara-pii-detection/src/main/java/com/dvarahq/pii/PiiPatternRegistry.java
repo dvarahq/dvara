@@ -16,6 +16,7 @@
 package com.dvarahq.pii;
 
 import com.dvarahq.core.pii.PiiEntityType;
+import com.dvarahq.core.util.RegexPrecheck;
 import com.dvarahq.core.util.TtlLruCache;
 
 import java.util.ArrayList;
@@ -53,7 +54,18 @@ public class PiiPatternRegistry {
     /**
      * A compiled pattern entry mapping a regex to a PII entity type.
      */
-    public record PatternEntry(Pattern pattern, PiiEntityType type, String label, double confidence) {}
+    public record PatternEntry(Pattern pattern, PiiEntityType type, String label, double confidence,
+                               RegexPrecheck precheck) {
+
+        /** A pattern with no precheck, which always runs: what a custom pattern gets. */
+        public PatternEntry(Pattern pattern, PiiEntityType type, String label, double confidence) {
+            this(pattern, type, label, confidence, RegexPrecheck.ALWAYS);
+        }
+
+        public PatternEntry {
+            precheck = precheck == null ? RegexPrecheck.ALWAYS : precheck;
+        }
+    }
 
     public List<PatternEntry> builtInPatterns() {
         return builtInPatterns;
@@ -107,6 +119,9 @@ public class PiiPatternRegistry {
                 .collect(Collectors.joining(ENTRY_SEPARATOR));
     }
 
+    /** Every pattern below that cannot match without {@code \d} skips a text with no digit. */
+    private static final RegexPrecheck DIGIT = RegexPrecheck.containsDigit();
+
     private static List<PatternEntry> buildBuiltInPatterns() {
         var patterns = new ArrayList<PatternEntry>();
 
@@ -116,72 +131,72 @@ public class PiiPatternRegistry {
         // local-part character, as in a@b.comx_y@c.com.
         patterns.add(new PatternEntry(
                 Pattern.compile("(?:(?<![a-zA-Z0-9._%+\\-])|\\G)[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}"),
-                PiiEntityType.EMAIL, "email", 0.95));
+                PiiEntityType.EMAIL, "email", 0.95, RegexPrecheck.containsAny("@")));
 
         // US phone number (optional +1, area code, various separators). Never inside a longer run of digits, so
         // an order number, an invoice id or an epoch timestamp does not match part of itself as a phone.
         patterns.add(new PatternEntry(
                 Pattern.compile("(?<!\\d)(?:\\+?1[\\s.-]?)?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}(?!\\d)"),
-                PiiEntityType.PHONE_NUMBER, "phone_us", 0.9));
+                PiiEntityType.PHONE_NUMBER, "phone_us", 0.9, DIGIT));
 
         // International phone (E.164). Never inside a longer run of digits, for the same reason.
         patterns.add(new PatternEntry(
                 Pattern.compile("(?<!\\d)\\+[1-9]\\d{6,14}(?!\\d)"),
-                PiiEntityType.PHONE_NUMBER, "phone_intl", 0.85));
+                PiiEntityType.PHONE_NUMBER, "phone_intl", 0.85, RegexPrecheck.containsAny("+")));
 
         // SSN (reject 000/666/9xx area numbers per SSA rules). Bounded: nine digits inside a longer
         // number, or after a decimal point, are not an SSN. The fractional seconds of a nanosecond
         // timestamp (…:51.123456789Z) were redacted as one.
         patterns.add(new PatternEntry(
                 Pattern.compile("(?<![\\d.])(?!000|666|9\\d{2})\\d{3}[\\s-]?(?!00)\\d{2}[\\s-]?(?!0000)\\d{4}(?!\\d)"),
-                PiiEntityType.SSN, "ssn", 0.9));
+                PiiEntityType.SSN, "ssn", 0.9, DIGIT));
 
         // Credit card (Visa, MC, Amex, Discover — Luhn post-validated)
         patterns.add(new PatternEntry(
                 Pattern.compile("(?:4\\d{3}|5[1-5]\\d{2}|3[47]\\d{2}|6(?:011|5\\d{2}))[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{1,4}"),
-                PiiEntityType.CREDIT_CARD, "credit_card", 0.95));
+                PiiEntityType.CREDIT_CARD, "credit_card", 0.95, DIGIT));
 
         // Date of birth (MM/DD/YYYY or MM-DD-YYYY)
         patterns.add(new PatternEntry(
                 Pattern.compile("(?:0[1-9]|1[0-2])[/\\-](?:0[1-9]|[12]\\d|3[01])[/\\-](?:19|20)\\d{2}"),
-                PiiEntityType.DATE_OF_BIRTH, "dob", 0.8));
+                PiiEntityType.DATE_OF_BIRTH, "dob", 0.8, DIGIT));
 
         // IPv4 address. Not part of a longer dotted run such as a five-part version string: no digit or dot
         // before it, and no further digit or ".<digit>" after it. A four-part version string still matches,
         // because nothing in its shape tells it apart from an address.
         patterns.add(new PatternEntry(
                 Pattern.compile("(?<![\\d.])(?:(?:25[0-5]|2[0-4]\\d|[01]?\\d\\d?)\\.){3}(?:25[0-5]|2[0-4]\\d|[01]?\\d\\d?)(?!\\.?\\d)"),
-                PiiEntityType.IP_ADDRESS, "ipv4", 0.85));
+                PiiEntityType.IP_ADDRESS, "ipv4", 0.85, DIGIT));
 
         // US passport number (6-9 alphanumeric characters)
         patterns.add(new PatternEntry(
                 Pattern.compile("(?i)(?:passport[\\s#:]*)[A-Z0-9]{6,9}"),
-                PiiEntityType.PASSPORT_NUMBER, "passport_us", 0.8));
+                PiiEntityType.PASSPORT_NUMBER, "passport_us", 0.8, RegexPrecheck.containsAnyIgnoreCase("passport")));
 
         // Driver's license (generic: state letter + digits, requires keyword context)
         patterns.add(new PatternEntry(
                 Pattern.compile("(?i)(?:driver'?s?\\s*(?:license|licence|lic)[\\s#:]*)[A-Z0-9]{5,15}"),
-                PiiEntityType.DRIVERS_LICENSE, "drivers_license", 0.75));
+                PiiEntityType.DRIVERS_LICENSE, "drivers_license", 0.75, RegexPrecheck.containsAnyIgnoreCase("driver")));
 
         // IBAN (international bank account number)
         patterns.add(new PatternEntry(
                 Pattern.compile("[A-Z]{2}\\d{2}[\\s]?[A-Z0-9]{4}(?:[\\s]?[A-Z0-9]{4}){2,7}(?:[\\s]?[A-Z0-9]{1,4})?"),
-                PiiEntityType.IBAN, "iban", 0.9));
+                PiiEntityType.IBAN, "iban", 0.9, DIGIT));
 
         // Medical Record Number (keyword + digits)
         patterns.add(new PatternEntry(
                 Pattern.compile("(?i)(?:MRN|medical\\s*record)[\\s#:]*\\d{4,12}"),
-                PiiEntityType.MEDICAL_RECORD_NUMBER, "mrn", 0.85));
+                PiiEntityType.MEDICAL_RECORD_NUMBER, "mrn", 0.85, RegexPrecheck.containsAnyIgnoreCase("mrn", "medical")));
 
         // DEA number (checksum post-validated)
         patterns.add(new PatternEntry(
                 Pattern.compile("[A-Za-z]{2}\\d{7}"),
-                PiiEntityType.DEA_NUMBER, "dea", 0.9));
+                PiiEntityType.DEA_NUMBER, "dea", 0.9, DIGIT));
 
         // NPI number (keyword context required, Luhn post-validated)
         patterns.add(new PatternEntry(
                 Pattern.compile("(?i)(?:NPI)[\\s#:]*\\d{10}"),
-                PiiEntityType.NPI_NUMBER, "npi", 0.9));
+                PiiEntityType.NPI_NUMBER, "npi", 0.9, RegexPrecheck.containsAnyIgnoreCase("npi")));
 
         // Person name (salutation heuristic). Miss and Mx are here because speech-to-text picks between
         // homophones: a spoken "Ms. Delgado" can arrive as "Miss Delgado" (#19). Titles are case-sensitive
@@ -189,19 +204,19 @@ public class PiiPatternRegistry {
         // "Miss Paris" does, the same trade-off Dr and Ms already make.
         patterns.add(new PatternEntry(
                 Pattern.compile("(?:Mr\\.?|Mrs\\.?|Ms\\.?|Miss|Mx\\.?|Dr\\.?|Prof\\.?)\\s+[A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,2}"),
-                PiiEntityType.PERSON_NAME, "person_name", 0.7));
+                PiiEntityType.PERSON_NAME, "person_name", 0.7, RegexPrecheck.containsAny("Mr", "Ms", "Miss", "Mx", "Dr", "Prof")));
 
         // India Aadhaar — 12 digits, optional spaces (Verhoeff post-validated).
         // Confidence 0.95 (> loose phone 0.9) so a Verhoeff-validated match wins the
         // overlap dedup when a contiguous 12-digit Aadhaar also matches the phone shape.
         patterns.add(new PatternEntry(
                 Pattern.compile("\\b\\d{4}\\s?\\d{4}\\s?\\d{4}\\b"),
-                PiiEntityType.AADHAAR, "aadhaar", 0.95));
+                PiiEntityType.AADHAAR, "aadhaar", 0.95, DIGIT));
 
         // India PAN — AAAAA9999A (format post-validated)
         patterns.add(new PatternEntry(
                 Pattern.compile("\\b[A-Z]{5}[0-9]{4}[A-Z]\\b"),
-                PiiEntityType.PAN, "pan", 0.95));
+                PiiEntityType.PAN, "pan", 0.95, DIGIT));
 
         return patterns;
     }

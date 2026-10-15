@@ -16,6 +16,7 @@
 package com.dvarahq.policy.guardrail;
 
 import com.dvarahq.core.guardrail.GuardrailCategory;
+import com.dvarahq.core.util.RegexPrecheck;
 import com.dvarahq.core.util.TtlLruCache;
 
 import java.util.ArrayList;
@@ -225,20 +226,23 @@ public class ContentPatternRegistry {
                 GuardrailCategory.VIOLENCE,
                 "violence-direct-threat",
                 0.9,
-                "viol-001"));
+                "viol-001",
+                RegexPrecheck.containsAnyIgnoreCase("kill", "murder", "assassinate", "slaughter")));
         patterns.add(new PatternEntry(
                 Pattern.compile("\\bhow\\s+to\\s+(make|build|create)\\s+(a\\s+)?(bomb|weapon|explosive)\\b",
                         Pattern.CASE_INSENSITIVE),
                 GuardrailCategory.VIOLENCE,
                 "violence-weapon-instructions",
                 0.95,
-                "viol-002"));
+                "viol-002",
+                RegexPrecheck.containsAnyIgnoreCase("bomb", "weapon", "explosive")));
         patterns.add(new PatternEntry(
                 Pattern.compile("\\b(torture|mutilate|dismember)\\b", Pattern.CASE_INSENSITIVE),
                 GuardrailCategory.VIOLENCE,
                 "violence-graphic",
                 0.85,
-                "viol-003"));
+                "viol-003",
+                RegexPrecheck.containsAnyIgnoreCase("torture", "mutilate", "dismember")));
 
         // Sexual content patterns
         patterns.add(new PatternEntry(
@@ -247,13 +251,15 @@ public class ContentPatternRegistry {
                 GuardrailCategory.SEXUAL,
                 "sexual-explicit-content",
                 0.9,
-                "sex-001"));
+                "sex-001",
+                RegexPrecheck.containsAnyIgnoreCase("content", "material", "imagery")));
         patterns.add(new PatternEntry(
                 Pattern.compile("\\bgenerate\\s+(nude|naked|nsfw)\\b", Pattern.CASE_INSENSITIVE),
                 GuardrailCategory.SEXUAL,
                 "sexual-generate-nsfw",
                 0.9,
-                "sex-002"));
+                "sex-002",
+                RegexPrecheck.containsAnyIgnoreCase("nude", "naked", "nsfw")));
 
         return Collections.unmodifiableList(patterns);
     }
@@ -266,7 +272,21 @@ public class ContentPatternRegistry {
             GuardrailCategory category,
             String label,
             double riskScore,
-            String ruleId) {
+            String ruleId,
+            RegexPrecheck precheck) {
+
+        /**
+         * A pattern with no precheck, which always runs: what a workspace's own keyword, topic or
+         * denylist entry gets. A built-in names the words every match contains, so a scan can skip it.
+         */
+        public PatternEntry(Pattern pattern, GuardrailCategory category, String label, double riskScore,
+                            String ruleId) {
+            this(pattern, category, label, riskScore, ruleId, RegexPrecheck.ALWAYS);
+        }
+
+        public PatternEntry {
+            precheck = precheck == null ? RegexPrecheck.ALWAYS : precheck;
+        }
     }
 
     private static PatternEntry profanityPattern(String word, double riskScore) {
@@ -275,7 +295,8 @@ public class ContentPatternRegistry {
                 GuardrailCategory.PROFANITY,
                 "profanity-" + word,
                 riskScore,
-                "prof-" + word);
+                "prof-" + word,
+                RegexPrecheck.containsAnyIgnoreCase(word));
     }
 
     /** Shared by the typed and the map path, so a keyword cannot mean two things by storage location. */

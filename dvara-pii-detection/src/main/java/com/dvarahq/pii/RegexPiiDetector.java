@@ -19,6 +19,7 @@ import com.dvarahq.core.pii.PiiDetector;
 import com.dvarahq.core.pii.PiiEntity;
 import com.dvarahq.core.pii.PiiEntityType;
 import com.dvarahq.core.pii.PiiScanResult;
+import com.dvarahq.core.util.ScanText;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -48,8 +49,14 @@ public class RegexPiiDetector implements PiiDetector {
 
         var patterns = patternRegistry.mergeWithCustom(customPatterns);
         var entities = new ArrayList<PiiEntity>();
+        // A pattern that cannot match this text (no digit for a number, no "@" for an address) is
+        // not run. Most text matches no pattern, and a full pass costs far more than the check.
+        var scanText = ScanText.of(text);
 
         for (var entry : patterns) {
+            if (!entry.precheck().admits(scanText)) {
+                continue;
+            }
             Matcher matcher = entry.pattern().matcher(text);
             while (matcher.find()) {
                 String matched = matcher.group();

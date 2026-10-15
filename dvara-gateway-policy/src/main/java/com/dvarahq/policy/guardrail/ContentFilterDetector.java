@@ -22,6 +22,7 @@ import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
 import com.dvarahq.core.model.MultimodalMessage;
+import com.dvarahq.core.util.ScanText;
 import com.dvarahq.core.workspace.Workspace;
 import com.dvarahq.core.workspace.WorkspaceRepository;
 import com.dvarahq.core.workspace.settings.SettingsBooleans;
@@ -194,7 +195,12 @@ public class ContentFilterDetector implements GuardrailDetector {
         }
 
         List<GuardrailDetection> detections = new ArrayList<>();
+        // A pattern whose required words are all absent cannot match, so it is not run.
+        ScanText scanText = ScanText.of(text);
         for (ContentPatternRegistry.PatternEntry entry : patterns) {
+            if (!entry.precheck().admits(scanText)) {
+                continue;
+            }
             Matcher matcher = entry.pattern().matcher(text);
             while (matcher.find()) {
                 detections.add(new GuardrailDetection(

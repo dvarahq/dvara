@@ -58,6 +58,22 @@ public abstract class RateLimiterContract {
         return getClass().getSimpleName() + ":" + name + ":" + System.nanoTime();
     }
 
+    // --- whether a token count is needed at all --------------------------------------------
+
+    /**
+     * The filter skips counting a request's tokens when the limiter says it would ignore them. A
+     * limiter that said so while a token cap applied would admit every request on tokens.
+     */
+    @Test
+    void itNeverIgnoresTokensWhileATokenCapApplies() {
+        assertThat(limiter(true, 100, 1_000).ignoresTokens(EffectiveRateLimit.NONE))
+                .as("the configured cap").isFalse();
+        assertThat(limiter(true, 100, 1_000).ignoresTokens(null))
+                .as("no override at all is the configured cap").isFalse();
+        assertThat(limiter(true, 100, 0).ignoresTokens(new EffectiveRateLimit(0, 500)))
+                .as("a workspace's own cap, with none by default").isFalse();
+    }
+
     // --- settlement, which is where the two implementations disagreed -------------------
 
     /**

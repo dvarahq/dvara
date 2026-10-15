@@ -90,10 +90,8 @@ class DefaultContextWindowGovernorTest {
 
     @Test
     void hardThreshold_breached_withTruncateOldest() {
-        // First call = original (high), subsequent calls for pruning candidates = lower
-        when(tokenEstimator.estimateTokens(any(ChatRequest.class)))
-                .thenReturn(120000)
-                .thenReturn(50000);
+        // Six messages at 20,000 each: 94% of the window, and four of them fit under 90%.
+        eachMessageCosts(20000);
 
         Workspace workspace = Workspace.builder().id("workspace-1")
                 .metadata(Map.of(
@@ -112,7 +110,10 @@ class DefaultContextWindowGovernorTest {
     @Test
     void aRequestStillOverTheLimitAfterPruningIsRefusedNotSent() {
         // One irreducibly large message: every estimate, before and after pruning, stays over the hard threshold.
-        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(127000);
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenAnswer(inv -> {
+            ChatRequest r = inv.getArgument(0);
+            return 3 + r.getMessages().stream().mapToInt(m -> "system".equals(m.getRole()) ? 126990 : 1).sum();
+        });
         for (String strategy : new String[]{"TRUNCATE_OLDEST", "TRUNCATE_MIDDLE"}) {
             Workspace workspace = Workspace.builder().id("workspace-1")
                     .metadata(Map.of("guardrail.context.pruning-strategy", strategy,
@@ -130,13 +131,14 @@ class DefaultContextWindowGovernorTest {
         verify(auditWriter, org.mockito.Mockito.times(2)).write(events.capture());
         assertThat(events.getAllValues()).allSatisfy(e -> {
             assertThat(e.eventType()).isEqualTo("CONTEXT_WINDOW_EXCEEDED");
-            assertThat(e.payload()).containsEntry("estimated_tokens_after_pruning", 127000);
+            assertThat((Integer) e.payload().get("estimated_tokens_after_pruning"))
+                    .as("still over 90% of 128,000 after pruning").isGreaterThan(115200);
         });
     }
 
     @Test
     void aSuccessfulPruneNamesItsStrategy() {
-        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(120000).thenReturn(50000);
+        eachMessageCosts(20000);
         Workspace workspace = Workspace.builder().id("workspace-1")
                 .metadata(Map.of("guardrail.context.pruning-strategy", "TRUNCATE_MIDDLE",
                         "guardrail.context.hard-threshold-pct", "90"))
@@ -192,6 +194,72 @@ class DefaultContextWindowGovernorTest {
         assertThat(result.hardThresholdBreached()).isFalse();
     }
 
+    /** Adds up its messages, as both shipped estimators do: 3 for the request, then each message's cost. */
+    private void eachMessageCosts(int perMessage) {
+        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenAnswer(inv -> {
+            ChatRequest r = inv.getArgument(0);
+            return 3 + perMessage * r.getMessages().size();
+        });
+    }
+
+    /**
+     * Pruning counts each message once. It used to count the whole candidate again for every message
+     * it tried, which is quadratic in the conversation's length.
+     */
+    @Test
+    void pruningCountsEachMessageOnce() {
+        eachMessageCosts(1000);
+        for (String strategy : new String[]{"TRUNCATE_OLDEST", "TRUNCATE_MIDDLE"}) {
+            clearInvocations(tokenEstimator);
+            Workspace workspace = Workspace.builder().id("workspace-1")
+                    .metadata(Map.of("guardrail.context.pruning-strategy", strategy,
+                            "guardrail.context.hard-threshold-pct", "90"))
+                    .build();
+            when(workspaceRepository.findById("workspace-1")).thenReturn(Optional.of(workspace));
+
+            ChatRequest request = buildRequest(200);  // 201 messages, 201,003 tokens
+            ContextWindowResult result = governor.evaluate(request, 128000, "workspace-1");
+
+            assertThat(result.prunedRequest()).as(strategy).isNotNull();
+            assertThat(result.estimatedTokens()).as(strategy + ": the sum agrees with a fresh count")
+                    .isEqualTo(3 + 1000 * result.prunedRequest().getMessages().size());
+            // The request once, the request with no messages once, then each message once.
+            verify(tokenEstimator, times(2 + request.getMessages().size()).description(strategy))
+                    .estimateTokens(any(ChatRequest.class));
+        }
+    }
+
+    /**
+     * The real tokenizer adds up per message, which is what lets pruning sum instead of recount: the
+     * figure it reports for a pruned request is the figure a fresh count gives.
+     */
+    @Test
+    void aPrunedCountMatchesAFreshCountWithTheRealTokenizer() {
+        TiktokenEstimator real = new TiktokenEstimator();
+        DefaultContextWindowGovernor withReal = new DefaultContextWindowGovernor(real, auditWriter, workspaceRepository);
+        for (String strategy : new String[]{"TRUNCATE_OLDEST", "TRUNCATE_MIDDLE"}) {
+            Workspace workspace = Workspace.builder().id("workspace-1")
+                    .metadata(Map.of("guardrail.context.pruning-strategy", strategy,
+                            "guardrail.context.hard-threshold-pct", "90"))
+                    .build();
+            when(workspaceRepository.findById("workspace-1")).thenReturn(Optional.of(workspace));
+            List<MultimodalMessage> messages = new ArrayList<>();
+            messages.add(MultimodalMessage.builder().role("system")
+                    .content(List.of(new ContentBlock.TextBlock("You are a careful assistant."))).build());
+            for (int i = 0; i < 60; i++) {
+                messages.add(MultimodalMessage.user("Turn " + i + ": " + "the quick brown fox jumps over the lazy dog. ".repeat(3 + i % 7)));
+            }
+            ChatRequest request = fullyPopulated().toBuilder().messages(messages).build();
+            int window = real.estimateTokens(request) * 2 / 3;
+
+            ContextWindowResult result = withReal.evaluate(request, window, "workspace-1");
+
+            assertThat(result.prunedRequest()).as(strategy).isNotNull();
+            assertThat(result.estimatedTokens()).as(strategy)
+                    .isEqualTo(real.estimateTokens(result.prunedRequest()));
+        }
+    }
+
     private ChatRequest buildRequest(int messageCount) {
         List<MultimodalMessage> messages = new ArrayList<>();
         messages.add(MultimodalMessage.builder()
@@ -213,7 +281,7 @@ class DefaultContextWindowGovernorTest {
     /** A prune rewrites the messages; every other field, tools, tool_choice and top_p included, must come through. */
     @Test
     void pruning_carriesEveryOtherField() throws Exception {
-        when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(120000).thenReturn(50000);
+        eachMessageCosts(40000);
         Workspace workspace = Workspace.builder().id("workspace-1")
                 .metadata(Map.of("guardrail.context.pruning-strategy", "TRUNCATE_OLDEST",
                         "guardrail.context.hard-threshold-pct", "90")).build();

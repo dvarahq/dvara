@@ -54,49 +54,68 @@ public class GatewayMetrics {
         this.region = regionContext.currentRegion().orElse("unknown");
     }
 
+    /**
+     * The meters every request records, found once for each set of tags rather than built and
+     * looked up in the registry on every call. A key is one set of tag values, so these maps hold
+     * exactly the series the registry already holds.
+     */
+    private record RequestTags(String workspace, String model, String provider, String status) {}
+
+    private record TokenTags(String workspace, String model, String direction) {}
+
+    private record CostTags(String workspace, String model, String provider) {}
+
+    private final java.util.concurrent.ConcurrentHashMap<RequestTags, Counter> requestCounters =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<RequestTags, Timer> latencyTimers =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<TokenTags, Counter> tokenCounters =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<CostTags, Counter> costCounters =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     public void recordRequest(String workspace, String model, String provider, String status,
                               Duration latency) {
-        Counter.builder("gateway_requests_total")
+        RequestTags tags = new RequestTags(safe(workspace), safe(model), safe(provider), safe(status));
+        requestCounters.computeIfAbsent(tags, t -> Counter.builder("gateway_requests_total")
                 .description("Total gateway requests")
-                .tag("workspace", safe(workspace))
-                .tag("model", safe(model))
-                .tag("provider", safe(provider))
-                .tag("status", safe(status))
+                .tag("workspace", t.workspace())
+                .tag("model", t.model())
+                .tag("provider", t.provider())
+                .tag("status", t.status())
                 .tag("region", region)
-                .register(registry)
+                .register(registry))
                 .increment();
 
-        Timer.builder("gateway_latency_seconds")
+        latencyTimers.computeIfAbsent(tags, t -> Timer.builder("gateway_latency_seconds")
                 .description("Request latency")
-                .tag("workspace", safe(workspace))
-                .tag("model", safe(model))
-                .tag("provider", safe(provider))
-                .tag("status", safe(status))
+                .tag("workspace", t.workspace())
+                .tag("model", t.model())
+                .tag("provider", t.provider())
+                .tag("status", t.status())
                 .tag("region", region)
                 .publishPercentiles(0.5, 0.95, 0.99)
-                .register(registry)
+                .register(registry))
                 .record(latency);
     }
 
     public void recordTokens(String workspace, String model, int inputTokens, int outputTokens) {
         if (inputTokens > 0) {
-            Counter.builder("gateway_tokens_total")
-                    .description("Total tokens processed")
-                    .tag("workspace", safe(workspace))
-                    .tag("model", safe(model))
-                    .tag("direction", "input")
-                    .register(registry)
-                    .increment(inputTokens);
+            tokenCounter(workspace, model, "input").increment(inputTokens);
         }
         if (outputTokens > 0) {
-            Counter.builder("gateway_tokens_total")
-                    .description("Total tokens processed")
-                    .tag("workspace", safe(workspace))
-                    .tag("model", safe(model))
-                    .tag("direction", "output")
-                    .register(registry)
-                    .increment(outputTokens);
+            tokenCounter(workspace, model, "output").increment(outputTokens);
         }
+    }
+
+    private Counter tokenCounter(String workspace, String model, String direction) {
+        return tokenCounters.computeIfAbsent(new TokenTags(safe(workspace), safe(model), direction),
+                t -> Counter.builder("gateway_tokens_total")
+                        .description("Total tokens processed")
+                        .tag("workspace", t.workspace())
+                        .tag("model", t.model())
+                        .tag("direction", t.direction())
+                        .register(registry));
     }
 
     public void recordProviderError(String provider, String errorCode) {
@@ -167,12 +186,13 @@ public class GatewayMetrics {
     }
 
     public void recordCost(String workspace, String model, String provider, double costUsd) {
-        Counter.builder("gateway_cost_dollars_total")
-                .description("Total cost in USD")
-                .tag("workspace", safe(workspace))
-                .tag("model", safe(model))
-                .tag("provider", safe(provider))
-                .register(registry)
+        costCounters.computeIfAbsent(new CostTags(safe(workspace), safe(model), safe(provider)),
+                t -> Counter.builder("gateway_cost_dollars_total")
+                        .description("Total cost in USD")
+                        .tag("workspace", t.workspace())
+                        .tag("model", t.model())
+                        .tag("provider", t.provider())
+                        .register(registry))
                 .increment(costUsd);
     }
 

@@ -33,6 +33,15 @@ public final class HmacSigner {
 
     private static final String HMAC_ALGORITHM = "HmacSHA256";
 
+    /**
+     * The last key used, initialised once, so a signature clones it rather than looking up the
+     * algorithm and deriving the key pads again. A process signs with one secret, or two across a
+     * rotation, so one slot is enough; a different secret replaces it.
+     */
+    private static volatile KeyedMac lastKey;
+
+    private record KeyedMac(String secret, Mac prototype) {}
+
     private HmacSigner() {}
 
     /**
@@ -49,12 +58,32 @@ public final class HmacSigner {
                     + "Set DVARA_AUDIT_HMAC_SECRET or dvara.audit.hmac-secret.");
         }
         try {
-            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
-            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));
-            byte[] hmacBytes = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
+            byte[] hmacBytes = macFor(secret).doFinal(data.getBytes(StandardCharsets.UTF_8));
             return bytesToHex(hmacBytes);
         } catch (Exception e) {
             throw new IllegalStateException("HMAC signing failed", e);
+        }
+    }
+
+    /**
+     * A fresh {@code Mac} keyed with {@code secret}: a clone of the keyed prototype, which is never
+     * used itself, so concurrent signers each get their own state.
+     */
+    private static Mac macFor(String secret) throws Exception {
+        KeyedMac keyed = lastKey;
+        if (keyed == null || !keyed.secret().equals(secret)) {
+            Mac prototype = Mac.getInstance(HMAC_ALGORITHM);
+            prototype.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));
+            keyed = new KeyedMac(secret, prototype);
+            lastKey = keyed;
+        }
+        try {
+            return (Mac) keyed.prototype().clone();
+        } catch (CloneNotSupportedException notCloneable) {
+            // A provider whose Mac cannot be cloned: key a new one each time, as before.
+            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));
+            return mac;
         }
     }
 

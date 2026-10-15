@@ -149,4 +149,29 @@ class GatewayMetricsTest {
         assertThat(timer).isNotNull();
         assertThat(timer.count()).isEqualTo(2);
     }
+
+    /**
+     * The per-request meters are found once per set of tags and reused: the same series keeps counting,
+     * a different tag value is its own series, and a null tag is still recorded as "unknown".
+     */
+    @Test
+    void perRequestMeters_areReusedPerTagSet_andKeepTheirSeries() {
+        for (int i = 0; i < 3; i++) {
+            metrics.recordRequest("ws", "gpt-4", "openai", "200", Duration.ofMillis(10));
+            metrics.recordTokens("ws", "gpt-4", 5, 7);
+            metrics.recordCost("ws", "gpt-4", "openai", 0.5);
+        }
+        metrics.recordRequest("ws", "gpt-4", "openai", "500", Duration.ofMillis(10));
+        metrics.recordRequest(null, null, null, null, Duration.ofMillis(10));
+
+        assertThat(registry.find("gateway_requests_total").tag("status", "200").counter().count()).isEqualTo(3.0);
+        assertThat(registry.find("gateway_requests_total").tag("status", "500").counter().count()).isEqualTo(1.0);
+        assertThat(registry.find("gateway_requests_total").tag("workspace", "unknown").tag("status", "unknown")
+                .counter().count()).isEqualTo(1.0);
+        assertThat(registry.find("gateway_latency_seconds").tag("status", "200").timer().count()).isEqualTo(3);
+        assertThat(registry.find("gateway_tokens_total").tag("direction", "input").counter().count()).isEqualTo(15.0);
+        assertThat(registry.find("gateway_tokens_total").tag("direction", "output").counter().count()).isEqualTo(21.0);
+        assertThat(registry.find("gateway_cost_dollars_total").counter().count()).isEqualTo(1.5);
+        assertThat(registry.find("gateway_requests_total").counters()).hasSize(3);
+    }
 }
