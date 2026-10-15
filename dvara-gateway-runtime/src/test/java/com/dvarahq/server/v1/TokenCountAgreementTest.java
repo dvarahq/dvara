@@ -90,8 +90,9 @@ class TokenCountAgreementTest {
 
         assertThat(reservedByTheRateLimiter()).as("rate limiter").isEqualTo(count);
 
+        // A window the request fills to 80%: near enough that the check counts, rather than settling for a bound.
         assertThat(new DefaultContextWindowGovernor(estimator, mock(AuditWriter.class), noWorkspaces())
-                .evaluate(request, 1_000_000, "w1").estimatedTokens())
+                .evaluate(request, count * 100 / 80, "w1").estimatedTokens())
                 .as("context-window check").isEqualTo(count);
 
         assertThatNoException().as("input cap at the count")

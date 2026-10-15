@@ -20,7 +20,8 @@ import com.dvarahq.core.model.ChatRequest;
 /**
  * Result of context window governance evaluation.
  *
- * @param estimatedTokens          estimated token count for the request
+ * @param estimatedTokens          estimated token count for the request; for a request well inside its window
+ *                                 and under both thresholds, an upper bound on it (see {@link TokenEstimator#upperBound})
  * @param maxTokens                maximum context window tokens for the provider
  * @param utilizationPct           percentage of context window utilized
  * @param warningThresholdBreached whether the warning threshold was breached

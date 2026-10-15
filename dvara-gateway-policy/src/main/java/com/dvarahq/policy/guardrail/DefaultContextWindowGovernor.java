@@ -66,9 +66,6 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
             return ContextWindowResult.withinLimits(0, maxContextTokens);
         }
 
-        int estimatedTokens = tokenEstimator.estimateTokens(request);
-        int utilizationPct = (int) ((long) estimatedTokens * 100 / maxContextTokens);
-
         // Resolve workspace config
         int warningThreshold = DEFAULT_WARNING_THRESHOLD_PCT;
         int hardThreshold = DEFAULT_HARD_THRESHOLD_PCT;
@@ -101,6 +98,17 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
                 }
             }
         }
+
+        // A request whose upper bound is under both thresholds is under them by its count too, and nothing reads the
+        // count of a request inside its window. Counting is most of what a large request costs here, so it is done
+        // only for a request near enough to the window to need it.
+        int bound = tokenEstimator.upperBound(request);
+        if ((long) bound * 100 / maxContextTokens < Math.min(warningThreshold, hardThreshold)) {
+            return ContextWindowResult.withinLimits(bound, maxContextTokens);
+        }
+
+        int estimatedTokens = tokenEstimator.estimateTokens(request);
+        int utilizationPct = (int) ((long) estimatedTokens * 100 / maxContextTokens);
 
         boolean warningBreached = utilizationPct >= warningThreshold;
         boolean hardBreached = utilizationPct >= hardThreshold;

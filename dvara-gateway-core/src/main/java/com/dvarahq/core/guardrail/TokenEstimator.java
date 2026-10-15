@@ -28,4 +28,13 @@ public interface TokenEstimator {
     int estimateTokens(ChatRequest request);
 
     int estimateTokens(String text);
+
+    /**
+     * A number never smaller than {@link #estimateTokens(ChatRequest)}, for a caller that only needs to know that a
+     * request is well inside a limit. Counting is the expensive part of a large request, so an estimator that can
+     * bound its count without counting overrides this; the default is the count itself.
+     */
+    default int upperBound(ChatRequest request) {
+        return estimateTokens(request);
+    }
 }

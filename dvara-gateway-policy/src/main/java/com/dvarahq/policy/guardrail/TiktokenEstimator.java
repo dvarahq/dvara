@@ -103,8 +103,73 @@ public class TiktokenEstimator implements TokenEstimator {
         return total;
     }
 
+    /**
+     * The same parts of the request as {@link #estimateTokens(ChatRequest)}, with each text's UTF-8 length in place of
+     * its BPE count. Every token of a byte-level BPE encoding stands for at least one byte, so a text never has more
+     * tokens than bytes, and this never comes out below the count. Measuring a text's length is a small fraction of
+     * counting it, which is what lets the context-window check skip the count for a request well inside the window.
+     */
+    @Override
+    public int upperBound(ChatRequest request) {
+        if (request == null || request.getMessages() == null) {
+            return 0;
+        }
+        long total = 0;
+        for (var message : request.getMessages()) {
+            total += 4;
+            if (message.getContent() != null) {
+                for (var block : message.getContent()) {
+                    total += switch (block) {
+                        case ContentBlock.TextBlock text -> utf8Length(text.text());
+                        case ContentBlock.ImageBlock image -> ImageTokens.estimate(image, request.getModel());
+                        case ContentBlock.ThinkingBlock thinking -> utf8Length(thinking.thinking());
+                        case ContentBlock.RedactedThinkingBlock redacted -> utf8Length(redacted.data());
+                        case null -> 0;
+                    };
+                }
+            }
+            if (message.getToolCalls() != null) {
+                for (var toolCall : message.getToolCalls()) {
+                    total += utf8Length(toolCall.getName());
+                    total += utf8Length(toolCall.getArguments());
+                }
+            }
+        }
+        total += utf8Length(TokenEstimation.renderTools(request.getTools()));
+        total += 3;
+        return (int) Math.min(total, Integer.MAX_VALUE);
+    }
+
+    /** The text's length in UTF-8 bytes, without encoding it. */
+    static long utf8Length(String text) {
+        if (text == null) {
+            return 0;
+        }
+        long bytes = 0;
+        int n = text.length();
+        for (int i = 0; i < n; i++) {
+            char c = text.charAt(i);
+            if (c < 0x80) {
+                bytes += 1;
+            } else if (c < 0x800) {
+                bytes += 2;
+            } else if (Character.isHighSurrogate(c) && i + 1 < n && Character.isLowSurrogate(text.charAt(i + 1))) {
+                bytes += 4;
+                i++;
+            } else {
+                // Includes a lone surrogate, which the encoder writes as a three-byte replacement.
+                bytes += 3;
+            }
+        }
+        return bytes;
+    }
+
+    /**
+     * Counted as ordinary text. A caller's text can contain a special token's spelling, {@code <|endoftext|>} for one,
+     * which the plain count refuses with an exception; a provider reads it as text, and so does this.
+     */
     private static int countTokens(Encoding encoding, String text) {
-        return text == null || text.isEmpty() ? 0 : encoding.countTokens(text);
+        return text == null || text.isEmpty() ? 0 : encoding.countTokensOrdinary(text);
     }
 
     @Override
@@ -112,7 +177,7 @@ public class TiktokenEstimator implements TokenEstimator {
         if (text == null || text.isEmpty()) {
             return 0;
         }
-        return DEFAULT_ENCODING.countTokens(text);
+        return DEFAULT_ENCODING.countTokensOrdinary(text);
     }
 
     private Encoding resolveEncoding(String model) {
