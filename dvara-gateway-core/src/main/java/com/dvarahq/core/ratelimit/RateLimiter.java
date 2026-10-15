@@ -70,6 +70,22 @@ public interface RateLimiter {
     }
 
     /**
+     * Whether a check with this override would ignore a token estimate, because the limiter is off or
+     * caps no tokens for this workspace.
+     *
+     * <p>Counting a request's tokens is the most expensive thing admission does: on a 10 KB prompt it
+     * costs more than the rest of the request path together. The rate-limit filter skips the count
+     * when this says nobody would read it, and asks the request-only check instead.
+     *
+     * <p>The default is {@code false}, so an implementation that does not answer still gets a count,
+     * exactly as before. Answering {@code true} while enforcing a token cap would admit every request
+     * on tokens, so an override must be exact.
+     */
+    default boolean ignoresTokens(EffectiveRateLimit override) {
+        return false;
+    }
+
+    /**
      * Settles a request's token cost against what was reserved for it.
      *
      * <p>{@code checkLimit(key, estimatedTokens, ...)} charges an estimate to admit the request.

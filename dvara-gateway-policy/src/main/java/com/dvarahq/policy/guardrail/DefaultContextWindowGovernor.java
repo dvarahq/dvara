@@ -31,9 +31,11 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 
 /**
  * Context window governor with token estimation, threshold checks,
@@ -118,9 +120,11 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
                         true, true, null);
             }
 
-            // Apply pruning
-            ChatRequest prunedRequest = applyPruning(request, maxContextTokens, hardThreshold, pruningStrategy);
-            int prunedTokens = tokenEstimator.estimateTokens(prunedRequest);
+            // Apply pruning. Each message is counted once and the candidates are summed, rather than
+            // the whole request being counted again for every message tried.
+            MessageCosts costs = MessageCosts.of(tokenEstimator, request, this::rebuildRequest);
+            ChatRequest prunedRequest = applyPruning(request, costs, maxContextTokens, hardThreshold, pruningStrategy);
+            int prunedTokens = prunedRequest == request ? estimatedTokens : costs.total(prunedRequest.getMessages());
             int prunedPct = (int) ((long) prunedTokens * 100 / maxContextTokens);
 
             // The system messages and the turns pruning must keep can on their own be over the limit. Such a
@@ -147,14 +151,14 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
         return ContextWindowResult.withinLimits(estimatedTokens, maxContextTokens);
     }
 
-    private ChatRequest applyPruning(ChatRequest request, int maxContextTokens,
+    private ChatRequest applyPruning(ChatRequest request, MessageCosts costs, int maxContextTokens,
                                       int thresholdPct, PruningStrategy strategy) {
         int targetTokens = (int) ((long) maxContextTokens * thresholdPct / 100);
         List<MultimodalMessage> messages = new ArrayList<>(request.getMessages());
 
         return switch (strategy) {
-            case TRUNCATE_OLDEST -> truncateOldest(request, messages, targetTokens);
-            case TRUNCATE_MIDDLE -> truncateMiddle(request, messages, targetTokens);
+            case TRUNCATE_OLDEST -> truncateOldest(request, costs, messages, targetTokens);
+            case TRUNCATE_MIDDLE -> truncateMiddle(request, costs, messages, targetTokens);
             default -> request;
         };
     }
@@ -162,7 +166,7 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
     /**
      * Removes oldest non-system messages until under target token count.
      */
-    private ChatRequest truncateOldest(ChatRequest request, List<MultimodalMessage> messages,
+    private ChatRequest truncateOldest(ChatRequest request, MessageCosts costs, List<MultimodalMessage> messages,
                                         int targetTokens) {
         List<MultimodalMessage> pruned = new ArrayList<>();
         List<MultimodalMessage> nonSystem = new ArrayList<>();
@@ -176,13 +180,13 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
         }
 
         // Add non-system messages from newest to oldest until we exceed target
+        int candidateTokens = costs.total(pruned);
         List<MultimodalMessage> kept = new ArrayList<>();
         for (int i = nonSystem.size() - 1; i >= 0; i--) {
-            kept.addFirst(nonSystem.get(i));
-            List<MultimodalMessage> candidate = new ArrayList<>(pruned);
-            candidate.addAll(kept);
-            ChatRequest testReq = rebuildRequest(request, candidate);
-            if (tokenEstimator.estimateTokens(testReq) > targetTokens && kept.size() > 1) {
+            MultimodalMessage msg = nonSystem.get(i);
+            kept.addFirst(msg);
+            candidateTokens += costs.of(msg);
+            if (candidateTokens > targetTokens && kept.size() > 1) {
                 kept.removeFirst();
                 break;
             }
@@ -196,7 +200,7 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
      * Keeps system messages + first user message + most recent messages,
      * removes middle messages.
      */
-    private ChatRequest truncateMiddle(ChatRequest request, List<MultimodalMessage> messages,
+    private ChatRequest truncateMiddle(ChatRequest request, MessageCosts costs, List<MultimodalMessage> messages,
                                         int targetTokens) {
         List<MultimodalMessage> system = new ArrayList<>();
         List<MultimodalMessage> nonSystem = new ArrayList<>();
@@ -215,15 +219,14 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
 
         // Keep first and progressively add from the end
         MultimodalMessage first = nonSystem.getFirst();
+        int candidateTokens = costs.total(system) + costs.of(first);
         List<MultimodalMessage> tail = new ArrayList<>();
 
         for (int i = nonSystem.size() - 1; i >= 1; i--) {
-            tail.addFirst(nonSystem.get(i));
-            List<MultimodalMessage> candidate = new ArrayList<>(system);
-            candidate.add(first);
-            candidate.addAll(tail);
-            ChatRequest testReq = rebuildRequest(request, candidate);
-            if (tokenEstimator.estimateTokens(testReq) > targetTokens && tail.size() > 1) {
+            MultimodalMessage msg = nonSystem.get(i);
+            tail.addFirst(msg);
+            candidateTokens += costs.of(msg);
+            if (candidateTokens > targetTokens && tail.size() > 1) {
                 tail.removeFirst();
                 break;
             }
@@ -233,6 +236,38 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
         pruned.add(first);
         pruned.addAll(tail);
         return rebuildRequest(request, pruned);
+    }
+
+    /**
+     * What each message of one request costs, counted once. A request's count is the sum of its
+     * messages plus what it costs with none (tool definitions and reply priming), for both estimators
+     * this gateway ships, so a candidate's count is a sum rather than a fresh count of every message
+     * in it. Messages are keyed by identity: two equal messages are still two messages.
+     */
+    private record MessageCosts(int base, IdentityHashMap<MultimodalMessage, Integer> perMessage) {
+
+        static MessageCosts of(TokenEstimator estimator, ChatRequest request,
+                               BiFunction<ChatRequest, List<MultimodalMessage>, ChatRequest> rebuild) {
+            int base = estimator.estimateTokens(rebuild.apply(request, List.of()));
+            IdentityHashMap<MultimodalMessage, Integer> perMessage = new IdentityHashMap<>();
+            for (MultimodalMessage msg : request.getMessages()) {
+                perMessage.computeIfAbsent(msg,
+                        m -> estimator.estimateTokens(rebuild.apply(request, List.of(m))) - base);
+            }
+            return new MessageCosts(base, perMessage);
+        }
+
+        int of(MultimodalMessage msg) {
+            return perMessage.getOrDefault(msg, 0);
+        }
+
+        int total(List<MultimodalMessage> messages) {
+            int total = base;
+            for (MultimodalMessage msg : messages) {
+                total += of(msg);
+            }
+            return total;
+        }
     }
 
     private ChatRequest rebuildRequest(ChatRequest original, List<MultimodalMessage> messages) {

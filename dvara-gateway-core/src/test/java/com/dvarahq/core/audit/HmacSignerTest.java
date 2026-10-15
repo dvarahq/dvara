@@ -243,4 +243,43 @@ class HmacSignerTest {
         assertThat(HmacSigner.renderPayload(event.payload())).isEqualTo("{\"k\":\"a\\u0008b\\\"c\"}");
         assertThat(HmacSigner.escapeJsonStrict("\u007F\u2028")).as("legal raw in JSON, left alone").isEqualTo("\u007F\u2028");
     }
+
+    /** The keyed Mac is reused across calls; switching secrets must still sign with the one given. */
+    @Test
+    void sign_matchesAFreshMac_acrossAlternatingSecrets() throws Exception {
+        for (int i = 0; i < 6; i++) {
+            String secret = i % 2 == 0 ? SECRET : "rotated-secret";
+            assertThat(HmacSigner.sign("event-" + i, secret)).isEqualTo(freshHmac("event-" + i, secret));
+        }
+    }
+
+    /** Concurrent signers each get their own state, so no signature is a mix of two inputs. */
+    @Test
+    void sign_isCorrectUnderConcurrency() throws Exception {
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(8)) {
+            var futures = new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+            for (int t = 0; t < 8; t++) {
+                int thread = t;
+                futures.add(pool.submit(() -> {
+                    for (int i = 0; i < 2_000; i++) {
+                        String data = "t" + thread + "-" + i;
+                        if (!HmacSigner.sign(data, SECRET).equals(freshHmac(data, SECRET))) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }));
+            }
+            for (var f : futures) {
+                assertThat(f.get()).isTrue();
+            }
+        }
+    }
+
+    private static String freshHmac(String data, String secret) throws Exception {
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(
+                secret.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256"));
+        return java.util.HexFormat.of().formatHex(mac.doFinal(data.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
 }

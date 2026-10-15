@@ -16,6 +16,7 @@
 package com.dvarahq.policy.guardrail;
 
 import com.dvarahq.core.guardrail.GuardrailCategory;
+import com.dvarahq.core.util.RegexPrecheck;
 import com.dvarahq.core.util.TtlLruCache;
 
 import java.util.ArrayList;
@@ -114,7 +115,8 @@ public class InjectionPatternRegistry {
 
         // Jailbreak patterns
         patterns.add(pattern("ignore\\s+(all\\s+)?previous\\s+instructions",
-                GuardrailCategory.JAILBREAK, "ignore-previous-instructions", 0.95, "jb-001"));
+                GuardrailCategory.JAILBREAK, "ignore-previous-instructions", 0.95, "jb-001",
+                RegexPrecheck.containsAnyIgnoreCase("ignore")));
         // "pretend you are" alone is how many legitimate role-play prompts begin ("pretend you are a
         // patient tutor"), so the bare phrase would be a refusal under BLOCK. What makes it an attack
         // is what follows: a different model, no model at all, or an unconstrained persona.
@@ -122,21 +124,27 @@ public class InjectionPatternRegistry {
                         + "(?:an?\\s+|the\\s+)?(?:ai|chatgpt|claude|gpt|dan|human|person|sentient|"
                         + "unrestricted|uncensored|unfiltered|unlimited|jailbroken|evil|amoral|"
                         + "language\\s+model)\\b",
-                GuardrailCategory.JAILBREAK, "pretend-you-are", 0.85, "jb-002"));
+                GuardrailCategory.JAILBREAK, "pretend-you-are", 0.85, "jb-002",
+                RegexPrecheck.containsAnyIgnoreCase("pretend")));
         patterns.add(pattern("act\\s+as\\s+DAN",
-                GuardrailCategory.JAILBREAK, "act-as-dan", 0.95, "jb-003"));
+                GuardrailCategory.JAILBREAK, "act-as-dan", 0.95, "jb-003",
+                RegexPrecheck.containsAnyIgnoreCase("dan")));
         patterns.add(pattern("do\\s+anything\\s+now",
-                GuardrailCategory.JAILBREAK, "do-anything-now", 0.9, "jb-004"));
+                GuardrailCategory.JAILBREAK, "do-anything-now", 0.9, "jb-004",
+                RegexPrecheck.containsAnyIgnoreCase("anything")));
         patterns.add(pattern("developer\\s+mode\\s+(enabled|activated|on)",
-                GuardrailCategory.JAILBREAK, "developer-mode", 0.9, "jb-005"));
+                GuardrailCategory.JAILBREAK, "developer-mode", 0.9, "jb-005",
+                RegexPrecheck.containsAnyIgnoreCase("developer")));
         // The bare phrase "you are now" appears in ordinary prose ("you are now ready to deploy").
         // The attack is a persona or mode reassignment, so the pattern requires one.
         patterns.add(pattern("you\\s+are\\s+now\\s+(?:in\\s+)?(?:an?\\s+|the\\s+)?(?:\\w+\\s+){0,2}"
                         + "(?:mode|dan|ai|assistant|bot|model|persona|character|admin|root|developer|"
                         + "unrestricted|uncensored|unfiltered|unlimited|jailbroken|evil|amoral)\\b",
-                GuardrailCategory.JAILBREAK, "you-are-now", 0.8, "jb-006"));
+                GuardrailCategory.JAILBREAK, "you-are-now", 0.8, "jb-006",
+                RegexPrecheck.containsAnyIgnoreCase("now")));
         patterns.add(pattern("new\\s+instructions\\s*:",
-                GuardrailCategory.JAILBREAK, "new-instructions", 0.85, "jb-007"));
+                GuardrailCategory.JAILBREAK, "new-instructions", 0.85, "jb-007",
+                RegexPrecheck.containsAnyIgnoreCase("instructions")));
         // The bare word would fire on any mention: a security team asking how to test for
         // jailbreaks, a changelog. Asking about the concept is not attempting it, so the pattern
         // needs an attempt.
@@ -144,70 +152,100 @@ public class InjectionPatternRegistry {
                         + "|\\b(?:jailbreak|jailbreaking|jailbroken)\\s+"
                         + "(?:you|yourself|this|the\\s+(?:ai|model|assistant|bot)|"
                         + "your\\s+(?:rules|restrictions|guidelines))\\b)",
-                GuardrailCategory.JAILBREAK, "jailbreak-attempt", 0.8, "jb-008"));
+                GuardrailCategory.JAILBREAK, "jailbreak-attempt", 0.8, "jb-008",
+                RegexPrecheck.containsAnyIgnoreCase("jailbr")));
         patterns.add(pattern("bypass\\s+(all\\s+)?restrictions",
-                GuardrailCategory.JAILBREAK, "bypass-restrictions", 0.9, "jb-009"));
+                GuardrailCategory.JAILBREAK, "bypass-restrictions", 0.9, "jb-009",
+                RegexPrecheck.containsAnyIgnoreCase("restrictions")));
         patterns.add(pattern("unlimited\\s+mode",
-                GuardrailCategory.JAILBREAK, "unlimited-mode", 0.85, "jb-010"));
+                GuardrailCategory.JAILBREAK, "unlimited-mode", 0.85, "jb-010",
+                RegexPrecheck.containsAnyIgnoreCase("unlimited")));
 
         // Prompt injection patterns
         patterns.add(pattern("disregard\\s+(the\\s+)?above",
-                GuardrailCategory.INJECTION, "disregard-above", 0.9, "inj-001"));
+                GuardrailCategory.INJECTION, "disregard-above", 0.9, "inj-001",
+                RegexPrecheck.containsAnyIgnoreCase("disregard")));
         patterns.add(pattern("forget\\s+everything\\s+(above|before|previously)",
-                GuardrailCategory.INJECTION, "forget-everything", 0.9, "inj-002"));
+                GuardrailCategory.INJECTION, "forget-everything", 0.9, "inj-002",
+                RegexPrecheck.containsAnyIgnoreCase("forget")));
         patterns.add(pattern("override\\s+(your\\s+)?safety",
-                GuardrailCategory.INJECTION, "override-safety", 0.95, "inj-003"));
+                GuardrailCategory.INJECTION, "override-safety", 0.95, "inj-003",
+                RegexPrecheck.containsAnyIgnoreCase("override")));
         patterns.add(pattern("bypass\\s+(your\\s+)?filters",
-                GuardrailCategory.INJECTION, "bypass-filters", 0.9, "inj-004"));
+                GuardrailCategory.INJECTION, "bypass-filters", 0.9, "inj-004",
+                RegexPrecheck.containsAnyIgnoreCase("filters")));
         patterns.add(pattern("\\[INST\\]",
-                GuardrailCategory.INJECTION, "inst-delimiter", 0.85, "inj-005"));
+                GuardrailCategory.INJECTION, "inst-delimiter", 0.85, "inj-005",
+                RegexPrecheck.containsAnyIgnoreCase("[inst]")));
         patterns.add(pattern("<<SYS>>",
-                GuardrailCategory.INJECTION, "sys-delimiter", 0.85, "inj-006"));
+                GuardrailCategory.INJECTION, "sys-delimiter", 0.85, "inj-006",
+                RegexPrecheck.containsAnyIgnoreCase("<<sys>>")));
         patterns.add(pattern("```\\s*(system|instruction)",
-                GuardrailCategory.INJECTION, "code-block-injection", 0.8, "inj-007"));
+                GuardrailCategory.INJECTION, "code-block-injection", 0.8, "inj-007",
+                RegexPrecheck.containsAnyIgnoreCase("```")));
         patterns.add(pattern("IMPORTANT\\s*:\\s*new\\s+task",
-                GuardrailCategory.INJECTION, "important-new-task", 0.85, "inj-008"));
+                GuardrailCategory.INJECTION, "important-new-task", 0.85, "inj-008",
+                RegexPrecheck.containsAnyIgnoreCase("important")));
         patterns.add(pattern("system\\s*:\\s*you\\s+are",
-                GuardrailCategory.INJECTION, "system-role-injection", 0.9, "inj-009"));
+                GuardrailCategory.INJECTION, "system-role-injection", 0.9, "inj-009",
+                RegexPrecheck.containsAnyIgnoreCase("system")));
 
         // Indirect injection patterns
         patterns.add(pattern("instructions\\s+for\\s+the\\s+AI",
-                GuardrailCategory.INJECTION, "instructions-for-ai", 0.8, "ind-001"));
+                GuardrailCategory.INJECTION, "instructions-for-ai", 0.8, "ind-001",
+                RegexPrecheck.containsAnyIgnoreCase("instructions")));
         patterns.add(pattern("when\\s+you\\s+see\\s+this",
-                GuardrailCategory.INJECTION, "when-you-see-this", 0.75, "ind-002"));
+                GuardrailCategory.INJECTION, "when-you-see-this", 0.75, "ind-002",
+                RegexPrecheck.containsAnyIgnoreCase("see")));
         patterns.add(pattern("[\\u200B\\u200C\\u200D\\uFEFF]",
-                GuardrailCategory.INJECTION, "zero-width-chars", 0.7, "ind-003"));
+                GuardrailCategory.INJECTION, "zero-width-chars", 0.7, "ind-003",
+                RegexPrecheck.containsAny("\u200B", "\u200C", "\u200D", "\uFEFF")));
         patterns.add(pattern("ignore\\s+all\\s+safety\\s+guidelines",
-                GuardrailCategory.INJECTION, "ignore-safety-guidelines", 0.95, "inj-010"));
+                GuardrailCategory.INJECTION, "ignore-safety-guidelines", 0.95, "inj-010",
+                RegexPrecheck.containsAnyIgnoreCase("safety")));
 
         // System prompt leakage / extraction attempts (OWASP LLM07)
         patterns.add(pattern("(repeat|print|show|display|output|reveal|tell)\\s+(me\\s+)?(your|the)\\s+(system\\s+prompt|instructions|initial\\s+prompt|rules)",
-                GuardrailCategory.JAILBREAK, "system-prompt-extraction", 0.9, "spl-001"));
+                GuardrailCategory.JAILBREAK, "system-prompt-extraction", 0.9, "spl-001",
+                RegexPrecheck.containsAnyIgnoreCase("prompt", "instructions", "rules")));
         patterns.add(pattern("what\\s+(are|were)\\s+your\\s+(original\\s+)?instructions",
-                GuardrailCategory.JAILBREAK, "what-are-instructions", 0.85, "spl-002"));
+                GuardrailCategory.JAILBREAK, "what-are-instructions", 0.85, "spl-002",
+                RegexPrecheck.containsAnyIgnoreCase("instructions")));
         patterns.add(pattern("output\\s+everything\\s+(above|before)",
-                GuardrailCategory.JAILBREAK, "output-everything-above", 0.9, "spl-003"));
+                GuardrailCategory.JAILBREAK, "output-everything-above", 0.9, "spl-003",
+                RegexPrecheck.containsAnyIgnoreCase("everything")));
         patterns.add(pattern("repeat\\s+the\\s+text\\s+above",
-                GuardrailCategory.JAILBREAK, "repeat-text-above", 0.85, "spl-004"));
+                GuardrailCategory.JAILBREAK, "repeat-text-above", 0.85, "spl-004",
+                RegexPrecheck.containsAnyIgnoreCase("repeat")));
         patterns.add(pattern("what\\s+were\\s+you\\s+told",
-                GuardrailCategory.JAILBREAK, "what-were-you-told", 0.8, "spl-005"));
+                GuardrailCategory.JAILBREAK, "what-were-you-told", 0.8, "spl-005",
+                RegexPrecheck.containsAnyIgnoreCase("told")));
         // The gap is bounded, so a long line that repeats "ignore" is scanned in linear time. "." stops at a
         // line break, so the rule never matched across lines either.
         patterns.add(pattern("(ignore|disregard).{0,1000}output\\s+(your\\s+)?(initial|original|system)\\s+prompt",
-                GuardrailCategory.JAILBREAK, "ignore-output-prompt", 0.95, "spl-006"));
+                GuardrailCategory.JAILBREAK, "ignore-output-prompt", 0.95, "spl-006",
+                RegexPrecheck.containsAnyIgnoreCase("prompt")));
         patterns.add(pattern("(translate|convert|encode)\\s+your\\s+(system\\s+)?prompt",
-                GuardrailCategory.JAILBREAK, "encode-system-prompt", 0.85, "spl-007"));
+                GuardrailCategory.JAILBREAK, "encode-system-prompt", 0.85, "spl-007",
+                RegexPrecheck.containsAnyIgnoreCase("prompt")));
         patterns.add(pattern("(give|provide)\\s+me\\s+(your\\s+)?(complete\\s+)?system\\s+(message|prompt)",
-                GuardrailCategory.JAILBREAK, "give-system-prompt", 0.9, "spl-008"));
+                GuardrailCategory.JAILBREAK, "give-system-prompt", 0.9, "spl-008",
+                RegexPrecheck.containsAnyIgnoreCase("system")));
 
         return Collections.unmodifiableList(patterns);
     }
 
+    /**
+     * A built-in pattern, case-insensitive, with the precheck that lets a scan skip it: words every
+     * match contains, so a text with none of them cannot match. Chosen from the pattern by hand, and
+     * checked against the pattern's own test strings by the registry's tests.
+     */
     private static PatternEntry pattern(String regex, GuardrailCategory category,
-                                         String label, double riskScore, String ruleId) {
+                                         String label, double riskScore, String ruleId,
+                                         RegexPrecheck precheck) {
         return new PatternEntry(
                 Pattern.compile(regex, Pattern.CASE_INSENSITIVE),
-                category, label, riskScore, ruleId);
+                category, label, riskScore, ruleId, precheck);
     }
 
     /**
@@ -218,6 +256,17 @@ public class InjectionPatternRegistry {
             GuardrailCategory category,
             String label,
             double riskScore,
-            String ruleId) {
+            String ruleId,
+            RegexPrecheck precheck) {
+
+        /** A pattern with no precheck, which always runs: what a custom pattern gets. */
+        public PatternEntry(Pattern pattern, GuardrailCategory category, String label, double riskScore,
+                            String ruleId) {
+            this(pattern, category, label, riskScore, ruleId, RegexPrecheck.ALWAYS);
+        }
+
+        public PatternEntry {
+            precheck = precheck == null ? RegexPrecheck.ALWAYS : precheck;
+        }
     }
 }

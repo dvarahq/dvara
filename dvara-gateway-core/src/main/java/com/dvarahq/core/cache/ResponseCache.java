@@ -34,6 +34,18 @@ public interface ResponseCache {
     void put(ChatRequest request, ChatResponse response);
 
 
+    /**
+     * Whether this cache can neither serve nor store anything for the workspace. When it answers
+     * {@code true} the request path neither looks up nor stores, and skips building the cache key,
+     * which for a workspace with PII on means a second scan of the whole request.
+     *
+     * <p>The default is {@code false}, so an implementation that does not answer is asked as before.
+     * Answer {@code true} only when a lookup would certainly miss and a store would keep nothing.
+     */
+    default boolean skips(String workspaceId) {
+        return false;
+    }
+
     default void clear() {
         // no-op by default
     }

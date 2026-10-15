@@ -758,6 +758,10 @@ actuator endpoints to `DVARA_ACTUATOR_API_KEY`; with a key unset, that endpoint 
 Traces go to OpenTelemetry when `OTEL_EXPORTER_OTLP_ENDPOINT` names a collector and nowhere
 otherwise.
 
+Every request is traced by default (`TRACING_SAMPLING_PROBABILITY=1.0`), which suits development.
+Each traced request costs a few percent of the gateway's CPU at high rates, so in production set a
+lower rate, such as `0.1`, unless every trace is needed.
+
 ## Use it as a library
 
 The gateway is nine Maven modules, and three of them are the ways in:

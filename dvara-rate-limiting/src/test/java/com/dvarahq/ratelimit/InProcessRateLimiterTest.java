@@ -443,4 +443,14 @@ class InProcessRateLimiterTest extends RateLimiterContract {
                 .as("the override's rate of 4 is the capacity too, not the install's 100")
                 .isLessThan(10);
     }
+
+    /** Off, or no token cap anywhere: the filter need not count, because nothing would read it. */
+    @Test
+    void itIgnoresTokensOnlyWhenOffOrUncapped() {
+        assertThat(limiter(false, 100, 1_000).ignoresTokens(EffectiveRateLimit.NONE)).as("off").isTrue();
+        assertThat(limiter(true, 100, 0).ignoresTokens(EffectiveRateLimit.NONE)).as("no token cap").isTrue();
+        assertThat(limiter(true, 100, 0).ignoresTokens(new EffectiveRateLimit(50, 0)))
+                .as("a request-only override adds no token cap").isTrue();
+        assertThat(limiter(true, 100, 1_000).ignoresTokens(EffectiveRateLimit.NONE)).as("capped").isFalse();
+    }
 }

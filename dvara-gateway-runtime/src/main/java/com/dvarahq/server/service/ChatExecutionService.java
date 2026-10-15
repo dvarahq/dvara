@@ -224,13 +224,16 @@ public class ChatExecutionService {
         uncacheable = uncacheable || internalRequest.getGemini() != null;
         boolean bypassCache = uncacheable || "no-cache".equalsIgnoreCase(httpRequest.getHeader("X-Cache-Control"));
 
+        // Whether a cache can serve or keep this request at all. When none can, the cache key is never
+        // built: for a workspace with PII on, building it is a second scan of the whole request.
+        boolean cacheable = responseCache != null && !uncacheable && !responseCache.skips(workspaceId);
+
         // PII-stripped form used as the cache key on BOTH get and put so lookup and store hash
         // to the same key. The dispatcher below still calls upstream with the original request.
-        ChatRequest cacheRequest = piiEnforcer.stripForCache(internalRequest, workspaceId);
+        ChatRequest cacheRequest = cacheable ? piiEnforcer.stripForCache(internalRequest, workspaceId) : null;
 
-        if (!bypassCache) {
-            Optional<ChatResponse> cached =
-                    responseCache == null ? Optional.empty() : responseCache.get(cacheRequest);
+        if (cacheable && !bypassCache) {
+            Optional<ChatResponse> cached = responseCache.get(cacheRequest);
             if (cached.isPresent()) {
                 // Drop the cached response's gateway headers first. They describe the upstream call
                 // that filled the cache, not this one, so after this point anything on gatewayHeaders
@@ -254,7 +257,7 @@ public class ChatExecutionService {
                     // Evict, so the cache does not go on storing a response the current policy will
                     // never allow. Eviction is best-effort and never masks the refusal.
                     try {
-                        if (responseCache != null) {
+                        if (cacheable) {
                             responseCache.evict(cacheRequest);
                         }
                         log.info("Semantic cache entry evicted after the output pipeline refused it "
@@ -302,7 +305,7 @@ public class ChatExecutionService {
                     response == null, false);
         }
 
-        if (responseCache != null && !uncacheable) {
+        if (cacheable) {
             responseCache.put(cacheRequest, response);
         }
         // restore PII tokens for the client ONLY after the cache write, so the

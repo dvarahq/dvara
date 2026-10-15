@@ -93,10 +93,19 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
             apiKey = ApiKeyAuthFilter.UNAUTHENTICATED;
         }
 
-        // Estimate tokens for pre-request token budget check
+        // This workspace's per-key override; ApiKeyAuthFilter, which runs just before this filter,
+        // stamped WORKSPACE_ID_ATTR. NONE means the limiter uses its global defaults.
+        EffectiveRateLimit override = EffectiveRateLimit.NONE;
+        if (workspaceRateLimitResolver != null) {
+            override = workspaceRateLimitResolver.resolve((String) request.getAttribute(WORKSPACE_ID_ATTR));
+        }
+
+        // Estimate tokens for the pre-request token budget check, only when a token cap applies.
+        // Counting is the costliest step of admission, and a limiter that is off or caps no tokens
+        // for this workspace would throw the figure away. Not counting leaves the body unread here.
         int estimatedTokens = 0;
         HttpServletRequest effectiveRequest = request;
-        if (tokenEstimator != null && isTokenMeteredRequest(request)) {
+        if (tokenEstimator != null && isTokenMeteredRequest(request) && !rateLimiter.ignoresTokens(override)) {
             int contentLength = request.getContentLength();
             // Skip estimation for oversized bodies (avoids OOM)
             if (contentLength < 0 || contentLength <= MAX_ESTIMATION_BODY_BYTES) {
@@ -118,13 +127,6 @@ public class RateLimitServletFilter extends OncePerRequestFilter {
                     effectiveRequest = new CachedBodyRequestWrapper(request, body);
                 }
             }
-        }
-
-        // This workspace's per-key override; ApiKeyAuthFilter, which runs just before this filter,
-        // stamped WORKSPACE_ID_ATTR. NONE means the limiter uses its global defaults.
-        EffectiveRateLimit override = EffectiveRateLimit.NONE;
-        if (workspaceRateLimitResolver != null) {
-            override = workspaceRateLimitResolver.resolve((String) request.getAttribute(WORKSPACE_ID_ATTR));
         }
 
         // What this request reserved, for whoever settles it: the real figure arrives in
