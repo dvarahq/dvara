@@ -27,6 +27,74 @@ jobs:
       - name: Build and test
         run: ./mvnw -B -ntp clean install
 
+  # Build the image on every change and start it. Otherwise the Dockerfile ran for the first time at
+  # a release, when a broken step can no longer be fixed before the tag. linux/amd64 only: the point
+  # is to run every step once, not to publish.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+
+      - name: Build the runnable jar
+        run: |
+          set -euo pipefail
+          ./mvnw -B -ntp -DskipTests -pl dvara-gateway-server -am package
+          mkdir -p dvara-gateway-server/target/image
+          cp dvara-gateway-server/target/dvara-gateway-server-*-app.jar dvara-gateway-server/target/image/app.jar
+
+      - name: Build the image
+        run: docker build -t dvara-gateway-oss:ci -f dvara-gateway-server/Dockerfile dvara-gateway-server/target/image
+
+      # A wrong option must stop the boot: a check that a good one boots proves nothing. Then the good
+      # ones are read back with where each came from: the image defaults from the environment, the
+      # option added in JDK_JAVA_OPTIONS from the command line, winning over the default.
+      - name: JVM options reach the JVM
+        run: |
+          set -euo pipefail
+          if docker run --rm -e JDK_JAVA_OPTIONS=-XX:+DvaraNoSuchOption dvara-gateway-oss:ci > bogus.log 2>&1; then
+            echo "::error::the image booted with an unknown JVM option, so options set there are not read"; exit 1
+          fi
+          grep -q "Unrecognized VM option 'DvaraNoSuchOption'" bogus.log \
+            || { echo "::error::the boot failed, but not on the unknown option:"; cat bogus.log; exit 1; }
+          docker run -d --name jvm-flags -e JDK_JAVA_OPTIONS="-XX:+PrintFlagsFinal -XX:MaxRAMPercentage=61" \
+            dvara-gateway-oss:ci >/dev/null
+          for _ in $(seq 1 30); do
+            grep -q ' MaxRAMPercentage ' <<< "$(docker logs jvm-flags 2>&1)" && break
+            sleep 1
+          done
+          flags=$(docker logs jvm-flags 2>&1)
+          docker rm -f jvm-flags >/dev/null
+          # Here-strings, not pipes: grep -q stops at its first match, and under pipefail the writer's SIGPIPE
+          # would fail a check that had matched.
+          for want in 'UseZGC *= true .*\{environment\}' 'AlwaysPreTouch *= true .*\{environment\}' \
+                      'ExitOnOutOfMemoryError *= true .*\{environment\}' 'MaxRAMPercentage *= 61\.0* .*\{command line\}' \
+                      'AOTCache *= /app/app\.aot .*\{command line\}'; do
+            grep -q -E " $want" <<< "$flags" || { echo "::error::no flag matching '$want'"; exit 1; }
+          done
+
+      # The gateway starts and answers, from the AOT cache: a cache the JVM cannot use is skipped with a
+      # log line rather than an error, so only the log shows it.
+      - name: The image starts and uses its AOT cache
+        run: |
+          set -euo pipefail
+          docker run -d --name gateway -p 8080:8080 dvara-gateway-oss:ci >/dev/null
+          for _ in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:8080/actuator/health/liveness && break
+            sleep 1
+          done
+          curl -sf -o /dev/null http://127.0.0.1:8080/actuator/health/liveness \
+            || { docker logs gateway; echo "::error::the gateway did not answer its liveness probe"; exit 1; }
+          if docker logs gateway 2>&1 | grep -q 'Unable to use AOT cache'; then
+            docker logs gateway 2>&1 | grep -i aot; echo "::error::the JVM did not use the image's AOT cache"; exit 1
+          fi
+          docker rm -f gateway >/dev/null
+
   # Snapshots go to Maven Central's snapshot repository, which anybody can read with no
   # credential at all.
   #

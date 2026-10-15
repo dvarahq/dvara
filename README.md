@@ -741,6 +741,35 @@ The image `ghcr.io/dvarahq/dvara-gateway-oss` is the same jar with a JRE. Its wo
 environment variable above is passed with `-e`. To keep the audit log, mount a volume at
 `/var/lib/dvara` and point `DVARA_AUDIT_FILE_PATH` into it. Pin a version tag in production.
 
+### JVM options in the image
+
+The image starts Java directly, with no shell, so `JAVA_OPTS` does nothing. Its defaults are in
+`JAVA_TOOL_OPTIONS`: `-XX:+UseZGC -XX:MaxRAMPercentage=75 -XX:+AlwaysPreTouch
+-XX:+ExitOnOutOfMemoryError`. Add or change an option with `JDK_JAVA_OPTIONS`, which comes after the
+defaults, so its value wins: `-e JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=60`. Setting
+`JAVA_TOOL_OPTIONS` replaces all the defaults. To run G1, pass `-XX:-UseZGC -XX:+UseG1GC`; naming a
+second collector without turning ZGC off stops the boot. A wrong option always stops the boot with
+`Unrecognized VM option`, so a typo cannot go unnoticed.
+
+The image carries an AOT cache (`/app/app.aot`), built when the image is built by starting the
+gateway once. It makes startup about a third faster. It was built under ZGC: under another collector
+the JVM logs that it cannot use the cache and starts without it.
+
+### Calls to providers
+
+Every provider is called through the JDK HTTP client. It keeps idle connections to each provider and
+opens another whenever all are busy, so calls do not queue for a small pool.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DVARA_UPSTREAM_HTTP_CONNECT_TIMEOUT` | `10s` | Time to open a connection to a provider |
+| `DVARA_UPSTREAM_HTTP_READ_TIMEOUT` | none | Longest wait for an answer to start; none, since a slow model can take minutes |
+| `DVARA_UPSTREAM_HTTP_VERSION` | HTTP/2 where offered | `HTTP_1_1` or `HTTP_2` |
+
+An empty value falls back to Spring Boot's `spring.http.clients.*` settings. The idle connections are
+tuned with JVM system properties in `JDK_JAVA_OPTIONS`: `-Djdk.httpclient.keepalive.timeout=<seconds>`
+and `-Djdk.httpclient.connectionPoolSize=<n>`.
+
 ### Providers without a key in the environment
 
 A provider that takes an API key is on when its key is set (`OPENAI_API_KEY`) or when its switch is

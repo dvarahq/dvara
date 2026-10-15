@@ -33,6 +33,7 @@ public class GatewayProperties {
     private RateLimitConfig rateLimit = new RateLimitConfig();
     private ImageFetchConfig imageFetch = new ImageFetchConfig();
     private ResponseLimitsConfig responseLimits = new ResponseLimitsConfig();
+    private UpstreamHttpConfig upstreamHttp = new UpstreamHttpConfig();
     /** Per-model context windows that override the window a provider declares for all its models. */
     private List<ModelLimit> modelLimits = new ArrayList<>();
     // Encryption (dvara.encryption.*) and region (dvara.region.*) live in their own
@@ -121,6 +122,23 @@ public class GatewayProperties {
          * larger streamed than whole.
          */
         private long maxStreamBytes = 128L * 1024 * 1024;
+    }
+
+    /**
+     * {@code dvara.llm-gateway.upstream-http}: the HTTP client every provider is called through. Each
+     * setting left empty falls back to {@code spring.http.clients.*}, then to the default named here.
+     */
+    @Data
+    public static class UpstreamHttpConfig {
+        /** {@code HTTP_1_1} or {@code HTTP_2}. Empty: HTTP/2 where the provider offers it, else HTTP/1.1. */
+        private java.net.http.HttpClient.Version version;
+        /** Time to open a connection to a provider. Default 10 s. */
+        private java.time.Duration connectTimeout;
+        /**
+         * Longest wait for the response to start. Default none: a slow model can take minutes before its
+         * first byte, and a streamed answer is not cut off once it has started.
+         */
+        private java.time.Duration readTimeout;
     }
 
     @Data
