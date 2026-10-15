@@ -19,10 +19,11 @@ RUN groupadd -r dvara && useradd -r -g dvara -d /app dvara
 # launcher puts it after these, and the last value of an option wins. Setting JAVA_TOOL_OPTIONS
 # replaces all of them.
 #
-# The garbage collector is the first option. To run G1 instead, set JDK_JAVA_OPTIONS to
-# "-XX:-UseZGC -XX:+UseG1GC"; the AOT cache was built under ZGC, so the JVM then starts without it
+# The garbage collector is the first option: G1. ZGC stalled under load when the gateway shared its
+# cores with other work, and G1 did not. To run ZGC instead, set JDK_JAVA_OPTIONS to
+# "-XX:-UseG1GC -XX:+UseZGC"; the AOT cache was built under G1, so the JVM then starts without it
 # and logs that it could not use it.
-ENV JAVA_TOOL_OPTIONS="-XX:+UseZGC -XX:MaxRAMPercentage=75 -XX:+AlwaysPreTouch -XX:+ExitOnOutOfMemoryError"
+ENV JAVA_TOOL_OPTIONS="-XX:+UseG1GC -XX:MaxRAMPercentage=75 -XX:+AlwaysPreTouch -XX:+ExitOnOutOfMemoryError"
 
 COPY --from=extract /app/extracted/dependencies/ ./
 COPY --from=extract /app/extracted/spring-boot-loader/ ./
