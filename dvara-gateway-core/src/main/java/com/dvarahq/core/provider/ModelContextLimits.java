@@ -18,7 +18,7 @@ package com.dvarahq.core.provider;
 import java.util.OptionalInt;
 
 /**
- * The context window of a single model, where it is known.
+ * The context window, and the output limit, of a single model, where they are known.
  *
  * <p>A provider declares one window for everything it serves ({@link ProviderCapabilities#maxContextTokens()}),
  * and models of the same provider differ widely: one accepts 128,000 tokens and another a million. The
@@ -39,4 +39,17 @@ public interface ModelContextLimits {
      * @return the model's context window in tokens, or empty when this source does not know the model
      */
     OptionalInt contextTokens(String provider, String model);
+
+    /**
+     * The most tokens the model can produce in one answer, where this source knows it. The model list shows it
+     * beside the context window. A provider declares no such figure, so a model no source knows is listed
+     * without one. Empty by default, so a source that knows only windows needs no change.
+     *
+     * @param provider the name of the provider that would serve the call ({@link LlmProvider#name()})
+     * @param model    the model as the caller sends it, prefix included where a provider is reached by one
+     * @return the model's output limit in tokens, or empty when this source does not know it
+     */
+    default OptionalInt outputTokens(String provider, String model) {
+        return OptionalInt.empty();
+    }
 }

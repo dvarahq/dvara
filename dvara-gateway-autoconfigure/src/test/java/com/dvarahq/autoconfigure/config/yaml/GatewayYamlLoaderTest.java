@@ -276,9 +276,24 @@ class GatewayYamlLoaderTest {
                 """);
         assertThat(GatewayYamlLoader.validate(config)).containsExactly(
                 "model_limits[0].model: required field is missing",
-                "model_limits[1].context_tokens: required, a positive number of tokens",
+                "model_limits[1]: needs context_tokens or output_tokens",
                 "model_limits[2].model: a '*' may appear only at the end",
-                "model_limits[3].context_tokens: required, a positive number of tokens");
+                "model_limits[3].context_tokens: a positive number of tokens");
+    }
+
+    @Test
+    void validate_aModelLimitMaySetOnlyAnOutputLimit() throws IOException {
+        GatewayYamlConfig config = parse("""
+                model_limits:
+                  - model: gpt-4.1
+                    output_tokens: 32768
+                  - model: gpt-4o
+                    context_tokens: 128000
+                    output_tokens: 0
+                """);
+        assertThat(config.getModelLimits().get(0).getOutputTokens()).isEqualTo(32_768);
+        assertThat(GatewayYamlLoader.validate(config)).containsExactly(
+                "model_limits[1].output_tokens: a positive number of tokens");
     }
 
     @Test

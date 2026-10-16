@@ -208,9 +208,14 @@ public class ModelsController {
             ModelListResponse.CapabilitiesDto providerCaps = byProvider.computeIfAbsent(entry.provider(),
                     p -> toCapabilitiesDto(p.capabilities()));
             OptionalInt own = ModelWindows.of(modelLimits, entry.provider().name(), entry.info().id());
-            ModelListResponse.CapabilitiesDto caps = own.isPresent()
-                    ? providerCaps.toBuilder().maxContextTokens(own.getAsInt()).build()
-                    : providerCaps;
+            OptionalInt output = ModelWindows.output(modelLimits, entry.provider().name(), entry.info().id());
+            ModelListResponse.CapabilitiesDto caps = providerCaps;
+            if (own.isPresent() || output.isPresent()) {
+                var builder = providerCaps.toBuilder();
+                own.ifPresent(builder::maxContextTokens);
+                output.ifPresent(builder::maxOutputTokens);
+                caps = builder.build();
+            }
             models.add(ModelListResponse.ModelData.builder()
                     .id(entry.info().id())
                     .object("model")

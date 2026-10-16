@@ -23,8 +23,8 @@ import java.util.List;
 import java.util.OptionalInt;
 
 /**
- * A model's own context window from the registered {@link ModelContextLimits} sources: the context-window
- * check and the model list read it the same way.
+ * A model's own context window, and its output limit, from the registered {@link ModelContextLimits} sources:
+ * the context-window check and the model list read them the same way.
  */
 public final class ModelWindows {
 
@@ -38,10 +38,23 @@ public final class ModelWindows {
      * throws or answers a non-positive window is passed over.
      */
     public static OptionalInt of(List<ModelContextLimits> sources, String provider, String model) {
+        return first(sources, provider, model, ModelContextLimits::contextTokens);
+    }
+
+    /** The output limit of the first source, in order, that knows it; empty when none does. */
+    public static OptionalInt output(List<ModelContextLimits> sources, String provider, String model) {
+        return first(sources, provider, model, ModelContextLimits::outputTokens);
+    }
+
+    private interface Lookup {
+        OptionalInt get(ModelContextLimits source, String provider, String model);
+    }
+
+    private static OptionalInt first(List<ModelContextLimits> sources, String provider, String model, Lookup lookup) {
         for (ModelContextLimits source : sources) {
             OptionalInt window;
             try {
-                window = source.contextTokens(provider, model);
+                window = lookup.get(source, provider, model);
             } catch (RuntimeException e) {
                 // A lookup that fails must not fail the caller; the provider's window still holds.
                 log.debug("Model limit source {} threw for {} on {}: {}",

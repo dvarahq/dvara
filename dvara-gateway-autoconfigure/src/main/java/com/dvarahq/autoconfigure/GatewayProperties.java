@@ -71,8 +71,10 @@ public class GatewayProperties {
         private String model;
         /** The provider this applies to ({@code openai}, {@code anthropic}, ...); empty means any provider. */
         private String provider;
-        /** The model's context window in tokens. */
+        /** The model's context window in tokens; 0 leaves the window to other sources. */
         private int contextTokens;
+        /** The most tokens the model can produce in one answer; 0 leaves it to other sources. */
+        private int outputTokens;
     }
 
     @Data

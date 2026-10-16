@@ -62,5 +62,9 @@ public class ModelListResponse {
         private boolean supportsJsonMode;
         @JsonProperty("max_context_tokens")
         private int maxContextTokens;
+        /** The most tokens the model can produce in one answer; left out when no source knows it. */
+        @JsonProperty("max_output_tokens")
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        private Integer maxOutputTokens;
     }
 }
