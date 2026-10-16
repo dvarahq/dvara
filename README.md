@@ -2,7 +2,7 @@
   <a href="https://dvarahq.com"><img src="https://dvarahq.com/img/logo.svg" alt="DVARA" width="120"></a>
 </p>
 
-<h1 align="center">DVARA LLM Gateway</h1>
+<h1 align="center">DVARA AI Gateway</h1>
 
 <p align="center">
   The open-source gateway of the <a href="https://dvarahq.com">DVARA</a> AI governance platform.<br>
