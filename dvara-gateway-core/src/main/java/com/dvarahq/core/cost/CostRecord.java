@@ -64,12 +64,19 @@ public class CostRecord {
     /** The part of {@code outputTokens} the model spent reasoning. */
     private int reasoningTokens;
 
+    /**
+     * Whether the token counts this was priced from were estimated by the gateway (a stream whose upstream sent no
+     * usage block) rather than reported by the provider: the same flag the usage row carries. A primitive, as every
+     * flag a record carries between processes is: a null on the wire can cost a whole batch.
+     */
+    private boolean estimated;
+
     /** A record with no cache or reasoning breakdown. */
     public CostRecord(String id, String workspaceId, String apiKey, String model, String provider,
                       int inputTokens, int outputTokens, BigDecimal inputCost, BigDecimal outputCost,
                       BigDecimal totalCost, String currency, String pricingId, Map<String, String> tags,
                       Instant timestamp) {
         this(id, workspaceId, apiKey, model, provider, inputTokens, outputTokens, inputCost, outputCost,
-                totalCost, currency, pricingId, tags, timestamp, 0, 0, 0);
+                totalCost, currency, pricingId, tags, timestamp, 0, 0, 0, false);
     }
 }

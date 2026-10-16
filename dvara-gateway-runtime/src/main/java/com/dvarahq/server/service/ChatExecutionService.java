@@ -315,7 +315,7 @@ public class ChatExecutionService {
         recordTokens(httpRequest, response);
         Attribution who = Attribution.capture(httpRequest);
         persistTokenUsage(who, internalRequest, response, false, "MISS");
-        calculateCost(who, internalRequest, response);
+        calculateCost(who, internalRequest, response, false);
         httpRequest.setAttribute(AccessLogFilter.ATTR_CACHE_STATUS, "MISS");
         enrichTokenAttributes(httpRequest, response);
         return new SyncResult(response, false);
@@ -468,7 +468,7 @@ public class ChatExecutionService {
         // the controller triggers only after this tail has run; this is where they get tokens.
         enrichTokenAttributes(httpRequest, syntheticResponse);
         persistTokenUsage(who, streamRequest, syntheticResponse, estimated, "MISS");
-        calculateCost(who, streamRequest, syntheticResponse);
+        calculateCost(who, streamRequest, syntheticResponse, estimated);
 
         // The same pure estimator the sync path uses, not costCalculationService, which would
         // write a second cost row on top of the one calculateCost above has persisted.
@@ -500,7 +500,7 @@ public class ChatExecutionService {
                 .build();
         Attribution who = Attribution.capture(httpRequest);
         persistTokenUsage(who, governedRequest, synthetic, false, "MISS");
-        calculateCost(who, governedRequest, synthetic);
+        calculateCost(who, governedRequest, synthetic, false);
     }
 
     private void persistTokenUsage(Attribution who, ChatRequest callerRequest,
@@ -540,7 +540,8 @@ public class ChatExecutionService {
         usageListeners.forEach(listener -> listener.usageRecorded(workspaceId));
     }
 
-    private void calculateCost(Attribution who, ChatRequest callerRequest, ChatResponse response) {
+    /** @param estimated whether the token counts were estimated, as the usage row says; carried onto the cost row */
+    private void calculateCost(Attribution who, ChatRequest callerRequest, ChatResponse response, boolean estimated) {
         ChatRequest internalRequest = who.billed(callerRequest);
         String apiKeyId = who.apiKeyId();
         String provider = who.provider();
@@ -549,7 +550,7 @@ public class ChatExecutionService {
             return;
         }
         costCalculationService.calculateAndPersist(internalRequest, response, workspaceId,
-                        attributionId(apiKeyId), provider)   // the key id; never the live key
+                        attributionId(apiKeyId), provider, estimated)   // the key id; never the live key
                 .ifPresent(costRecord ->
                         metrics.recordCost(workspaceId, internalRequest.getModel(), provider,
                                 costRecord.getTotalCost().doubleValue()));
