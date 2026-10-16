@@ -597,6 +597,40 @@ model_limits:
   long conversation is bounded by the model's window, not by a count.
   `dvara.llm-gateway.guardrail.max-message-length` and `...max-messages-per-request` change them.
 
+### Counting tokens
+
+The gateway counts a request's tokens itself, for the rate limits, the context-window check and the usage of a
+stream that reports none. It counts each model by its family:
+
+- OpenAI models with their own vocabulary: `o200k_base` for GPT-4o, GPT-4.1, GPT-5, the o-series and gpt-oss,
+  `cl100k_base` for GPT-4 and GPT-3.5.
+- Every other family (Anthropic, Gemini, Mistral, DeepSeek, Llama, Qwen, Cohere, Grok) with `cl100k_base` as a
+  stand-in, since their own tokenizers are not available in the gateway. A model no family claims counts the same way.
+
+Two settings make the count closer to what a provider bills:
+
+```yaml
+dvara:
+  llm-gateway:
+    token-count:
+      corrections:            # multiply a family's count; 1.0 where none is set
+        anthropic: 1.0
+      vendor:
+        enabled: false        # ask the provider that would serve the request to count it
+        timeout: 300ms        # not waited for longer than this
+        ttl: 60s              # a request's count is kept this long
+        cache-size: 10000
+```
+
+- A correction should come from a measurement, not a guess. `TokenCountAccuracyTest` in `dvara-gateway-runtime`
+  compares the local count with each vendor's count and with what the provider billed, over samples in the repo:
+  run it with `-Ddvara.token-accuracy=true` and the providers' API keys in the environment.
+- The vendor mode asks Anthropic (`count_tokens`) and Gemini (`countTokens`), which bill nothing for it. It is a
+  network call on the request path, so it is off by default, cached, and gives up after the timeout. On any failure,
+  or for a provider with no counting endpoint, or before the request's workspace is known, the local count is used:
+  a count never fails a request. It sends the request's text to the provider under the credential the call would use.
+- To count some family another way, register your own `TokenizerResolver` bean.
+
 ### API keys
 
 Every request under `/v1` carries an API key, and a request without one is refused with `401`.
