@@ -32,8 +32,10 @@ import java.util.Map;
  * </ul>
  *
  * <p>Each family's count can be multiplied by a correction, {@code dvara.llm-gateway.token-count.corrections.<family>},
- * 1.0 where none is set. The values come from measuring the local count against what each provider bills
- * ({@code TokenCountAccuracyTest}); a correction is never guessed.
+ * and a request with tools can have a fixed number of tokens added, {@code dvara.llm-gateway.token-count.tool-overhead.<family>}.
+ * The values come from measuring the local count against what each provider bills ({@code TokenCountAccuracyTest});
+ * they are never guessed. A family with no measurement gets 1.0 and 0. The measured values ship as defaults
+ * ({@link #MEASURED_CORRECTIONS}, {@link #MEASURED_TOOL_OVERHEADS}), and a setting for a family replaces its default.
  *
  * <p>A provider prefix or path is ignored: {@code openai/gpt-4.1}, {@code anthropic.claude-sonnet-4-5} (Bedrock) and
  * {@code us.anthropic.claude-…} resolve as the model they name.
@@ -43,15 +45,51 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
     public static final String O200K = "o200k_base";
     public static final String CL100K = "cl100k_base";
 
-    private final Map<String, Double> corrections;
+    /**
+     * Measured with claude-haiku-4-5 on 2026-10-16: over prose, Java code and text in seven scripts, Anthropic billed
+     * 980 tokens where the cl100k stand-in counted 938. The error on one text ranged from 21% under (code) to 11% over
+     * (non-Latin scripts), so this corrects the total, not every text.
+     */
+    public static final Map<String, Double> MEASURED_CORRECTIONS = Map.of("anthropic", 1.05);
 
+    /**
+     * Measured with claude-haiku-4-5 on 2026-10-16: an agent turn with two tools was billed 920 tokens where the
+     * corrected count was 380. Anthropic adds its own instructions for tool use to every request that has tools.
+     */
+    public static final Map<String, Integer> MEASURED_TOOL_OVERHEADS = Map.of("anthropic", 540);
+
+    private final Map<String, Double> corrections;
+    private final Map<String, Integer> toolOverheads;
+
+    /** The measured defaults. */
     public DefaultTokenizerResolver() {
-        this(Map.of());
+        this(Map.of(), Map.of());
     }
 
-    /** @param corrections a factor per family; a missing, non-positive or non-finite one counts as 1.0 */
+    /** @param corrections a factor per family, over the measured ones; a non-positive or non-finite one counts as 1.0 */
     public DefaultTokenizerResolver(Map<String, Double> corrections) {
-        this.corrections = corrections == null ? Map.of() : Map.copyOf(corrections);
+        this(corrections, Map.of());
+    }
+
+    /**
+     * @param corrections   a factor per family, over the measured ones; a non-positive or non-finite one counts as 1.0
+     * @param toolOverheads tokens per family added to a request with tools, over the measured ones; a negative one
+     *                      counts as 0
+     */
+    public DefaultTokenizerResolver(Map<String, Double> corrections, Map<String, Integer> toolOverheads) {
+        this(corrections, toolOverheads, MEASURED_CORRECTIONS, MEASURED_TOOL_OVERHEADS);
+    }
+
+    private DefaultTokenizerResolver(Map<String, Double> corrections, Map<String, Integer> toolOverheads,
+                                     Map<String, Double> measuredCorrections,
+                                     Map<String, Integer> measuredToolOverheads) {
+        this.corrections = merged(measuredCorrections, corrections);
+        this.toolOverheads = merged(measuredToolOverheads, toolOverheads);
+    }
+
+    /** Each family's raw count: no correction and no tool overhead. What a measurement compares. */
+    public static DefaultTokenizerResolver uncorrected() {
+        return new DefaultTokenizerResolver(Map.of(), Map.of(), Map.of(), Map.of());
     }
 
     @Override
@@ -60,12 +98,29 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
         String family = family(name);
         boolean openai = "openai".equals(family);
         String encoding = openai && !olderOpenAi(name) ? O200K : CL100K;
-        return new Resolution(family, encoding, openai, correction(family));
+        return new Resolution(family, encoding, openai, correction(family), toolOverhead(family));
     }
 
     private double correction(String family) {
         Double factor = corrections.get(family);
         return factor == null || !Double.isFinite(factor) || factor <= 0 ? 1.0 : factor;
+    }
+
+    private int toolOverhead(String family) {
+        Integer tokens = toolOverheads.get(family);
+        return tokens == null || tokens < 0 ? 0 : tokens;
+    }
+
+    private static <V> Map<String, V> merged(Map<String, V> measured, Map<String, V> configured) {
+        Map<String, V> all = new java.util.HashMap<>(measured);
+        if (configured != null) {
+            configured.forEach((family, value) -> {
+                if (family != null && value != null) {
+                    all.put(family, value);
+                }
+            });
+        }
+        return Map.copyOf(all);
     }
 
     /** The model's own name: lower case, without a provider path or a Bedrock region and vendor prefix. */

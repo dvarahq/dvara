@@ -62,7 +62,8 @@ class DefaultTokenizerResolverTest {
         assertThat(r.family()).isEqualTo(family);
         assertThat(r.encoding()).isEqualTo(encoding);
         assertThat(r.exact()).isEqualTo(exact);
-        assertThat(r.correction()).isEqualTo(1.0);
+        assertThat(r.correction()).isEqualTo("anthropic".equals(family) ? 1.05 : 1.0);
+        assertThat(r.toolOverhead()).isEqualTo("anthropic".equals(family) ? 540 : 0);
     }
 
     @Test
@@ -96,7 +97,7 @@ class DefaultTokenizerResolverTest {
 
     @Test
     void aCorrectionScalesTheCountAndTheBoundStaysAboveIt() {
-        TiktokenEstimator plain = new TiktokenEstimator();
+        TiktokenEstimator plain = new TiktokenEstimator(DefaultTokenizerResolver.uncorrected());
         TiktokenEstimator corrected = new TiktokenEstimator(new DefaultTokenizerResolver(Map.of("anthropic", 1.5)));
         ChatRequest request = ask("claude-sonnet-4-5", "The quarterly review covered three areas in some detail.");
 
@@ -113,5 +114,22 @@ class DefaultTokenizerResolverTest {
         });
         assertThat(estimator.estimateTokens(ask("claude-sonnet-4-5", "hello there")))
                 .isEqualTo(new TiktokenEstimator().estimateTokens(ask("my-own-model", "hello there")));
+    }
+
+    @Test
+    void theMeasuredValuesAreTheDefaultsAndASettingReplacesOne() {
+        var resolver = new DefaultTokenizerResolver(Map.of("anthropic", 1.2), Map.of("gemini", 100));
+        assertThat(resolver.resolve("claude-haiku-4-5").correction()).as("setting wins").isEqualTo(1.2);
+        assertThat(resolver.resolve("claude-haiku-4-5").toolOverhead()).as("measured default kept").isEqualTo(540);
+        assertThat(resolver.resolve("gemini-3.8-flash").toolOverhead()).isEqualTo(100);
+        assertThat(new DefaultTokenizerResolver(Map.of(), Map.of("anthropic", -5)).resolve("claude-haiku-4-5")
+                .toolOverhead()).as("negative").isZero();
+    }
+
+    @Test
+    void uncorrectedIsTheRawCount() {
+        var raw = DefaultTokenizerResolver.uncorrected().resolve("claude-haiku-4-5");
+        assertThat(raw.correction()).isEqualTo(1.0);
+        assertThat(raw.toolOverhead()).isZero();
     }
 }

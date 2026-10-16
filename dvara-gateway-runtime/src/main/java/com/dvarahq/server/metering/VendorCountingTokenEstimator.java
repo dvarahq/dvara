@@ -32,11 +32,13 @@ import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Counts a request's tokens by asking the provider that would serve it, where that provider can count (Anthropic's
  * {@code count_tokens}, Gemini's {@code countTokens}), and falls back to the local count otherwise. Opt-in:
- * {@code dvara.llm-gateway.token-count.vendor.enabled}.
+ * {@code dvara.llm-gateway.token-count.vendor.enabled}, {@code true} for every request or {@code selected} for the
+ * requests a {@code VendorTokenCountSelector} picks.
  *
  * <p>The local count uses one vocabulary per family and a stand-in for families whose own tokenizer is not available
  * here; a vendor's count is that vendor's own. The price is a network call on the request path, so:
@@ -60,6 +62,7 @@ public class VendorCountingTokenEstimator implements TokenEstimator {
 
     private final TokenEstimator local;
     private final Function<ChatRequest, OptionalInt> vendor;
+    private final Predicate<ChatRequest> selected;
     private final Duration timeout;
     private final TtlLruCache<Integer> cache;
     private final int ttlSeconds;
@@ -73,8 +76,18 @@ public class VendorCountingTokenEstimator implements TokenEstimator {
      */
     public VendorCountingTokenEstimator(TokenEstimator local, Function<ChatRequest, OptionalInt> vendor,
                                         Duration timeout, Duration ttl, int cacheSize) {
+        this(local, vendor, request -> true, timeout, ttl, cacheSize);
+    }
+
+    /**
+     * @param selected which requests the vendor counts; the rest are counted locally
+     */
+    public VendorCountingTokenEstimator(TokenEstimator local, Function<ChatRequest, OptionalInt> vendor,
+                                        Predicate<ChatRequest> selected, Duration timeout, Duration ttl,
+                                        int cacheSize) {
         this.local = local;
         this.vendor = vendor;
+        this.selected = selected;
         this.timeout = timeout;
         this.ttlSeconds = (int) Math.max(1, ttl.toSeconds());
         this.cache = new TtlLruCache<>(Math.max(1, cacheSize), ttlSeconds);
@@ -82,7 +95,7 @@ public class VendorCountingTokenEstimator implements TokenEstimator {
 
     @Override
     public int estimateTokens(ChatRequest request) {
-        if (request == null || workspaceOf(request) == null) {
+        if (request == null || workspaceOf(request) == null || !isSelected(request)) {
             return local.estimateTokens(request);
         }
         String key = key(request);
@@ -108,6 +121,16 @@ public class VendorCountingTokenEstimator implements TokenEstimator {
     @Override
     public int upperBound(ChatRequest request) {
         return local.upperBound(request);
+    }
+
+    /** A selector that fails picks nothing: the local count is used. */
+    private boolean isSelected(ChatRequest request) {
+        try {
+            return selected.test(request);
+        } catch (RuntimeException e) {
+            log.debug("Vendor count selector failed for {}, counting locally: {}", request.getModel(), e.getMessage());
+            return false;
+        }
     }
 
     private OptionalInt askVendor(ChatRequest request) {

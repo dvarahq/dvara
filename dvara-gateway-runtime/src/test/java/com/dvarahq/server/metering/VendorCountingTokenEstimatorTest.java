@@ -135,4 +135,28 @@ class VendorCountingTokenEstimatorTest {
 
         assertThat(estimator.estimateTokens(request)).isEqualTo(local.estimateTokens(request));
     }
+
+    @Test
+    void aRequestTheSelectorDoesNotPickIsCountedLocally() {
+        AtomicInteger asked = new AtomicInteger();
+        var estimator = new VendorCountingTokenEstimator(local, r -> {
+            asked.incrementAndGet();
+            return OptionalInt.of(42);
+        }, r -> "ws-1".equals(r.getMetadata().get("workspace_id")), Duration.ofMillis(200), Duration.ofSeconds(60),
+                100);
+
+        assertThat(estimator.estimateTokens(request("ws-1", "hello there"))).isEqualTo(42);
+        ChatRequest other = request("ws-2", "hello there");
+        assertThat(estimator.estimateTokens(other)).isEqualTo(local.estimateTokens(other));
+        assertThat(asked.get()).isEqualTo(1);
+    }
+
+    @Test
+    void aSelectorThatFailsPicksNothing() {
+        var estimator = new VendorCountingTokenEstimator(local, r -> OptionalInt.of(42), r -> {
+            throw new IllegalStateException("store down");
+        }, Duration.ofMillis(200), Duration.ofSeconds(60), 100);
+        ChatRequest request = request("ws-1", "hello there");
+        assertThat(estimator.estimateTokens(request)).isEqualTo(local.estimateTokens(request));
+    }
 }

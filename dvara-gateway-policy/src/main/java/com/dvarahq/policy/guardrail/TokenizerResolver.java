@@ -29,9 +29,17 @@ public interface TokenizerResolver {
      * @param encoding   the BPE vocabulary its text is counted with: {@code o200k_base} or {@code cl100k_base}
      * @param exact      whether that vocabulary is the model's own. False for every family but OpenAI's: they are
      *                   counted with cl100k as a stand-in, since their own tokenizers are not available locally
-     * @param correction what a request's count is multiplied by, 1.0 by default; set per family from a measurement
+     * @param correction what a request's count is multiplied by, 1.0 where nothing was measured
+     * @param toolOverhead tokens added to the count of a request that carries tools, 0 where nothing was measured.
+     *                   Some providers put a fixed block of their own text in front of the tool definitions, which no
+     *                   count of the request itself sees
      */
-    record Resolution(String family, String encoding, boolean exact, double correction) {
+    record Resolution(String family, String encoding, boolean exact, double correction, int toolOverhead) {
+
+        /** No tool overhead. */
+        public Resolution(String family, String encoding, boolean exact, double correction) {
+            this(family, encoding, exact, correction, 0);
+        }
     }
 
     Resolution resolve(String model);
