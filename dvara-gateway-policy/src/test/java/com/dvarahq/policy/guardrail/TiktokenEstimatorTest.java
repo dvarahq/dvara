@@ -238,4 +238,31 @@ class TiktokenEstimatorTest {
                 .build();
         assertThat(estimator.estimateTokens(request)).isGreaterThan(7);
     }
+
+    @Test
+    void aClaudeRequestWithToolsAddsAnthropicsToolOverheadAndOneWithoutDoesNot() {
+        ToolDefinition tool = ToolDefinition.builder().name("lookup").description("Find a thing")
+                .parameters(Map.of("type", "object")).build();
+        ChatRequest plain = ChatRequest.builder().model("claude-haiku-4-5")
+                .messages(List.of(MultimodalMessage.user("Where is my order?"))).build();
+        ChatRequest withTools = plain.toBuilder().tools(List.of(tool)).build();
+        var raw = new TiktokenEstimator(DefaultTokenizerResolver.uncorrected());
+
+        assertThat(estimator.estimateTokens(plain))
+                .isEqualTo((int) Math.ceil(raw.estimateTokens(plain) * 1.05));
+        assertThat(estimator.estimateTokens(withTools))
+                .isEqualTo((int) Math.ceil(raw.estimateTokens(withTools) * 1.05) + 540);
+        assertThat(estimator.upperBound(withTools)).as("the bound stays above the count")
+                .isGreaterThanOrEqualTo(estimator.estimateTokens(withTools));
+    }
+
+    @Test
+    void anOpenAiRequestWithToolsAddsNothing() {
+        ToolDefinition tool = ToolDefinition.builder().name("lookup").description("Find a thing")
+                .parameters(Map.of("type", "object")).build();
+        ChatRequest withTools = ChatRequest.builder().model("gpt-4.1-mini").tools(List.of(tool))
+                .messages(List.of(MultimodalMessage.user("Where is my order?"))).build();
+        assertThat(estimator.estimateTokens(withTools))
+                .isEqualTo(new TiktokenEstimator(DefaultTokenizerResolver.uncorrected()).estimateTokens(withTools));
+    }
 }

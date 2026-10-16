@@ -607,28 +607,47 @@ stream that reports none. It counts each model by its family:
 - Every other family (Anthropic, Gemini, Mistral, DeepSeek, Llama, Qwen, Cohere, Grok) with `cl100k_base` as a
   stand-in, since their own tokenizers are not available in the gateway. A model no family claims counts the same way.
 
-Two settings make the count closer to what a provider bills:
+How close that is to what a provider bills was measured on 2026-10-16 over four samples (`TokenCountAccuracyTest`):
+
+| Provider | Plain text | A request with tools |
+|---|---|---|
+| OpenAI (gpt-4.1-mini) | Exact on prose, code and text in seven scripts | 19% over: OpenAI encodes tool definitions more compactly than JSON |
+| Anthropic (claude-haiku-4-5), raw stand-in count | From 21% under (code) to 11% over (non-Latin scripts) | 61% under: Anthropic adds its own text for tools |
+| Anthropic, with the measured correction | Within the same spread; under 1% over across the three texts together | Exact on the sample |
+
+So the gateway ships two measured defaults for Anthropic: its count is multiplied by 1.05, and a request with tools
+adds 540 tokens. Other families have no measurement yet and are counted as they are. An over-count is the safe
+direction for a limit; an under-count lets through a request that costs more than the limit allows.
+
+The settings:
 
 ```yaml
 dvara:
   llm-gateway:
     token-count:
-      corrections:            # multiply a family's count; 1.0 where none is set
-        anthropic: 1.0
+      corrections:            # multiply a family's count; replaces the measured default for that family
+        anthropic: 1.05
+      tool-overhead:          # tokens a request with tools adds; replaces the measured default for that family
+        anthropic: 540
       vendor:
-        enabled: false        # ask the provider that would serve the request to count it
+        enabled: false        # false, true (every request) or selected (the requests a selector picks)
         timeout: 300ms        # not waited for longer than this
         ttl: 60s              # a request's count is kept this long
         cache-size: 10000
 ```
 
 - A correction should come from a measurement, not a guess. `TokenCountAccuracyTest` in `dvara-gateway-runtime`
-  compares the local count with each vendor's count and with what the provider billed, over samples in the repo:
-  run it with `-Ddvara.token-accuracy=true` and the providers' API keys in the environment.
-- The vendor mode asks Anthropic (`count_tokens`) and Gemini (`countTokens`), which bill nothing for it. It is a
-  network call on the request path, so it is off by default, cached, and gives up after the timeout. On any failure,
-  or for a provider with no counting endpoint, or before the request's workspace is known, the local count is used:
-  a count never fails a request. It sends the request's text to the provider under the credential the call would use.
+  compares the raw and corrected counts with each vendor's count and with what the provider billed, over samples in
+  the repo: run it with `-Ddvara.token-accuracy=true` and the providers' API keys in the environment. It fails when a
+  key is set and no call with it succeeds, so a wrong key or a retired model is not read as a result.
+- The vendor count is the exact one for Anthropic and Gemini: it asks the provider (`count_tokens`, `countTokens`),
+  which bill nothing for it. Anthropic's count matched what it billed on every sample. It is a network call on the
+  request path, so it is off by default, cached, and gives up after the timeout. On any failure, or for a provider
+  with no counting endpoint, or before the request's workspace is known, the local count is used: a count never fails
+  a request. It sends the request's text to the provider under the credential the call would use.
+- `selected` asks the vendor only for the requests a `VendorTokenCountSelector` bean picks, for example the ones
+  checked against a cost limit before they are sent. Every other request keeps the local count and pays no network
+  call. With no selector registered, no request is picked.
 - To count some family another way, register your own `TokenizerResolver` bean.
 
 ### API keys

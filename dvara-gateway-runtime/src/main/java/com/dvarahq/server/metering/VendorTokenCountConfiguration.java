@@ -16,6 +16,7 @@
 package com.dvarahq.server.metering;
 
 import com.dvarahq.core.guardrail.TokenEstimator;
+import com.dvarahq.core.guardrail.VendorTokenCountSelector;
 import com.dvarahq.server.service.ProviderDispatcher;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -25,22 +26,39 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 
 import java.time.Duration;
+import java.util.Locale;
 import java.util.OptionalInt;
+import java.util.function.Predicate;
 
 /**
- * The vendor-count mode, off by default: {@code dvara.llm-gateway.token-count.vendor.enabled=true} makes every token
- * count of a request ask the provider that would serve it first (see {@link VendorCountingTokenEstimator}).
+ * The vendor-count mode, off by default. {@code dvara.llm-gateway.token-count.vendor.enabled} takes:
+ *
+ * <ul>
+ *   <li>{@code false}: every count is local.</li>
+ *   <li>{@code true}: every count of a request asks the provider that would serve it first (see
+ *       {@link VendorCountingTokenEstimator}).</li>
+ *   <li>{@code selected}: only the requests a {@link VendorTokenCountSelector} bean picks. With no selector, none.</li>
+ * </ul>
  *
  * <p>Wraps whichever {@link TokenEstimator} the application registered rather than replacing it, so the local count
  * underneath stays the one the build chose, and a host that registers its own keeps it.
  */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(name = "dvara.llm-gateway.token-count.vendor.enabled", havingValue = "true")
+@ConditionalOnProperty(name = "dvara.llm-gateway.token-count.vendor.enabled")
 public class VendorTokenCountConfiguration {
 
     @Bean
     static BeanPostProcessor vendorCountingTokenEstimatorWrapper(ObjectProvider<ProviderDispatcher> dispatcher,
+                                                                 ObjectProvider<VendorTokenCountSelector> selectors,
                                                                  Environment environment) {
+        String mode = environment.getProperty("dvara.llm-gateway.token-count.vendor.enabled", "false")
+                .strip().toLowerCase(Locale.ROOT);
+        if (!mode.equals("true") && !mode.equals("selected")) {
+            throw new IllegalStateException("dvara.llm-gateway.token-count.vendor.enabled is '" + mode
+                    + "'; it takes false, true or selected");
+        }
+        Predicate<com.dvarahq.core.model.ChatRequest> selected = mode.equals("true") ? request -> true
+                : request -> selectors.orderedStream().anyMatch(s -> s.wantsVendorCount(request));
         Duration timeout = environment.getProperty("dvara.llm-gateway.token-count.vendor.timeout", Duration.class,
                 Duration.ofMillis(300));
         Duration ttl = environment.getProperty("dvara.llm-gateway.token-count.vendor.ttl", Duration.class,
@@ -64,7 +82,7 @@ public class VendorTokenCountConfiguration {
                                          VendorCountingTokenEstimator.workspaceOf(request))) {
                         return d.countInputTokens(request);
                     }
-                }, timeout, ttl, cacheSize);
+                }, selected, timeout, ttl, cacheSize);
             }
         };
     }

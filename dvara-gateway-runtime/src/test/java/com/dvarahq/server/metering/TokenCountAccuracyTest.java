@@ -88,7 +88,7 @@ class TokenCountAccuracyTest {
                         "OPENAI_API_KEY", s -> new OpenAiProvider(s, "https://api.openai.com/v1", RestClient.builder())),
                 new Family("Anthropic", System.getProperty("dvara.token-accuracy.anthropic-model", "claude-haiku-4-5"),
                         "ANTHROPIC_API_KEY", s -> new AnthropicProvider(s, RestClient.builder())),
-                new Family("Gemini", System.getProperty("dvara.token-accuracy.gemini-model", "gemini-2.5-flash"),
+                new Family("Gemini", System.getProperty("dvara.token-accuracy.gemini-model", "gemini-3.8-flash"),
                         "GEMINI_API_KEY", s -> new GeminiProvider(s, "https://generativelanguage.googleapis.com",
                         RestClient.builder())),
                 // Counted locally with the cl100k fallback; no vendor column without a provider here.
@@ -132,7 +132,12 @@ class TokenCountAccuracyTest {
         return b.build();
     }
 
-    private final TiktokenEstimator local = new TiktokenEstimator();
+    /** The raw count: what the corrections are measured from. */
+    private final TiktokenEstimator local =
+            new TiktokenEstimator(com.dvarahq.policy.guardrail.DefaultTokenizerResolver.uncorrected());
+
+    /** The count the gateway uses, with the measured corrections. */
+    private final TiktokenEstimator corrected = new TiktokenEstimator();
 
     /** No network: every sample loads, and the local count is positive and the same every time. */
     @Test
@@ -146,8 +151,8 @@ class TokenCountAccuracyTest {
         }
     }
 
-    record Row(String sample, String family, String model, String vocabulary, int local, Integer vendor,
-               Integer billed, double localMicros) {
+    record Row(String sample, String family, String model, String vocabulary, int local, int corrected,
+               Integer vendor, Integer billed, double localMicros) {
     }
 
     /** The vocabulary the local count used for a model, and whether it is the model's own. */
@@ -160,17 +165,22 @@ class TokenCountAccuracyTest {
     @EnabledIfSystemProperty(named = "dvara.token-accuracy", matches = "true")
     void measure() throws IOException {
         List<Row> rows = new ArrayList<>();
+        List<String> unanswered = new ArrayList<>();
         for (Family family : families()) {
             String key = family.keyEnv() == null ? null : System.getenv(family.keyEnv());
             LlmProvider provider = key == null || key.isBlank() ? null
                     : family.provider().apply(secrets(family, key));
+            boolean answered = false;
             for (Sample sample : SAMPLES) {
                 ChatRequest request = request(sample, family.model());
-                int localCount = local.estimateTokens(request);
-                rows.add(new Row(sample.name(), family.name(), family.model(), vocabulary(family.model()), localCount,
-                        provider == null ? null : vendor(provider, request),
-                        provider == null ? null : billed(provider, request),
-                        microsPerCount(request)));
+                Integer billed = provider == null ? null : billed(provider, request);
+                answered |= billed != null;
+                rows.add(new Row(sample.name(), family.name(), family.model(), vocabulary(family.model()),
+                        local.estimateTokens(request), corrected.estimateTokens(request),
+                        provider == null ? null : vendor(provider, request), billed, microsPerCount(request)));
+            }
+            if (provider != null && !answered) {
+                unanswered.add(family.name() + " (" + family.model() + ")");
             }
         }
         String table = table(rows);
@@ -179,6 +189,8 @@ class TokenCountAccuracyTest {
         Files.writeString(out, table);
         System.out.println(table);
         assertThat(rows).hasSize(families().size() * SAMPLES.size());
+        // A key was given and no call with it was answered: a wrong key or a retired model, not a measurement.
+        assertThat(unanswered).as("families whose key was set but no call succeeded").isEmpty();
     }
 
     private static SecretProvider secrets(Family family, String key) {
@@ -223,30 +235,37 @@ class TokenCountAccuracyTest {
 
     static String table(List<Row> rows) {
         StringBuilder md = new StringBuilder();
-        md.append("| Sample | Family | Model | Local vocabulary | Local | Vendor count | Billed input | Local vs billed "
-                + "| Local cost (µs) |\n");
-        md.append("|---|---|---|---|--:|--:|--:|--:|--:|\n");
+        md.append("| Sample | Family | Model | Local vocabulary | Local | Corrected | Vendor count | Billed input "
+                + "| Local vs billed | Corrected vs billed | Local cost (µs) |\n");
+        md.append("|---|---|---|---|--:|--:|--:|--:|--:|--:|--:|\n");
         for (Row r : rows) {
             md.append("| ").append(r.sample()).append(" | ").append(r.family()).append(" | ").append(r.model())
                     .append(" | ").append(r.vocabulary())
                     .append(" | ").append(String.format(Locale.ROOT, "%,d", r.local()))
+                    .append(" | ").append(String.format(Locale.ROOT, "%,d", r.corrected()))
                     .append(" | ").append(r.vendor() == null ? "—" : String.format(Locale.ROOT, "%,d", r.vendor()))
                     .append(" | ").append(r.billed() == null ? "—" : String.format(Locale.ROOT, "%,d", r.billed()))
-                    .append(" | ").append(r.billed() == null || r.billed() == 0 ? "—"
-                            : String.format(Locale.ROOT, "%+.1f%%", 100.0 * (r.local() - r.billed()) / r.billed()))
+                    .append(" | ").append(difference(r.local(), r.billed()))
+                    .append(" | ").append(difference(r.corrected(), r.billed()))
                     .append(" | ").append(String.format(Locale.ROOT, "%.1f", r.localMicros())).append(" |\n");
         }
         return md.toString();
+    }
+
+    private static String difference(int count, Integer billed) {
+        return billed == null || billed == 0 ? "—"
+                : String.format(Locale.ROOT, "%+.1f%%", 100.0 * (count - billed) / billed);
     }
 
     /** The table says what it cannot know rather than inventing a number. */
     @Test
     void aRowWithNoKeyShowsDashesNotZeros() {
         String md = table(List.of(
-                new Row("English prose", "Anthropic", "claude-haiku-4-5", vocabulary("claude-haiku-4-5"), 250, null, null,
-                        12.5),
-                new Row("English prose", "OpenAI", "gpt-4.1-mini", vocabulary("gpt-4.1-mini"), 240, null, 250, 9.0)));
-        assertThat(md).contains("| cl100k_base (stand-in) | 250 | — | — | — | 12.5 |")
-                .contains("| o200k_base | 240 | — | 250 | -4.0% | 9.0 |");
+                new Row("English prose", "Anthropic", "claude-haiku-4-5", vocabulary("claude-haiku-4-5"), 250, 263,
+                        null, null, 12.5),
+                new Row("English prose", "OpenAI", "gpt-4.1-mini", vocabulary("gpt-4.1-mini"), 240, 240, null, 250,
+                        9.0)));
+        assertThat(md).contains("| cl100k_base (stand-in) | 250 | 263 | — | — | — | — | 12.5 |")
+                .contains("| o200k_base | 240 | 240 | — | 250 | -4.0% | -4.0% | 9.0 |");
     }
 }

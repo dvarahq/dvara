@@ -51,14 +51,16 @@ public class TiktokenEstimator implements TokenEstimator {
     private static final Encoding DEFAULT_ENCODING = REGISTRY.getEncoding(EncodingType.CL100K_BASE);
     private static final Encoding O200K_ENCODING = REGISTRY.getEncoding(EncodingType.O200K_BASE);
 
-    /** A model's encoding and the correction its family's count is multiplied by. */
-    private record Counting(Encoding encoding, double correction) {
+    /** A model's encoding, the correction its family's count is multiplied by, and what a request with tools adds. */
+    private record Counting(Encoding encoding, double correction, int toolOverhead) {
+
+        static final Counting DEFAULT = new Counting(DEFAULT_ENCODING, 1.0, 0);
     }
 
     private final ConcurrentHashMap<String, Counting> encodingCache = new ConcurrentHashMap<>();
     private final TokenizerResolver resolver;
 
-    /** Each model counted by its family (see {@link DefaultTokenizerResolver}), with no corrections. */
+    /** Each model counted by its family (see {@link DefaultTokenizerResolver}), with the measured corrections. */
     public TiktokenEstimator() {
         this(new DefaultTokenizerResolver());
     }
@@ -89,14 +91,20 @@ public class TiktokenEstimator implements TokenEstimator {
         Counting counting = resolveEncoding(request.getModel());
         Encoding encoding = counting.encoding();
         int total = 0;
+        // Images are counted by the provider's own formula, so the family's correction, which is for text, skips them.
+        long images = 0;
         for (var message : request.getMessages()) {
             // Per-message overhead (role + separators)
             total += 4;
             if (message.getContent() != null) {
                 for (var block : message.getContent()) {
+                    if (block instanceof ContentBlock.ImageBlock image) {
+                        images += ImageTokens.estimate(image, request.getModel());
+                        continue;
+                    }
                     total += switch (block) {
                         case ContentBlock.TextBlock text -> countTokens(encoding, text.text());
-                        case ContentBlock.ImageBlock image -> ImageTokens.estimate(image, request.getModel());
+                        case ContentBlock.ImageBlock image -> 0;
                         case ContentBlock.ThinkingBlock thinking -> countTokens(encoding, thinking.thinking());
                         case ContentBlock.RedactedThinkingBlock redacted -> countTokens(encoding, redacted.data());
                         case null -> 0;
@@ -117,15 +125,21 @@ public class TiktokenEstimator implements TokenEstimator {
         total += countTokens(encoding, TokenEstimation.renderTools(request.getTools()));
         // Reply priming overhead
         total += 3;
-        return corrected(total, counting.correction());
+        return corrected(total, counting.correction(), images + toolOverhead(request, counting));
     }
 
-    /** The count times the family's correction, rounded up so a correction never lowers a bound to zero. */
-    private static int corrected(long count, double correction) {
-        if (correction == 1.0) {
-            return (int) Math.min(count, Integer.MAX_VALUE);
-        }
-        return (int) Math.min((long) Math.ceil(count * correction), Integer.MAX_VALUE);
+    /** The provider's own text in front of the tools, when the request has any. */
+    private static int toolOverhead(ChatRequest request, Counting counting) {
+        return request.getTools() == null || request.getTools().isEmpty() ? 0 : counting.toolOverhead();
+    }
+
+    /**
+     * The text's count times the family's correction, rounded up so a correction never lowers a bound to zero, plus
+     * what is counted apart from the text: images and the tool overhead.
+     */
+    private static int corrected(long count, double correction, long overhead) {
+        long scaled = correction == 1.0 ? count : (long) Math.ceil(count * correction);
+        return (int) Math.min(scaled + overhead, Integer.MAX_VALUE);
     }
 
     /**
@@ -163,7 +177,8 @@ public class TiktokenEstimator implements TokenEstimator {
         total += utf8Length(TokenEstimation.renderTools(request.getTools()));
         total += 3;
         // A correction above 1 raises the count, so it raises the bound too, or the bound could fall below it.
-        return corrected(total, Math.max(1.0, resolveEncoding(request.getModel()).correction()));
+        Counting counting = resolveEncoding(request.getModel());
+        return corrected(total, Math.max(1.0, counting.correction()), toolOverhead(request, counting));
     }
 
     /** The text's length in UTF-8 bytes, without encoding it. */
@@ -208,7 +223,7 @@ public class TiktokenEstimator implements TokenEstimator {
 
     private Counting resolveEncoding(String model) {
         if (model == null) {
-            return new Counting(DEFAULT_ENCODING, 1.0);
+            return Counting.DEFAULT;
         }
         Counting cached = encodingCache.get(model);
         if (cached != null) {
@@ -225,26 +240,27 @@ public class TiktokenEstimator implements TokenEstimator {
 
     /**
      * jtokkit's own model table first, for an exact name it knows; otherwise the resolver, by the model's family. A
-     * resolver that fails counts the model as an unknown family: cl100k, no correction.
+     * resolver that fails counts the model as an unknown family: cl100k, no correction, no tool overhead.
      */
     private Counting lookup(String model) {
         TokenizerResolver.Resolution resolution;
         try {
             resolution = resolver.resolve(model);
         } catch (RuntimeException e) {
-            return new Counting(DEFAULT_ENCODING, 1.0);
+            return Counting.DEFAULT;
         }
         double correction = resolution == null ? 1.0 : resolution.correction();
+        int overhead = resolution == null ? 0 : Math.max(0, resolution.toolOverhead());
         try {
             ModelType modelType = ModelType.fromName(model).orElse(null);
             if (modelType != null) {
-                return new Counting(REGISTRY.getEncodingForModel(modelType), correction);
+                return new Counting(REGISTRY.getEncodingForModel(modelType), correction, overhead);
             }
         } catch (RuntimeException ignored) {
             // the resolver decides
         }
         Encoding encoding = resolution != null && DefaultTokenizerResolver.O200K.equals(resolution.encoding())
                 ? O200K_ENCODING : DEFAULT_ENCODING;
-        return new Counting(encoding, correction);
+        return new Counting(encoding, correction, overhead);
     }
 }
