@@ -141,8 +141,18 @@ public final class GatewayYamlLoader {
                         && m.getModel().strip().indexOf('*') != m.getModel().strip().length() - 1) {
                     errors.add(prefix + ".model: a '*' may appear only at the end");
                 }
-                if (m != null && (m.getContextTokens() == null || m.getContextTokens() <= 0)) {
-                    errors.add(prefix + ".context_tokens: required, a positive number of tokens");
+                if (m != null) {
+                    boolean noWindow = m.getContextTokens() == null;
+                    boolean noOutput = m.getOutputTokens() == null;
+                    if (noWindow && noOutput) {
+                        errors.add(prefix + ": needs context_tokens or output_tokens");
+                    }
+                    if (!noWindow && m.getContextTokens() <= 0) {
+                        errors.add(prefix + ".context_tokens: a positive number of tokens");
+                    }
+                    if (!noOutput && m.getOutputTokens() <= 0) {
+                        errors.add(prefix + ".output_tokens: a positive number of tokens");
+                    }
                 }
             }
         }

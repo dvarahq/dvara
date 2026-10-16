@@ -25,7 +25,8 @@ import java.util.Locale;
 import java.util.OptionalInt;
 
 /**
- * Model context windows written in configuration, {@code dvara.llm-gateway.model-limits}.
+ * Model context windows and output limits written in configuration, {@code dvara.llm-gateway.model-limits}.
+ * An entry sets either or both; a value it leaves at 0 is answered by the next source.
  *
  * <p>Ordered first among {@link ModelContextLimits} beans: a window the operator writes wins over any
  * other source. Entries are checked when the gateway starts, so a mistyped limit stops startup instead
@@ -51,16 +52,27 @@ public class ConfiguredModelContextLimits implements ModelContextLimits, Ordered
 
     @Override
     public OptionalInt contextTokens(String provider, String model) {
+        return best(provider, model, Entry::contextTokens);
+    }
+
+    @Override
+    public OptionalInt outputTokens(String provider, String model) {
+        return best(provider, model, Entry::outputTokens);
+    }
+
+    /** The value of the most specific matching entry that sets it; an entry that leaves it at 0 is passed over. */
+    private OptionalInt best(String provider, String model, java.util.function.ToIntFunction<Entry> value) {
         if (model == null || entries.isEmpty()) {
             return OptionalInt.empty();
         }
         Entry best = null;
         for (Entry entry : entries) {
-            if (entry.matches(provider, model) && (best == null || entry.specificity() > best.specificity())) {
+            if (value.applyAsInt(entry) > 0 && entry.matches(provider, model)
+                    && (best == null || entry.specificity() > best.specificity())) {
                 best = entry;
             }
         }
-        return best == null ? OptionalInt.empty() : OptionalInt.of(best.contextTokens());
+        return best == null ? OptionalInt.empty() : OptionalInt.of(value.applyAsInt(best));
     }
 
     @Override
@@ -68,16 +80,18 @@ public class ConfiguredModelContextLimits implements ModelContextLimits, Ordered
         return Ordered.HIGHEST_PRECEDENCE;
     }
 
-    private record Entry(String model, boolean prefix, String provider, int contextTokens) {
+    private record Entry(String model, boolean prefix, String provider, int contextTokens, int outputTokens) {
 
         static Entry of(GatewayProperties.ModelLimit limit, int index) {
             String where = "dvara.llm-gateway.model-limits[" + index + "]";
             if (limit == null || limit.getModel() == null || limit.getModel().isBlank()) {
                 throw new IllegalStateException(where + ".model is required");
             }
-            if (limit.getContextTokens() <= 0) {
-                throw new IllegalStateException(where + ".context-tokens must be a positive number of tokens, was "
-                        + limit.getContextTokens());
+            if (limit.getContextTokens() < 0 || limit.getOutputTokens() < 0
+                    || (limit.getContextTokens() == 0 && limit.getOutputTokens() == 0)) {
+                throw new IllegalStateException(where + " needs context-tokens or output-tokens, each a positive "
+                        + "number of tokens; was context-tokens " + limit.getContextTokens() + ", output-tokens "
+                        + limit.getOutputTokens());
             }
             String model = limit.getModel().strip();
             boolean prefix = model.endsWith("*");
@@ -89,7 +103,7 @@ public class ConfiguredModelContextLimits implements ModelContextLimits, Ordered
             }
             String provider = limit.getProvider() == null || limit.getProvider().isBlank()
                     ? null : limit.getProvider().strip().toLowerCase(Locale.ROOT);
-            return new Entry(model, prefix, provider, limit.getContextTokens());
+            return new Entry(model, prefix, provider, limit.getContextTokens(), limit.getOutputTokens());
         }
 
         boolean matches(String requestProvider, String requestModel) {

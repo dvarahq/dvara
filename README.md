@@ -575,6 +575,7 @@ model_limits:
   - model: claude-sonnet-4-5
     provider: anthropic     # optional: only when this provider serves it
     context_tokens: 1000000
+    output_tokens: 64000    # optional: the most it can write in one answer
 ```
 
 - A model with no entry keeps its provider's window.
@@ -582,12 +583,15 @@ model_limits:
   a shorter one, and an entry naming the provider over one that does not.
 - If a request could be served by more than one provider (failover), the smallest window among them
   applies.
-- An entry without `model` or with no positive `context_tokens` stops the gateway at startup.
+- An entry without `model`, or with neither a positive `context_tokens` nor a positive `output_tokens`,
+  stops the gateway at startup. An entry may set either or both; one it leaves out comes from the next source.
 - The same list can be set as Spring properties, `dvara.llm-gateway.model-limits[0].model` and
   `...[0].context-tokens`. An application that embeds the gateway can also supply its own
   `ModelContextLimits` bean, for example one that reads a model catalogue. Entries written here win
   over it.
-- `GET /v1/models` shows the same window for each model, in `capabilities.max_context_tokens`.
+- `GET /v1/models` shows the same window for each model, in `capabilities.max_context_tokens`, and the
+  model's output limit in `capabilities.max_output_tokens` where a source knows it. Providers declare no
+  output limit, so a model no source knows is listed without one.
 - The guardrail's size limits apply first: by default a single message longer than 50,000 characters
   is refused with `413`. The number of messages in a request has no cap by default, so an agent's
   long conversation is bounded by the model's window, not by a count.

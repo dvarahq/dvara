@@ -200,6 +200,8 @@ class GatewayConfigEnvironmentPostProcessorTest {
                     context_tokens: 1047576
                   - model: "claude-*"
                     context_tokens: 200000
+                  - model: gpt-4.1-mini
+                    output_tokens: 16384
                 """);
 
         new GatewayConfigEnvironmentPostProcessor().postProcessEnvironment(environment, null);
@@ -212,6 +214,9 @@ class GatewayConfigEnvironmentPostProcessorTest {
                 .as("no provider written means any provider, so no property")
                 .isNull();
         assertThat(environment.getProperty("dvara.llm-gateway.model-limits[1].context-tokens")).isEqualTo("200000");
+        assertThat(environment.getProperty("dvara.llm-gateway.model-limits[2].output-tokens")).isEqualTo("16384");
+        assertThat(environment.getProperty("dvara.llm-gateway.model-limits[2].context-tokens"))
+                .as("an output limit alone leaves the window to other sources").isNull();
     }
 
     @Test

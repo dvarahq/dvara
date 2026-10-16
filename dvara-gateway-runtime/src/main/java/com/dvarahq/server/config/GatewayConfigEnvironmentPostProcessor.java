@@ -198,14 +198,19 @@ public class GatewayConfigEnvironmentPostProcessor implements EnvironmentPostPro
         }
     }
 
-    /** Validated by the loader already, so every entry has a model and a positive window. */
+    /** Validated by the loader already, so every entry has a model and a positive window or output limit. */
     private void mapModelLimitsToProperties(List<GatewayYamlConfig.ModelLimitEntry> limits,
                                             Map<String, Object> props) {
         for (int i = 0; i < limits.size(); i++) {
             GatewayYamlConfig.ModelLimitEntry limit = limits.get(i);
             String prefix = "dvara.llm-gateway.model-limits[" + i + "].";
             props.put(prefix + "model", limit.getModel().strip());
-            props.put(prefix + "context-tokens", String.valueOf(limit.getContextTokens()));
+            if (limit.getContextTokens() != null) {
+                props.put(prefix + "context-tokens", String.valueOf(limit.getContextTokens()));
+            }
+            if (limit.getOutputTokens() != null) {
+                props.put(prefix + "output-tokens", String.valueOf(limit.getOutputTokens()));
+            }
             if (limit.getProvider() != null && !limit.getProvider().isBlank()) {
                 props.put(prefix + "provider", limit.getProvider().strip());
             }

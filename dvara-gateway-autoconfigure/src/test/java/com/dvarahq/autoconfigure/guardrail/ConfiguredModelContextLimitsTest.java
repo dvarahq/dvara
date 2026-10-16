@@ -104,10 +104,39 @@ class ConfiguredModelContextLimitsTest {
     }
 
     @Test
-    void anEntryWithNoPositiveWindowStopsStartupAndSaysWhich() {
+    void anEntryWithNeitherAWindowNorAnOutputLimitStopsStartupAndSaysWhich() {
         assertThatThrownBy(() -> of(limit("gpt-4.1", null, 0)))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("model-limits[0].context-tokens must be a positive number");
+                .hasMessageContaining("model-limits[0] needs context-tokens or output-tokens");
+        GatewayProperties.ModelLimit negative = limit("gpt-4.1", null, 1_000);
+        negative.setOutputTokens(-1);
+        assertThatThrownBy(() -> of(negative)).isInstanceOf(IllegalStateException.class);
+    }
+
+    private static GatewayProperties.ModelLimit output(String model, String provider, int contextTokens,
+                                                       int outputTokens) {
+        GatewayProperties.ModelLimit limit = limit(model, provider, contextTokens);
+        limit.setOutputTokens(outputTokens);
+        return limit;
+    }
+
+    @Test
+    void anOutputLimitIsAnsweredLikeAWindow() {
+        var limits = of(output("gpt-4.1", null, 1_047_576, 32_768), output("claude-*", "anthropic", 0, 64_000));
+
+        assertThat(limits.outputTokens("openai", "gpt-4.1")).hasValue(32_768);
+        assertThat(limits.outputTokens("anthropic", "claude-sonnet-4-5")).hasValue(64_000);
+        assertThat(limits.outputTokens("openai", "gpt-4o")).isEmpty();
+    }
+
+    @Test
+    void anEntryThatLeavesAValueOutIsPassedOverForIt() {
+        // The exact entry sets only an output limit; the window comes from the prefix entry.
+        var limits = of(output("gpt-4.1-mini", null, 0, 16_384), limit("gpt-4.1-*", null, 1_047_576));
+
+        assertThat(limits.contextTokens("openai", "gpt-4.1-mini")).hasValue(1_047_576);
+        assertThat(limits.outputTokens("openai", "gpt-4.1-mini")).hasValue(16_384);
+        assertThat(limits.outputTokens("openai", "gpt-4.1-nano")).as("the prefix entry sets none").isEmpty();
     }
 
     @Test

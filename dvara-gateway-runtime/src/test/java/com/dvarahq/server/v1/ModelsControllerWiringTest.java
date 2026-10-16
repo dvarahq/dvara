@@ -61,7 +61,17 @@ class ModelsControllerWiringTest {
 
         @Bean
         ModelContextLimits catalogue() {
-            return (provider, model) -> "gpt-4.1".equals(model) ? OptionalInt.of(1_047_576) : OptionalInt.empty();
+            return new ModelContextLimits() {
+                @Override
+                public OptionalInt contextTokens(String provider, String model) {
+                    return "gpt-4.1".equals(model) ? OptionalInt.of(1_047_576) : OptionalInt.empty();
+                }
+
+                @Override
+                public OptionalInt outputTokens(String provider, String model) {
+                    return "gpt-4.1".equals(model) ? OptionalInt.of(32_768) : OptionalInt.empty();
+                }
+            };
         }
     }
 
@@ -97,8 +107,11 @@ class ModelsControllerWiringTest {
                 .andExpect(jsonPath("$.data.length()").value(2))
                 .andExpect(jsonPath("$.data[0].id").value("gpt-4.1"))
                 .andExpect(jsonPath("$.data[0].capabilities.max_context_tokens").value(1047576))
+                .andExpect(jsonPath("$.data[0].capabilities.max_output_tokens").value(32768))
                 .andExpect(jsonPath("$.data[1].id").value("claude-sonnet-4-5"))
-                .andExpect(jsonPath("$.data[1].capabilities.max_context_tokens").value(200000));
+                .andExpect(jsonPath("$.data[1].capabilities.max_context_tokens").value(200000))
+                // No source knows its output limit and providers declare none, so it is left out.
+                .andExpect(jsonPath("$.data[1].capabilities.max_output_tokens").doesNotExist());
     }
 
     @Test

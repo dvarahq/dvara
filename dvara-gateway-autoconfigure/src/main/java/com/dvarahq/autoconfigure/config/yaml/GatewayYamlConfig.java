@@ -52,7 +52,7 @@ public class GatewayYamlConfig {
     @JsonProperty("rate_limits")
     private RateLimitsEntry rateLimits;
 
-    /** Per-model context windows; each becomes {@code dvara.llm-gateway.model-limits[n]}. */
+    /** Per-model context windows and output limits; each becomes {@code dvara.llm-gateway.model-limits[n]}. */
     @JsonProperty("model_limits")
     private List<ModelLimitEntry> modelLimits;
 
@@ -303,5 +303,9 @@ public class GatewayYamlConfig {
 
         @JsonProperty("context_tokens")
         private Integer contextTokens;
+
+        /** Optional: the most tokens the model can produce in one answer, shown on the model list. */
+        @JsonProperty("output_tokens")
+        private Integer outputTokens;
     }
 }
