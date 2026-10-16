@@ -589,7 +589,8 @@ model_limits:
   over it.
 - `GET /v1/models` shows the same window for each model, in `capabilities.max_context_tokens`.
 - The guardrail's size limits apply first: by default a single message longer than 50,000 characters
-  or a request with more than 100 messages is refused with `413`.
+  is refused with `413`. The number of messages in a request has no cap by default, so an agent's
+  long conversation is bounded by the model's window, not by a count.
   `dvara.llm-gateway.guardrail.max-message-length` and `...max-messages-per-request` change them.
 
 ### API keys
