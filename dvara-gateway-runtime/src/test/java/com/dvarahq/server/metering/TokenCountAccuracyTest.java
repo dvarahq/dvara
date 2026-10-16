@@ -146,8 +146,14 @@ class TokenCountAccuracyTest {
         }
     }
 
-    record Row(String sample, String family, String model, int local, Integer vendor, Integer billed,
-               double localMicros) {
+    record Row(String sample, String family, String model, String vocabulary, int local, Integer vendor,
+               Integer billed, double localMicros) {
+    }
+
+    /** The vocabulary the local count used for a model, and whether it is the model's own. */
+    static String vocabulary(String model) {
+        var r = new com.dvarahq.policy.guardrail.DefaultTokenizerResolver().resolve(model);
+        return r.encoding() + (r.exact() ? "" : " (stand-in)");
     }
 
     @Test
@@ -161,7 +167,7 @@ class TokenCountAccuracyTest {
             for (Sample sample : SAMPLES) {
                 ChatRequest request = request(sample, family.model());
                 int localCount = local.estimateTokens(request);
-                rows.add(new Row(sample.name(), family.name(), family.model(), localCount,
+                rows.add(new Row(sample.name(), family.name(), family.model(), vocabulary(family.model()), localCount,
                         provider == null ? null : vendor(provider, request),
                         provider == null ? null : billed(provider, request),
                         microsPerCount(request)));
@@ -217,10 +223,12 @@ class TokenCountAccuracyTest {
 
     static String table(List<Row> rows) {
         StringBuilder md = new StringBuilder();
-        md.append("| Sample | Family | Model | Local | Vendor count | Billed input | Local vs billed | Local cost (µs) |\n");
-        md.append("|---|---|---|--:|--:|--:|--:|--:|\n");
+        md.append("| Sample | Family | Model | Local vocabulary | Local | Vendor count | Billed input | Local vs billed "
+                + "| Local cost (µs) |\n");
+        md.append("|---|---|---|---|--:|--:|--:|--:|--:|\n");
         for (Row r : rows) {
             md.append("| ").append(r.sample()).append(" | ").append(r.family()).append(" | ").append(r.model())
+                    .append(" | ").append(r.vocabulary())
                     .append(" | ").append(String.format(Locale.ROOT, "%,d", r.local()))
                     .append(" | ").append(r.vendor() == null ? "—" : String.format(Locale.ROOT, "%,d", r.vendor()))
                     .append(" | ").append(r.billed() == null ? "—" : String.format(Locale.ROOT, "%,d", r.billed()))
@@ -234,8 +242,11 @@ class TokenCountAccuracyTest {
     /** The table says what it cannot know rather than inventing a number. */
     @Test
     void aRowWithNoKeyShowsDashesNotZeros() {
-        String md = table(List.of(new Row("English prose", "Anthropic", "claude-haiku-4-5", 250, null, null, 12.5),
-                new Row("English prose", "OpenAI", "gpt-4.1-mini", 240, null, 250, 9.0)));
-        assertThat(md).contains("| 250 | — | — | — | 12.5 |").contains("| 240 | — | 250 | -4.0% | 9.0 |");
+        String md = table(List.of(
+                new Row("English prose", "Anthropic", "claude-haiku-4-5", vocabulary("claude-haiku-4-5"), 250, null, null,
+                        12.5),
+                new Row("English prose", "OpenAI", "gpt-4.1-mini", vocabulary("gpt-4.1-mini"), 240, null, 250, 9.0)));
+        assertThat(md).contains("| cl100k_base (stand-in) | 250 | — | — | — | 12.5 |")
+                .contains("| o200k_base | 240 | — | 250 | -4.0% | 9.0 |");
     }
 }

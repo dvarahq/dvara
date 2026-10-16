@@ -325,10 +325,27 @@ public class PolicyAutoConfiguration {
         return new DefaultOutputSchemaValidator(outputSchemaRepository);
     }
 
+    /**
+     * Which tokenizer counts a model, by its family, and each family's correction from
+     * {@code dvara.llm-gateway.token-count.corrections.<family>} (1.0 where none is set). Replace the bean to count some
+     * family another way.
+     */
+    @Bean
+    @ConditionalOnMissingBean(com.dvarahq.policy.guardrail.TokenizerResolver.class)
+    public com.dvarahq.policy.guardrail.TokenizerResolver tokenizerResolver(
+            org.springframework.core.env.Environment environment) {
+        java.util.Map<String, Double> corrections = org.springframework.boot.context.properties.bind.Binder
+                .get(environment)
+                .bind("dvara.llm-gateway.token-count.corrections",
+                        org.springframework.boot.context.properties.bind.Bindable.mapOf(String.class, Double.class))
+                .orElse(java.util.Map.of());
+        return new com.dvarahq.policy.guardrail.DefaultTokenizerResolver(corrections);
+    }
+
     @Bean
     @ConditionalOnMissingBean(TokenEstimator.class)
-    public TokenEstimator tokenEstimator() {
-        return new TiktokenEstimator();
+    public TokenEstimator tokenEstimator(com.dvarahq.policy.guardrail.TokenizerResolver tokenizerResolver) {
+        return new TiktokenEstimator(tokenizerResolver);
     }
 
     @Bean
