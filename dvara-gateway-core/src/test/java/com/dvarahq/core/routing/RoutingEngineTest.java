@@ -117,6 +117,59 @@ class RoutingEngineTest {
         assertThat(receivedModel[0]).isEqualTo("gpt-4o-2024-05-13");
     }
 
+    /** The pin is also the resolved model, which is what the dispatcher sends to the provider. */
+    @Test
+    void modelPinning_isTheResolvedModel() {
+        RouteConfig config = RouteConfig.builder().modelPattern("support-model").pinnedModelVersion("gpt-test-version")
+                .build();
+        RoutingEngine engine = new RoutingEngine((req, providers) -> stubProvider("default"),
+                List.of(new RoutingEngine.ResolvedRoute(config, (req, providers) -> stubProvider("openai"))));
+        RequestContext ctx = RequestContext.builder().build();
+
+        engine.route(ChatRequest.builder().model("support-model").build(), List.of(stubProvider("openai")), ctx);
+
+        assertThat(ctx.getResolvedModel()).isEqualTo("gpt-test-version");
+    }
+
+    /** A strategy that resolves a model of its own (intelligent routing) still wins over the pin. */
+    @Test
+    void modelPinning_aStrategysOwnModelWins() {
+        RouteConfig config = RouteConfig.builder().modelPattern("support-model").pinnedModelVersion("gpt-test-version")
+                .build();
+        RoutingStrategy chooser = new RoutingStrategy() {
+            @Override
+            public LlmProvider route(ChatRequest req, List<LlmProvider> providers) {
+                return stubProvider("openai");
+            }
+
+            @Override
+            public LlmProvider route(ChatRequest req, List<LlmProvider> providers, RequestContext ctx) {
+                ctx.setResolvedModel("gpt-small");
+                return stubProvider("openai");
+            }
+        };
+        RoutingEngine engine = new RoutingEngine((req, providers) -> stubProvider("default"),
+                List.of(new RoutingEngine.ResolvedRoute(config, chooser)));
+        RequestContext ctx = RequestContext.builder().build();
+
+        engine.route(ChatRequest.builder().model("support-model").build(), List.of(stubProvider("openai")), ctx);
+
+        assertThat(ctx.getResolvedModel()).isEqualTo("gpt-small");
+    }
+
+    /** A route with no pin leaves the resolved model alone. */
+    @Test
+    void noPin_noResolvedModel() {
+        RouteConfig config = RouteConfig.builder().modelPattern("gpt-*").build();
+        RoutingEngine engine = new RoutingEngine((req, providers) -> stubProvider("default"),
+                List.of(new RoutingEngine.ResolvedRoute(config, (req, providers) -> stubProvider("openai"))));
+        RequestContext ctx = RequestContext.builder().build();
+
+        engine.route(ChatRequest.builder().model("gpt-4o").build(), List.of(stubProvider("openai")), ctx);
+
+        assertThat(ctx.getResolvedModel()).isNull();
+    }
+
     @Test
     void matchedRoute_setOnContextOnMatch() {
         RouteConfig config = RouteConfig.builder().id("route-1").modelPattern("gpt-*").build();

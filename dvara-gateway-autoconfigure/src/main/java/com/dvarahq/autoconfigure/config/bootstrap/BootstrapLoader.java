@@ -455,6 +455,9 @@ public class BootstrapLoader implements ApplicationRunner {
         if (config.invalidFallbacks() != null) {
             throw new IllegalStateException(config.invalidFallbacks());
         }
+        if (config.invalidPin() != null) {
+            throw new IllegalStateException(config.invalidPin());
+        }
 
         return new RoutingEngine.ResolvedRoute(config, strategyFactory.create(config));
     }

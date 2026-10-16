@@ -282,6 +282,25 @@ class GatewayYamlLoaderTest {
     }
 
     @Test
+    void validate_aBlankOrSpacedPinnedModelIsAnError() throws IOException {
+        GatewayYamlConfig config = parse("""
+                routes:
+                  - model: support-model
+                    provider: openai
+                    pinned_model_version: " "
+                  - model: other
+                    provider: openai
+                    pinned_model_version: "gpt 4o"
+                  - model: fine
+                    provider: openai
+                    pinned_model_version: gpt-4o-2024-08-06
+                """);
+        assertThat(GatewayYamlLoader.validate(config)).containsExactly(
+                "routes[0].pinned_model_version: a model id, with no spaces",
+                "routes[1].pinned_model_version: a model id, with no spaces");
+    }
+
+    @Test
     void validate_aModelLimitMaySetOnlyAnOutputLimit() throws IOException {
         GatewayYamlConfig config = parse("""
                 model_limits:
