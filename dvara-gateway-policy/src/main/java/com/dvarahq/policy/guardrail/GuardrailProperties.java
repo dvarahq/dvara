@@ -64,8 +64,15 @@ public class GuardrailProperties {
      */
     private int maxInputTokens = 0;
 
-    /** Maximum number of messages per request. 0 = disabled. */
-    private int maxMessagesPerRequest = 100;
+    /**
+     * Maximum number of messages per request. {@code 0} = disabled, which is the default.
+     *
+     * <p>An agent sends its whole conversation on every call, so a long task passes any fixed count
+     * and is refused part way through. The serving model's context window already bounds what a
+     * request can hold, and {@link #maxMessageLength} bounds each message. Set a figure here to cap
+     * the count as well.</p>
+     */
+    private int maxMessagesPerRequest = 0;
 
     /** Maximum character length per individual message. 0 = disabled. */
     private int maxMessageLength = 50_000;

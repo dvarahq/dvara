@@ -289,6 +289,25 @@ class GuardrailScanServiceTest {
     }
 
     @Test
+    void enforceRequest_byDefault_doesNotCapTheNumberOfMessages() {
+        // An agent sends its whole conversation each call; a default count refused it part way
+        // through a long task. The model's context window is the bound.
+        GuardrailProperties props = new GuardrailProperties();
+        props.setEnabled(true);
+        props.setDefaultAction(GuardrailAction.BLOCK);
+        assertThat(props.getMaxMessagesPerRequest()).isZero();
+        var svc = new GuardrailScanService(detector, auditWriter, workspaceRepository, props);
+
+        List<MultimodalMessage> messages = java.util.stream.IntStream.range(0, 250)
+                .mapToObj(i -> MultimodalMessage.builder().role(i % 2 == 0 ? "user" : "assistant")
+                        .content(List.of(new ContentBlock.TextBlock("step " + i))).build())
+                .toList();
+        ChatRequest request = ChatRequest.builder().model("gpt-4o").messages(messages).build();
+
+        assertThatNoException().isThrownBy(() -> svc.enforceRequest(request, "workspace-1"));
+    }
+
+    @Test
     void enforceRequest_messageTooLong_throwsInputTooLarge() {
         GuardrailProperties props = new GuardrailProperties();
         props.setEnabled(true);
