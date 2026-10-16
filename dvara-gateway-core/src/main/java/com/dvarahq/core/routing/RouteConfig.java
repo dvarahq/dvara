@@ -61,6 +61,24 @@ public class RouteConfig {
      * more than {@link #MAX_FALLBACKS}, or the same target twice. Checked when routes are loaded, and a
      * table with one bad chain is refused whole, so no partial chain becomes active.
      */
+    /**
+     * Why this route's pinned model cannot be used, or null when it has none or it is usable. A pin is sent to the
+     * provider as the model, so a blank one, or one with spaces in it, is refused when the routes are loaded rather
+     * than sent: the whole table is refused, so a bad refresh keeps the routes already in force.
+     */
+    public String invalidPin() {
+        if (pinnedModelVersion == null) {
+            return null;
+        }
+        if (pinnedModelVersion.isBlank()) {
+            return "route '" + id + "' has a blank pinned-model-version";
+        }
+        if (pinnedModelVersion.chars().anyMatch(Character::isWhitespace)) {
+            return "route '" + id + "' has a pinned-model-version with spaces in it: '" + pinnedModelVersion + "'";
+        }
+        return null;
+    }
+
     public String invalidFallbacks() {
         if (fallbacks == null || fallbacks.isEmpty()) {
             return null;

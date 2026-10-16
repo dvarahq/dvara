@@ -100,6 +100,18 @@ class RoutingAutoConfigurationTest {
         assertThat(routes.get(0).config().getPinnedModelVersion()).isEqualTo("gpt-4o-2024-08-06");
     }
 
+    /** A pin is sent upstream as the model, so a blank one stops startup rather than reaching a provider. */
+    @Test
+    void buildRoutes_aBlankPinIsRefused() {
+        GatewayProperties.RouteDefinition def = new GatewayProperties.RouteDefinition();
+        def.setId("pin-route");
+        def.setModelPattern("gpt-4o");
+        def.setPinnedModelVersion("  ");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> RoutingAutoConfiguration.buildRoutes(List.of(def)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("blank pinned-model-version");
+    }
+
     @Test
     void buildRoutes_emptyList_returnsEmpty() {
         List<RoutingEngine.ResolvedRoute> routes =

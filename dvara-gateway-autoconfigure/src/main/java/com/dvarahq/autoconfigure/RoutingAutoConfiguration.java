@@ -116,6 +116,9 @@ public class RoutingAutoConfiguration {
             if (config.invalidFallbacks() != null) {
                 throw new IllegalStateException(config.invalidFallbacks());   // #7 AC-CPF-03
             }
+            if (config.invalidPin() != null) {
+                throw new IllegalStateException(config.invalidPin());
+            }
             RoutingStrategy strategy = strategyFactory.create(config);
             routes.add(new RoutingEngine.ResolvedRoute(config, strategy));
         }

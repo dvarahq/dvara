@@ -55,6 +55,12 @@ public class RoutingEngine implements RoutingStrategy {
             if (matchesPattern(model, route.config().getModelPattern())) {
                 ctx.setMatchedRoute(route.config());
                 ChatRequest effective = applyPinning(request, route.config());
+                if (effective != request) {
+                    // The pin is what the provider is sent, not only what the strategy chooses by. The dispatcher
+                    // builds the provider call from the resolved model; a strategy that resolves a model of its
+                    // own (intelligent routing) sets it after this and wins.
+                    ctx.setResolvedModel(effective.getModel());
+                }
                 return route.strategy().route(effective, providers, ctx);
             }
         }

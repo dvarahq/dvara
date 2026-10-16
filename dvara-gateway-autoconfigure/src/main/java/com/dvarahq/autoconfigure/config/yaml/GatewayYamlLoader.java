@@ -124,6 +124,10 @@ public final class GatewayYamlLoader {
                 if (r.getProvider() == null && (r.getProviders() == null || r.getProviders().isEmpty())) {
                     errors.add(prefix + ": must specify either 'provider' or 'providers'");
                 }
+                if (r.getPinnedModelVersion() != null && (r.getPinnedModelVersion().isBlank()
+                        || r.getPinnedModelVersion().chars().anyMatch(Character::isWhitespace))) {
+                    errors.add(prefix + ".pinned_model_version: a model id, with no spaces");
+                }
                 if (r.getStrategy() != null && !isValidStrategy(r.getStrategy())) {
                     errors.add(prefix + ".strategy: unsupported strategy '" + r.getStrategy()
                             + "' (valid in this build: model-prefix, round-robin, weighted, canary)");
