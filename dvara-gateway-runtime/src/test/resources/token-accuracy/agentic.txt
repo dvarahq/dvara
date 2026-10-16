@@ -1,0 +1,9 @@
+You are an operations agent. Use the tools to answer. Prior steps follow.
+
+Step 1 called search_orders with {"customer_id":"C-20491","status":["open","delayed"],"limit":20}.
+Result: [{"order_id":"O-77121","status":"delayed","eta":"2026-10-21","items":3,"carrier":"DHL"},{"order_id":"O-77140","status":"open","eta":null,"items":1,"carrier":null}]
+
+Step 2 called get_shipment with {"order_id":"O-77121","include":["events","exceptions"]}.
+Result: {"order_id":"O-77121","events":[{"at":"2026-10-14T08:12:00Z","type":"picked_up","location":"Leipzig"},{"at":"2026-10-15T19:40:00Z","type":"exception","code":"CUSTOMS_HOLD","detail":"Missing commercial invoice"}],"exceptions":1}
+
+Step 3: decide whether to email the customer or open a ticket with the carrier, and draft the message.
