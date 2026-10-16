@@ -272,7 +272,7 @@ class ChatExecutionServiceCacheSafetyTest {
         when(dispatcher.chat(any())).thenReturn(tokenizedResponse());
         when(requestPipeline.postDispatch(any(), any(), any())).thenAnswer(inv -> inv.getArgument(1));
         when(responseCache.get(any())).thenReturn(Optional.empty());
-        when(costService.calculateAndPersist(any(), any(), any(), any(), any())).thenReturn(Optional.empty());
+        when(costService.calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(Optional.empty());
 
         HttpServletRequest httpRequest = mock(HttpServletRequest.class);
         when(httpRequest.getAttribute("workspaceId")).thenReturn("t1");

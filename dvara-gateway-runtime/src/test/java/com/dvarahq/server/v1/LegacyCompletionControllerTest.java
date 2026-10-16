@@ -174,7 +174,7 @@ class LegacyCompletionControllerTest {
         assertThat(saved.getValue().getWorkspaceId()).isEqualTo(TestApiKey.WORKSPACE);
         assertThat(saved.getValue().getApiKey()).isEqualTo(TestApiKey.ID);
         assertThat(saved.getValue().getTotalTokens()).isEqualTo(13);
-        verify(costCalculationService).calculateAndPersist(any(), any(), eq(TestApiKey.WORKSPACE), eq(TestApiKey.ID), any());
+        verify(costCalculationService).calculateAndPersist(any(), any(), eq(TestApiKey.WORKSPACE), eq(TestApiKey.ID), any(), eq(false));
     }
 
     @Test

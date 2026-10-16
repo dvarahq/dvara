@@ -50,7 +50,7 @@ class BatchCostBookerTest {
         batchJobRepository = mock(BatchJobRepository.class);
         tokenUsageRepository = mock(TokenUsageRepository.class);
         costCalculationService = mock(CostCalculationService.class);
-        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any()))
+        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
                 .thenReturn(Optional.empty());
         booker = new BatchCostBooker(batchJobRepository, tokenUsageRepository, TestProviders.of(costCalculationService));
     }
@@ -64,7 +64,7 @@ class BatchCostBookerTest {
 
         assertThat(result.claimed()).isFalse();
         verify(tokenUsageRepository, never()).save(any());
-        verify(costCalculationService, never()).calculateAndPersist(any(), any(), any(), any(), any());
+        verify(costCalculationService, never()).calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
     @Test
@@ -72,7 +72,7 @@ class BatchCostBookerTest {
         BatchJob job = job();
         when(batchJobRepository.claimBooking(eq("job-1"), eq("t1"), eq("completed"), eq("file_out"))).thenReturn(true);
         CostRecord cr = CostRecord.builder().model("gpt-4o").totalCost(new BigDecimal("0.5")).build();
-        when(costCalculationService.calculateAndPersist(any(), any(), eq("t1"), eq("k1"), eq("openai")))
+        when(costCalculationService.calculateAndPersist(any(), any(), eq("t1"), eq("k1"), eq("openai"), eq(false)))
                 .thenReturn(Optional.of(cr));
 
         BatchCostBooker.BookingResult result = booker.book(job, perModel(30, 13), "completed", "file_out");

@@ -33,4 +33,16 @@ public interface CostCalculationService {
 
     Optional<CostRecord> calculateAndPersist(ChatRequest request, ChatResponse response,
                                               String workspaceId, String apiKey, String provider);
+
+    /**
+     * As {@link #calculateAndPersist(ChatRequest, ChatResponse, String, String, String)}, saying whether the token
+     * counts in {@code response} were estimated: a stream whose upstream sent no usage block is priced from counts
+     * the gateway estimated from the text. An implementation records it on the {@link CostRecord}, so a bill can say
+     * how much of it is inferred. By default the flag is dropped, so an implementation that predates it still works.
+     */
+    default Optional<CostRecord> calculateAndPersist(ChatRequest request, ChatResponse response,
+                                                     String workspaceId, String apiKey, String provider,
+                                                     boolean estimated) {
+        return calculateAndPersist(request, response, workspaceId, apiKey, provider);
+    }
 }

@@ -60,7 +60,7 @@ class StreamingAttributionTest {
     void setUp() {
         tokenUsageRepository = mock(TokenUsageRepository.class);
         costCalculationService = mock(CostCalculationService.class);
-        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any())).thenReturn(java.util.Optional.empty());
+        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(java.util.Optional.empty());
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
         when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(40);
         when(tokenEstimator.estimateTokens(anyString())).thenReturn(60);
@@ -113,7 +113,8 @@ class StreamingAttributionTest {
         org.assertj.core.api.Assertions.assertThat(row.getValue().getProvider()).isEqualTo("openai");
         org.assertj.core.api.Assertions.assertThat(row.getValue().getCredentialFingerprint()).isEqualTo("fp-9");
         verify(costCalculationService).calculateAndPersist(any(), any(), org.mockito.ArgumentMatchers.eq("ws-1"),
-                org.mockito.ArgumentMatchers.eq("key-1"), org.mockito.ArgumentMatchers.eq("openai"));
+                org.mockito.ArgumentMatchers.eq("key-1"), org.mockito.ArgumentMatchers.eq("openai"),
+                org.mockito.ArgumentMatchers.anyBoolean());
     }
 
     /** An attribution captured from a request that answers nothing is all nulls, which is why the tail must not capture late. */

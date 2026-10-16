@@ -69,7 +69,7 @@ class StreamingTokenSettlementTest {
         rateLimiter = mock(RateLimiter.class);
         tokenUsageRepository = mock(TokenUsageRepository.class);
         costCalculationService = mock(CostCalculationService.class);
-        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any())).thenReturn(java.util.Optional.empty());
+        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(java.util.Optional.empty());
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
         when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(40);
         when(tokenEstimator.estimateTokens(anyString())).thenReturn(60);
@@ -158,7 +158,21 @@ class StreamingTokenSettlementTest {
         verify(tokenUsageRepository).save(row.capture());
         assertThat(row.getValue().isEstimated()).isFalse();
         assertThat(row.getValue().getTotalTokens()).isEqualTo(120);
-        verify(costCalculationService).calculateAndPersist(any(), any(), any(), any(), any());
+        // Reported usage: the cost row is exact, as the usage row is.
+        verify(costCalculationService).calculateAndPersist(any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.eq(false));
+    }
+
+    /** A stream with no usage block is priced from estimated counts, and its cost row says so, as its usage row does. */
+    @Test
+    void aStreamWithNoUsageBlockIsCostedAsEstimated() {
+        stream(request("key-1", 500), "some streamed text", null);
+        org.mockito.ArgumentCaptor<com.dvarahq.core.metering.TokenUsageRecord> row =
+                org.mockito.ArgumentCaptor.forClass(com.dvarahq.core.metering.TokenUsageRecord.class);
+        verify(tokenUsageRepository).save(row.capture());
+        assertThat(row.getValue().isEstimated()).isTrue();
+        verify(costCalculationService).calculateAndPersist(any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.eq(true));
     }
 
     /** ... and one that delivered no text and reported nothing writes no row and books no cost. */
