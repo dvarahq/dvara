@@ -132,6 +132,7 @@ check "the poms at the tag say $X-rc1" '[ "$(pomver "$d" "refs/tags/$X-rc1")" = 
 check "main is the second merge commit, on top of the tagged one" '[ "$(git --git-dir="$d/origin.git" rev-parse main)" = "$(cat "$d/stub/pr-102.merged")" ] && [ "$(git --git-dir="$d/origin.git" rev-parse main^)" = "$tag_commit" ]'
 check "main is at $X-SNAPSHOT" '[ "$(pomver "$d" main)" = "$X-SNAPSHOT" ]'
 check "the README on main names $X-rc1" 'git --git-dir="$d/origin.git" show main:README.md | grep -q "<version>$X-rc1</version>"'
+check "the starter READMEs on main name $X-rc1" 'for f in dvara-spring-boot-starter/README.md dvara-spring-boot-starter-gateway/README.md; do git --git-dir="$d/origin.git" show "main:$f" | grep -q "<version>$X-rc1</version>" || exit 1; done'
 check "the README passes its check once the tag exists" '(cd "$d/cut" && git fetch -q origin --tags && git checkout -q --detach origin/main && python3 scripts/check-readme-versions.py >/dev/null)'
 check "the release branches are deleted" '! git --git-dir="$d/origin.git" show-ref --verify -q "refs/heads/release/$X-rc1" && ! git --git-dir="$d/origin.git" show-ref --verify -q "refs/heads/release/$X-rc1-next"'
 check "it waited through the empty and pending check lists" '[ "$(cat "$d/stub/pr-101.polls")" -ge 3 ]'

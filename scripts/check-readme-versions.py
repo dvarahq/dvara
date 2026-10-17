@@ -33,9 +33,15 @@ import sys
 # A line that must keep an old version on purpose — an upgrade note, say. Add an
 # entry only with the reason it is provably right. An exclusion added to make a
 # build pass is how a guard starts rotting.
-ALLOW: set[tuple[int, str]] = set()
+ALLOW: set[tuple[str, int, str]] = set()
 
-README = "README.md"
+# The root README and the two starter READMEs all quote a version. The starters were left out
+# once, and they still named 1.8.2 after 1.9.0 shipped.
+READMES = (
+    "README.md",
+    "dvara-spring-boot-starter/README.md",
+    "dvara-spring-boot-starter-gateway/README.md",
+)
 
 
 def current_release() -> str:
@@ -80,9 +86,6 @@ def main() -> int:
         print("usage: check-readme-versions.py [--release <version>]", file=sys.stderr)
         return 2
     stream = ".".join(version.split(".")[:2])          # 1.8.0 -> 1.8
-    text = open(README, encoding="utf-8").read()
-    lines = text.splitlines()
-
     checks = [
         (re.compile(r"dvara-gateway-oss:([A-Za-z0-9._-]+)"), "image tag", {"latest", version, stream}),
         (re.compile(r"<version>(\d[^<]*)</version>"), "Maven version", {version}),
@@ -90,18 +93,21 @@ def main() -> int:
     ]
 
     hits = []
-    for pattern, what, allowed in checks:
-        for m in pattern.finditer(text):
-            found = m.group(1)
-            if found in allowed:
-                continue
-            line = text[: m.start()].count("\n") + 1
-            if (line, found) in ALLOW:
-                continue
-            hits.append((line, what, found, lines[line - 1].strip()[:110]))
+    for readme in READMES:
+        text = open(readme, encoding="utf-8").read()
+        lines = text.splitlines()
+        for pattern, what, allowed in checks:
+            for m in pattern.finditer(text):
+                found = m.group(1)
+                if found in allowed:
+                    continue
+                line = text[: m.start()].count("\n") + 1
+                if (readme, line, found) in ALLOW:
+                    continue
+                hits.append((readme, line, what, found, lines[line - 1].strip()[:110]))
 
-    for line, what, found, src in sorted(hits):
-        print(f"::error file={README},line={line}::{what} '{found}' is not the current "
+    for readme, line, what, found, src in sorted(hits):
+        print(f"::error file={readme},line={line}::{what} '{found}' is not the current "
               f"release '{version}': {src}")
 
     if hits:
