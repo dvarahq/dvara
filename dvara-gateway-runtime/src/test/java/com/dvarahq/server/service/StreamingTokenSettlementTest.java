@@ -69,7 +69,7 @@ class StreamingTokenSettlementTest {
         rateLimiter = mock(RateLimiter.class);
         tokenUsageRepository = mock(TokenUsageRepository.class);
         costCalculationService = mock(CostCalculationService.class);
-        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(java.util.Optional.empty());
+        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.any())).thenReturn(java.util.Optional.empty());
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
         when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(40);
         when(tokenEstimator.estimateTokens(anyString())).thenReturn(60);
@@ -160,7 +160,7 @@ class StreamingTokenSettlementTest {
         assertThat(row.getValue().getTotalTokens()).isEqualTo(120);
         // Reported usage: the cost row is exact, as the usage row is.
         verify(costCalculationService).calculateAndPersist(any(), any(), any(), any(), any(),
-                org.mockito.ArgumentMatchers.eq(false));
+                org.mockito.ArgumentMatchers.eq(false), org.mockito.ArgumentMatchers.any());
     }
 
     /** A stream with no usage block is priced from estimated counts, and its cost row says so, as its usage row does. */
@@ -172,7 +172,7 @@ class StreamingTokenSettlementTest {
         verify(tokenUsageRepository).save(row.capture());
         assertThat(row.getValue().isEstimated()).isTrue();
         verify(costCalculationService).calculateAndPersist(any(), any(), any(), any(), any(),
-                org.mockito.ArgumentMatchers.eq(true));
+                org.mockito.ArgumentMatchers.eq(true), org.mockito.ArgumentMatchers.any());
     }
 
     /** ... and one that delivered no text and reported nothing writes no row and books no cost. */

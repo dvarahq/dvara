@@ -63,4 +63,15 @@ class DoorwayTest {
         assertThat(Doorway.fromWireName(" ")).isNull();
         assertThat(Doorway.fromWireName("/v1/chat/completions")).isNull();
     }
+
+    @Test
+    void aFilterOfUnknownMatchesRowsWithNone_andANullFilterMatchesAll() {
+        assertThat(Doorway.matchesFilter(Doorway.UNKNOWN, null)).isTrue();
+        assertThat(Doorway.matchesFilter(Doorway.UNKNOWN, "")).isTrue();
+        assertThat(Doorway.matchesFilter(Doorway.UNKNOWN, "responses")).isFalse();
+        assertThat(Doorway.matchesFilter("responses", "responses")).isTrue();
+        assertThat(Doorway.matchesFilter("responses", null)).isFalse();
+        assertThat(Doorway.matchesFilter(null, null)).isTrue();
+        assertThat(Doorway.matchesFilter(null, "messages")).isTrue();
+    }
 }

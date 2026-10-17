@@ -38,6 +38,12 @@ public enum Doorway {
     /** A path on the model API that is none of the above. */
     OTHER(null);
 
+    /**
+     * What a reader shows, and a filter names, for a row with no doorway: one written before the gateway recorded
+     * it. Not a value the gateway writes.
+     */
+    public static final String UNKNOWN = "unknown";
+
     private final String prefix;
 
     Doorway(String prefix) {
@@ -75,6 +81,20 @@ public enum Doorway {
             }
         }
         return null;
+    }
+
+    /**
+     * Whether a stored value is what a doorway filter asks for: {@link #UNKNOWN} asks for rows with none, any other
+     * value for rows with that value. A null filter matches every row.
+     */
+    public static boolean matchesFilter(String filter, String stored) {
+        if (filter == null) {
+            return true;
+        }
+        if (UNKNOWN.equals(filter)) {
+            return stored == null || stored.isBlank();
+        }
+        return filter.equals(stored);
     }
 
     private static boolean matches(String path, String prefix) {

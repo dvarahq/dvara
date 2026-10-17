@@ -556,7 +556,7 @@ public class ChatExecutionService {
             return;
         }
         costCalculationService.calculateAndPersist(internalRequest, response, workspaceId,
-                        attributionId(apiKeyId), provider, estimated)   // the key id; never the live key
+                        attributionId(apiKeyId), provider, estimated, who.doorway())   // the key id; never the live key
                 .ifPresent(costRecord ->
                         metrics.recordCost(workspaceId, internalRequest.getModel(), provider,
                                 costRecord.getTotalCost().doubleValue()));

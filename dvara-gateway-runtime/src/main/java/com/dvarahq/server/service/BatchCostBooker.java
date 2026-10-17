@@ -124,7 +124,8 @@ public class BatchCostBooker {
             if (costCalculationService != null) {
                 // Exact: the provider reported every line's usage, so the row says so rather than defaulting.
                 costCalculationService.calculateAndPersist(synthReq, synthResp,
-                        job.getWorkspaceId(), job.getApiKey(), job.getProvider(), false)
+                        job.getWorkspaceId(), job.getApiKey(), job.getProvider(), false,
+                        com.dvarahq.core.metering.Doorway.BATCHES)
                         .ifPresent(costRecords::add);
             }
         }
