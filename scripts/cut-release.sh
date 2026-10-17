@@ -147,6 +147,9 @@ merge_pr() { # <pr> <subject>
   return 1
 }
 
+# The READMEs that quote a version: the root one and the two starters.
+READMES=(README.md dvara-spring-boot-starter/README.md dvara-spring-boot-starter-gateway/README.md)
+
 # README lines that name a concrete release, rewritten to name $TAG. An image's `latest` and its
 # major.minor stream are left alone, as check-readme-versions.py accepts both.
 rewrite_readme() {
@@ -154,7 +157,7 @@ rewrite_readme() {
     s{(dvara-gateway-oss:)\d+\.\d+\.\d+[A-Za-z0-9.-]*}{$1$ENV{TAG}}g;
     s{<version>\d[^<]*</version>}{<version>$ENV{TAG}</version>}g;
     s{(com\.dvarahq:[A-Za-z0-9.-]+:)\d[A-Za-z0-9.-]*}{$1$ENV{TAG}}g;
-  ' README.md
+  ' "${READMES[@]}"
 }
 
 # ---------------------------------------------------------------- preflight --
@@ -250,10 +253,10 @@ run scripts/check-version-matches-tag.sh "$NEXT" --no-maven
 run rewrite_readme
 # The README is checked against the release it will name, before that release is tagged.
 run python3 scripts/check-readme-versions.py --release "$TAG"
-run "${GIT[@]}" add -- README.md "${POMS[@]}"
+run "${GIT[@]}" add -- "${READMES[@]}" "${POMS[@]}"
 if [ "$EXECUTE" = "1" ]; then
   staged="$(git diff --cached --name-only)"
-  echo "$staged" | grep -qvE '(^|/)pom\.xml$|^README\.md$' && die "something other than the poms and README is staged: $staged"
+  echo "$staged" | grep -qvE '(^|/)pom\.xml$|(^|/)README\.md$' && die "something other than the poms and README is staged: $staged"
 fi
 run "${GIT[@]}" commit -q -m "$NEXT_TITLE"
 NEXT_COMMIT="<the README and snapshot commit>"
