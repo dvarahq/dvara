@@ -5,7 +5,7 @@
 # It needs the RELEASE_TOKEN repository secret, and refuses to start without it. The job's own
 # GITHUB_TOKEN cannot do this job: a pull request it opens and a tag it pushes start no other
 # workflow, so the build and gate checks would never run on the release pull request, and
-# release.yml would never publish the tag. How to create the token: README.md, "How a release is
+# release.yml would never publish the tag. How to create the token: CONTRIBUTING.md, "How a release is
 # cut".
 
 name: cut-release
@@ -43,7 +43,7 @@ jobs:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           if [ -z "$RELEASE_TOKEN" ]; then
-            echo "::error title=RELEASE_TOKEN is not set::This workflow needs the RELEASE_TOKEN repository secret. Without it, the release pull request gets no checks and the tag never starts release.yml. Create it as described in README.md (\"How a release is cut\"), or cut the release locally with scripts/cut-release.sh."
+            echo "::error title=RELEASE_TOKEN is not set::This workflow needs the RELEASE_TOKEN repository secret. Without it, the release pull request gets no checks and the tag never starts release.yml. Create it as described in CONTRIBUTING.md (\"How a release is cut\"), or cut the release locally with scripts/cut-release.sh."
             exit 1
           fi
 
