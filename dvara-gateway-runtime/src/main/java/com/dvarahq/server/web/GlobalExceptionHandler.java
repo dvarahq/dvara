@@ -138,6 +138,8 @@ public class GlobalExceptionHandler {
                                                                 HttpServletRequest request,
                                                                 HttpServletResponse response) {
         request.setAttribute(AccessLogFilter.ATTR_ERROR_CODE, ex.getCode());
+        // The provider's status, code and reason, when the provider is what failed, for the audit record.
+        CallFailures.recordProvider(request, ex);
         String traceId = response.getHeader(TraceIdFilter.HEADER);
         String code = ex.getCode();
         HttpStatus status;

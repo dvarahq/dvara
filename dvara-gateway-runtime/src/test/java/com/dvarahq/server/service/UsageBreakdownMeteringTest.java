@@ -58,7 +58,7 @@ class UsageBreakdownMeteringTest {
     void setUp() {
         tokenUsageRepository = mock(TokenUsageRepository.class);
         costCalculationService = mock(CostCalculationService.class);
-        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(java.util.Optional.empty());
+        when(costCalculationService.calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.any())).thenReturn(java.util.Optional.empty());
         TokenEstimator tokenEstimator = mock(TokenEstimator.class);
         when(tokenEstimator.estimateTokens(any(ChatRequest.class))).thenReturn(40);
         when(tokenEstimator.estimateTokens(anyString())).thenReturn(60);
@@ -103,7 +103,7 @@ class UsageBreakdownMeteringTest {
         assertThat(row.getValue().getReasoningTokens()).isEqualTo(448);
 
         org.mockito.ArgumentCaptor<ChatResponse> priced = org.mockito.ArgumentCaptor.forClass(ChatResponse.class);
-        verify(costCalculationService).calculateAndPersist(any(), priced.capture(), any(), any(), any(), org.mockito.ArgumentMatchers.eq(false));
+        verify(costCalculationService).calculateAndPersist(any(), priced.capture(), any(), any(), any(), org.mockito.ArgumentMatchers.eq(false), org.mockito.ArgumentMatchers.any());
         assertThat(priced.getValue().getUsage().getCachedInputTokens()).isEqualTo(1024);
         assertThat(priced.getValue().getUsage().getCacheWriteTokens()).isEqualTo(100);
         assertThat(priced.getValue().getUsage().getReasoningTokens()).isEqualTo(448);

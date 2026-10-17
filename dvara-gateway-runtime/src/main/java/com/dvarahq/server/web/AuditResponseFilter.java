@@ -80,6 +80,8 @@ public class AuditResponseFilter extends OncePerRequestFilter {
             putIfPresent(payload, "provider", request.getAttribute(AccessLogFilter.ATTR_PROVIDER));
             payload.put("status", response.getStatus());
             payload.put("latency_ms", latencyMs);
+            // The API the call came in on, from a fixed list, so spend and failures can be read per API.
+            payload.put("doorway", com.dvarahq.core.metering.Doorway.of(request.getRequestURI()).wireName());
 
             // The key's opaque id: the same value budgets, usage and cost rows carry.
             payload.put("api_key", AccessLogFilter.attribution(
@@ -93,6 +95,10 @@ public class AuditResponseFilter extends OncePerRequestFilter {
                 putIfPresent(payload, "cache_similarity", request.getAttribute(AccessLogFilter.ATTR_CACHE_SIMILARITY));
             }
             putIfPresent(payload, "error_code", request.getAttribute(AccessLogFilter.ATTR_ERROR_CODE));
+            // Why it failed, when the provider said: its status, its own code, and the message, masked.
+            putIfPresent(payload, "provider_status", request.getAttribute(AccessLogFilter.ATTR_PROVIDER_STATUS));
+            putIfPresent(payload, "provider_error_code", request.getAttribute(AccessLogFilter.ATTR_PROVIDER_ERROR_CODE));
+            putIfPresent(payload, "error_message", request.getAttribute(AccessLogFilter.ATTR_ERROR_MESSAGE));
             putIfPresent(payload, "policy_decision", request.getAttribute("policy.decision"));
             putIfPresent(payload, "policy_id", request.getAttribute("policy.policyId"));
             putIfPresent(payload, "policy_rule_id", request.getAttribute("policy.ruleId"));

@@ -537,6 +537,7 @@ public class ChatExecutionService {
                 .estimated(estimated)
                 .cacheStatus(cacheStatus)
                 .credentialFingerprint(credentialFingerprint)
+                .doorway(who.doorway() != null ? who.doorway().wireName() : null)
                 .timestamp(Instant.now())
                 .build());
 
@@ -555,7 +556,7 @@ public class ChatExecutionService {
             return;
         }
         costCalculationService.calculateAndPersist(internalRequest, response, workspaceId,
-                        attributionId(apiKeyId), provider, estimated)   // the key id; never the live key
+                        attributionId(apiKeyId), provider, estimated, who.doorway())   // the key id; never the live key
                 .ifPresent(costRecord ->
                         metrics.recordCost(workspaceId, internalRequest.getModel(), provider,
                                 costRecord.getTotalCost().doubleValue()));
@@ -597,10 +598,15 @@ public class ChatExecutionService {
      * reads the request again.
      */
     public record Attribution(String apiKeyId, String workspaceId, String provider, String credentialFingerprint,
-                              String servedModel) {
+                              String servedModel, com.dvarahq.core.metering.Doorway doorway) {
 
         public Attribution(String apiKeyId, String workspaceId, String provider, String credentialFingerprint) {
-            this(apiKeyId, workspaceId, provider, credentialFingerprint, null);
+            this(apiKeyId, workspaceId, provider, credentialFingerprint, null, null);
+        }
+
+        public Attribution(String apiKeyId, String workspaceId, String provider, String credentialFingerprint,
+                           String servedModel) {
+            this(apiKeyId, workspaceId, provider, credentialFingerprint, servedModel, null);
         }
 
         /**
@@ -625,7 +631,7 @@ public class ChatExecutionService {
                 String f = (String) httpRequest.getAttribute(CredentialInterceptor.FINGERPRINT_ATTRIBUTE);
                 String m = (String) httpRequest.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR);
                 return new Attribution(apiKeyId, workspaceId, p != null ? p : provider,
-                        f != null ? f : credentialFingerprint, m != null ? m : servedModel);
+                        f != null ? f : credentialFingerprint, m != null ? m : servedModel, doorway);
             } catch (RuntimeException recycled) {
                 return this;
             }
@@ -640,7 +646,14 @@ public class ChatExecutionService {
                     // CredentialInterceptor. Null on a cache hit and on providers that need no
                     // secret: neither is attributable egress.
                     (String) httpRequest.getAttribute(CredentialInterceptor.FINGERPRINT_ATTRIBUTE),
-                    (String) httpRequest.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR));
+                    (String) httpRequest.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR),
+                    // The API the call came in on, from a fixed list: never the path itself.
+                    doorwayOf(httpRequest));
+        }
+
+        private static com.dvarahq.core.metering.Doorway doorwayOf(HttpServletRequest httpRequest) {
+            String path = httpRequest.getRequestURI();
+            return path == null ? null : com.dvarahq.core.metering.Doorway.of(path);
         }
     }
 

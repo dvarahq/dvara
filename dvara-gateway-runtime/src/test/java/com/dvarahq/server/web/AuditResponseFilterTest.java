@@ -102,4 +102,53 @@ class AuditResponseFilterTest {
         })).isInstanceOf(IllegalStateException.class);
         verifyNoInteractions(auditWriter);
     }
+
+    /** A failed stream's record holds the provider's status, its own code and the message. */
+    @Test
+    void aFailedStreamRecordsWhyItFailed() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/responses");
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> CallFailures.recordStream(request,
+                new com.dvarahq.core.exception.ProviderStreamFailure(429, "Your credit balance is too low",
+                        "credit_balance_exhausted", null)));
+
+        ArgumentCaptor<AuditEvent> event = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditWriter).write(event.capture());
+        assertThat(event.getValue().payload())
+                .containsEntry("status", 200)
+                .containsEntry("error_code", "PROVIDER_ERROR")
+                .containsEntry("provider_status", 429)
+                .containsEntry("provider_error_code", "credit_balance_exhausted")
+                .containsEntry("error_message", "Your credit balance is too low");
+    }
+
+    /** A call that did not fail carries none of the failure fields. */
+    @Test
+    void aServedCallHasNoFailureFields() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/chat/completions");
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {});
+
+        ArgumentCaptor<AuditEvent> event = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditWriter).write(event.capture());
+        assertThat(event.getValue().payload())
+                .doesNotContainKeys("error_code", "provider_status", "provider_error_code", "error_message");
+    }
+
+    /** Every record names the API the call came in on, from the fixed list. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "/v1/chat/completions, chat_completions",
+            "/v1/responses, responses",
+            "/v1/messages, messages",
+            "/v1/gemini/v1beta/models/gemini-2.5-pro:streamGenerateContent, gemini",
+            "/v1/cursor/chat/completions, cursor",
+            "/v1/embeddings, embeddings",
+    })
+    void theRecordNamesTheDoorway(String path, String doorway) throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {});
+
+        ArgumentCaptor<AuditEvent> event = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditWriter).write(event.capture());
+        assertThat(event.getValue().payload()).containsEntry("doorway", doorway);
+    }
 }

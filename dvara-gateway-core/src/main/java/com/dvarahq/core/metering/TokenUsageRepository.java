@@ -89,6 +89,28 @@ public interface TokenUsageRepository {
     TokenUsageSummary summarize(String workspaceId, String model, Instant from, Instant to);
 
     /**
+     * {@link #summarize(String, String, Instant, Instant)} limited to one doorway, as in
+     * {@link #findKeyset(String, String, String, String, Instant, Instant, Instant, String, boolean, int)}. A null
+     * doorway is a wildcard. An implementation that has not wired the doorway refuses rather than answer for all of
+     * them under a doorway's name.
+     */
+    default TokenUsageSummary summarize(String workspaceId, String model, String doorway, Instant from, Instant to) {
+        if (doorway == null) {
+            return summarize(workspaceId, model, from, to);
+        }
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " does not filter by doorway");
+    }
+
+    /**
+     * Requests and tokens per doorway over {@code [from, to)}, rows with none under {@link Doorway#UNKNOWN}.
+     * {@code workspaceId == null} aggregates across all workspaces. Default returns empty, as
+     * {@link #breakdownByModel} does; a database-backed implementation overrides it.
+     */
+    default List<DoorwayUsage> breakdownByDoorway(String workspaceId, Instant from, Instant to) {
+        return List.of();
+    }
+
+    /**
      * Per-model usage breakdown over {@code [from, to)}, splitting exact, estimated and cache-hit
      * tokens. {@code workspaceId == null} aggregates across all workspaces.
      *
@@ -128,10 +150,22 @@ public interface TokenUsageRepository {
     default List<TokenUsageRecord> findKeyset(String workspaceId, String apiKey, String model,
                                               Instant from, Instant to,
                                               Instant cursorTs, String cursorId, boolean older, int limit) {
+        return findKeyset(workspaceId, apiKey, model, null, from, to, cursorTs, cursorId, older, limit);
+    }
+
+    /**
+     * {@link #findKeyset(String, String, String, Instant, Instant, Instant, String, boolean, int)} limited to one
+     * doorway: a {@link Doorway#wireName()}, or {@link Doorway#UNKNOWN} for rows written before doorways were
+     * recorded. A null doorway is a wildcard. A database-backed implementation overrides this.
+     */
+    default List<TokenUsageRecord> findKeyset(String workspaceId, String apiKey, String model, String doorway,
+                                              Instant from, Instant to,
+                                              Instant cursorTs, String cursorId, boolean older, int limit) {
         var byKey = java.util.Comparator
                 .comparing(TokenUsageRecord::getTimestamp, java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()))
                 .thenComparing(TokenUsageRecord::getId, java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()));
         return matching(workspaceId, apiKey, model, from, to).stream()
+                .filter(r -> Doorway.matchesFilter(doorway, r.getDoorway()))
                 .filter(r -> cursorTs == null
                         || (older ? seekLess(r, cursorTs, cursorId) : seekGreater(r, cursorTs, cursorId)))
                 .sorted(older ? byKey.reversed() : byKey)

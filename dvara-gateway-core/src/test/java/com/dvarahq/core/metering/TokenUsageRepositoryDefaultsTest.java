@@ -254,4 +254,32 @@ class TokenUsageRepositoryDefaultsTest {
             }
         };
     }
+
+    /** The keyset page can be limited to one doorway; unknown asks for rows from before doorways were recorded. */
+    @Test
+    void findKeyset_filtersByDoorway_andUnknownMeansNone() {
+        TokenUsageRecord responses = usage("a", "t", "k", "m", T0);
+        responses.setDoorway("responses");
+        TokenUsageRecord messages = usage("b", "t", "k", "m", T0.plusSeconds(1));
+        messages.setDoorway("messages");
+        TokenUsageRecord old = usage("c", "t", "k", "m", T0.plusSeconds(2));
+        TokenUsageRepository repo = seeded(responses, messages, old);
+
+        assertThat(repo.findKeyset(null, null, null, "responses", null, null, null, null, true, 10))
+                .extracting(TokenUsageRecord::getId).containsExactly("a");
+        assertThat(repo.findKeyset(null, null, null, Doorway.UNKNOWN, null, null, null, null, true, 10))
+                .extracting(TokenUsageRecord::getId).containsExactly("c");
+        assertThat(repo.findKeyset(null, null, null, null, null, null, null, null, true, 10))
+                .extracting(TokenUsageRecord::getId).containsExactly("c", "b", "a");
+    }
+
+    /** A store that cannot filter its summary by doorway refuses, rather than total every doorway under one name. */
+    @Test
+    void summarizeByDoorway_refusesWhenNotWired_andANullDoorwayIsTheOldSummary() {
+        TokenUsageRepository repo = seeded();
+        assertThat(repo.summarize("t", null, null, null, null).getWorkspaceId()).isEqualTo("t");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> repo.summarize("t", null, "responses", null, null))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThat(repo.breakdownByDoorway("t", null, null)).isEmpty();
+    }
 }

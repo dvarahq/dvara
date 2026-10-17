@@ -71,12 +71,29 @@ public class CostRecord {
      */
     private boolean estimated;
 
+    /**
+     * The API the call came in on, as {@link com.dvarahq.core.metering.Doorway#wireName()}: the same value the usage
+     * row carries, so spend can be read per API. Null on a record written before the gateway recorded it.
+     */
+    private String doorway;
+
     /** A record with no cache or reasoning breakdown. */
     public CostRecord(String id, String workspaceId, String apiKey, String model, String provider,
                       int inputTokens, int outputTokens, BigDecimal inputCost, BigDecimal outputCost,
                       BigDecimal totalCost, String currency, String pricingId, Map<String, String> tags,
                       Instant timestamp) {
         this(id, workspaceId, apiKey, model, provider, inputTokens, outputTokens, inputCost, outputCost,
-                totalCost, currency, pricingId, tags, timestamp, 0, 0, 0, false);
+                totalCost, currency, pricingId, tags, timestamp, 0, 0, 0, false, null);
+    }
+
+    /** A record with the cache and reasoning breakdown and no doorway. */
+    public CostRecord(String id, String workspaceId, String apiKey, String model, String provider,
+                      int inputTokens, int outputTokens, BigDecimal inputCost, BigDecimal outputCost,
+                      BigDecimal totalCost, String currency, String pricingId, Map<String, String> tags,
+                      Instant timestamp, int cachedInputTokens, int cacheWriteTokens, int reasoningTokens,
+                      boolean estimated) {
+        this(id, workspaceId, apiKey, model, provider, inputTokens, outputTokens, inputCost, outputCost,
+                totalCost, currency, pricingId, tags, timestamp, cachedInputTokens, cacheWriteTokens, reasoningTokens,
+                estimated, null);
     }
 }

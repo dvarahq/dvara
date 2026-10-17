@@ -80,7 +80,7 @@ class GovernedInternalChatClientTest {
         when(pipeline.postDispatch(any(), any(), any())).thenAnswer(inv -> inv.getArgument(1));
         PiiEnforcer pii = mock(PiiEnforcer.class);
         when(pii.detokenizeResponse(any(), any(), any())).thenAnswer(inv -> inv.getArgument(0));
-        when(cost.calculateAndPersist(any(), any(), any(), any(), any(), anyBoolean()))
+        when(cost.calculateAndPersist(any(), any(), any(), any(), any(), anyBoolean(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Optional.empty());
         ChatExecutionService execution = new ChatExecutionService(
                 dispatcher, pipeline, TestProviders.of(cache), usage,
@@ -138,7 +138,7 @@ class GovernedInternalChatClientTest {
         assertThat(row.getValue().getApiKey()).isEqualTo("internal-eval");
         assertThat(row.getValue().getProvider()).isEqualTo("openai");
         assertThat(row.getValue().getModel()).isEqualTo("judge-model-2");
-        verify(cost).calculateAndPersist(any(), any(), eq("ws-1"), eq("internal-eval"), eq("openai"), eq(false));
+        verify(cost).calculateAndPersist(any(), any(), eq("ws-1"), eq("internal-eval"), eq("openai"), eq(false), org.mockito.ArgumentMatchers.any());
     }
 
     @Test

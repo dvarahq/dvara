@@ -155,7 +155,7 @@ class ChatCompletionControllerTest {
                 ArgumentCaptor.forClass(com.dvarahq.core.metering.TokenUsageRecord.class);
         verify(tokenUsageRepository).save(saved.capture());
         assertThat(saved.getValue().getApiKey()).isEqualTo(TestApiKey.ID).doesNotContain(TestApiKey.KEY);
-        verify(costCalculationService).calculateAndPersist(any(), any(), eq(TestApiKey.WORKSPACE), eq(TestApiKey.ID), any(), eq(false));
+        verify(costCalculationService).calculateAndPersist(any(), any(), eq(TestApiKey.WORKSPACE), eq(TestApiKey.ID), any(), eq(false), org.mockito.ArgumentMatchers.any());
     }
 
     /** A request with no key is refused before it is served: no provider call, no usage row. */
@@ -898,7 +898,7 @@ class ChatCompletionControllerTest {
         verify(dispatcher, never()).chat(any());
         // A cache hit made no upstream call, so it books no cost. The served volume is still
         // recorded with cache_status=HIT so monthly billing counts it.
-        verify(costCalculationService, never()).calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+        verify(costCalculationService, never()).calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.any());
         verify(tokenUsageRepository).save(argThat(r -> "HIT".equals(r.getCacheStatus())));
     }
 
@@ -918,7 +918,7 @@ class ChatCompletionControllerTest {
         verify(responseCache).put(any(), any());
         // A miss made a real upstream call, so it books cost and records the served volume as
         // cache_status=MISS.
-        verify(costCalculationService).calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+        verify(costCalculationService).calculateAndPersist(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.any());
         verify(tokenUsageRepository).save(argThat(r -> "MISS".equals(r.getCacheStatus())));
     }
 

@@ -379,7 +379,7 @@ public class ChatCompletionController {
                 }
             } else {
                 try {
-                    httpRequest.setAttribute(AccessLogFilter.ATTR_ERROR_CODE, streamErrorCode(failure));
+                    com.dvarahq.server.web.CallFailures.recordStream(httpRequest, failure);
                 } catch (RuntimeException recycled) {
                     // A client that disconnected mid-stream completed the emitter before this tail
                     // ran, and the container may have recycled the request since.
@@ -822,13 +822,5 @@ public class ChatCompletionController {
     static String stopEvent(com.dvarahq.core.filter.StreamStopCheck.Stop stop, String traceId) throws Exception {
         return JsonMapper.instance().writeValueAsString(com.dvarahq.core.exception.ErrorEnvelope.body(
                 "/v1/chat/completions", stop.status(), stop.message(), stop.code(), stop.type(), traceId, null));
-    }
-
-    /**
-     * What a stream that failed mid-flight is recorded under. The status stays 200, since
-     * it was committed with the first event; the error code is what says the wire did not end well.
-     */
-    static String streamErrorCode(Exception failure) {
-        return failure instanceof GatewayException ge ? ge.getCode() : "STREAM_ERROR";
     }
 }

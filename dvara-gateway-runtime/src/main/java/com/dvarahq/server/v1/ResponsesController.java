@@ -468,8 +468,7 @@ public class ResponsesController {
                 }
             } else {
                 try {
-                    httpRequest.setAttribute(AccessLogFilter.ATTR_ERROR_CODE,
-                            ChatCompletionController.streamErrorCode(failure));
+                    com.dvarahq.server.web.CallFailures.recordStream(httpRequest, failure);
                 } catch (RuntimeException recycled) {
                     log.debug("Could not record the stream error for trace {}: {}", traceId, recycled.getMessage());
                 }

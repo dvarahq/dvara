@@ -45,4 +45,15 @@ public interface CostCalculationService {
                                                      boolean estimated) {
         return calculateAndPersist(request, response, workspaceId, apiKey, provider);
     }
+
+    /**
+     * As {@link #calculateAndPersist(ChatRequest, ChatResponse, String, String, String, boolean)}, naming the API the
+     * call came in on, so an implementation can record it on the {@link CostRecord} and spend can be read per API.
+     * By default the doorway is dropped, so an implementation that predates it still works.
+     */
+    default Optional<CostRecord> calculateAndPersist(ChatRequest request, ChatResponse response,
+                                                     String workspaceId, String apiKey, String provider,
+                                                     boolean estimated, com.dvarahq.core.metering.Doorway doorway) {
+        return calculateAndPersist(request, response, workspaceId, apiKey, provider, estimated);
+    }
 }
