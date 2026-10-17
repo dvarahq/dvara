@@ -80,6 +80,7 @@ class StreamingAttributionTest {
         when(request.getAttribute("workspaceId")).thenReturn("ws-1");
         when(request.getAttribute(com.dvarahq.server.web.AccessLogFilter.ATTR_PROVIDER)).thenReturn("openai");
         when(request.getAttribute(com.dvarahq.providers.support.CredentialInterceptor.FINGERPRINT_ATTRIBUTE)).thenReturn("fp-9");
+        when(request.getRequestURI()).thenReturn("/v1/responses");
         return request;
     }
 
@@ -112,6 +113,8 @@ class StreamingAttributionTest {
         org.assertj.core.api.Assertions.assertThat(row.getValue().getApiKey()).isEqualTo("key-1");
         org.assertj.core.api.Assertions.assertThat(row.getValue().getProvider()).isEqualTo("openai");
         org.assertj.core.api.Assertions.assertThat(row.getValue().getCredentialFingerprint()).isEqualTo("fp-9");
+        // The doorway is taken with the rest of the snapshot, so a recycled request still records it.
+        org.assertj.core.api.Assertions.assertThat(row.getValue().getDoorway()).isEqualTo("responses");
         verify(costCalculationService).calculateAndPersist(any(), any(), org.mockito.ArgumentMatchers.eq("ws-1"),
                 org.mockito.ArgumentMatchers.eq("key-1"), org.mockito.ArgumentMatchers.eq("openai"),
                 org.mockito.ArgumentMatchers.anyBoolean());

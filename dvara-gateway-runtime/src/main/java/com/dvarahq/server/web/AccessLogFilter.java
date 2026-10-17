@@ -63,6 +63,12 @@ public class AccessLogFilter extends OncePerRequestFilter {
     public static final String ATTR_TOKENS_REASONING = "gateway.tokensReasoning";
     public static final String ATTR_STREAM = "gateway.stream";
     public static final String ATTR_ERROR_CODE = "gateway.errorCode";
+    /** The HTTP status the provider's error stands for, when a call failed at the provider. */
+    public static final String ATTR_PROVIDER_STATUS = "gateway.providerStatus";
+    /** The provider's own error code, such as {@code insufficient_quota}, when it sent one. */
+    public static final String ATTR_PROVIDER_ERROR_CODE = "gateway.providerErrorCode";
+    /** Why the call failed, on one line, capped, with anything shaped like a key masked. */
+    public static final String ATTR_ERROR_MESSAGE = "gateway.errorMessage";
     /**
      * When the gateway first saw the request — stamped by the trace filter, the first thing to run,
      * on the initial dispatch, and read on the async one. Shared by the access-log, metrics

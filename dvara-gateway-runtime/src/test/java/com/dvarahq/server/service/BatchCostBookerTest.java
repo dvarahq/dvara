@@ -86,6 +86,7 @@ class BatchCostBookerTest {
         assertThat(usage.getValue().getOutputTokens()).isEqualTo(13);
         assertThat(usage.getValue().isEstimated()).isFalse();
         assertThat(usage.getValue().getCacheStatus()).isEqualTo("MISS");
+        assertThat(usage.getValue().getDoorway()).isEqualTo("batches");
     }
 
     @AfterEach

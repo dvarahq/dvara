@@ -76,11 +76,26 @@ public class TokenUsageRecord {
     /** The part of {@code outputTokens} the model spent reasoning. */
     private int reasoningTokens;
 
+    /**
+     * The API the call came in on, as {@link Doorway#wireName()}, such as {@code responses}. Null on a row
+     * written before the gateway recorded it.
+     */
+    private String doorway;
+
     /** A row with no cache or reasoning breakdown. */
     public TokenUsageRecord(String id, String workspaceId, String apiKey, String model, String provider,
                             int inputTokens, int outputTokens, int totalTokens, boolean estimated,
                             String credentialFingerprint, String cacheStatus, Instant timestamp) {
         this(id, workspaceId, apiKey, model, provider, inputTokens, outputTokens, totalTokens, estimated,
-                credentialFingerprint, cacheStatus, timestamp, 0, 0, 0);
+                credentialFingerprint, cacheStatus, timestamp, 0, 0, 0, null);
+    }
+
+    /** A row with the cache and reasoning breakdown and no doorway. */
+    public TokenUsageRecord(String id, String workspaceId, String apiKey, String model, String provider,
+                            int inputTokens, int outputTokens, int totalTokens, boolean estimated,
+                            String credentialFingerprint, String cacheStatus, Instant timestamp,
+                            int cachedInputTokens, int cacheWriteTokens, int reasoningTokens) {
+        this(id, workspaceId, apiKey, model, provider, inputTokens, outputTokens, totalTokens, estimated,
+                credentialFingerprint, cacheStatus, timestamp, cachedInputTokens, cacheWriteTokens, reasoningTokens, null);
     }
 }

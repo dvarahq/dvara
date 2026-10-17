@@ -110,6 +110,7 @@ public class BatchCostBooker {
                     .estimated(false)
                     .cacheStatus("MISS")
                     .credentialFingerprint(credentialFingerprint)
+                    .doorway(com.dvarahq.core.metering.Doorway.BATCHES.wireName())
                     .timestamp(Instant.now())
                     .build());
 
