@@ -875,6 +875,22 @@ The gateway is nine Maven modules, and three of them are the ways in:
 `com.dvarahq` group. A tagged release is published to Maven Central; a `-SNAPSHOT` version is not,
 so `./mvnw install` puts that one in your local repository.
 
+### Model calls the application makes for itself
+
+An application built on `dvara-gateway-runtime` sometimes needs a model call of its own: to grade an
+answer, or to decide which model a request needs. `InternalChatClient` in `dvara-gateway-core` sends one
+through the same path as a caller's request, so the same policies, PII rules, guardrails and budgets
+apply. Its usage and cost rows go to the workspace and key you name:
+
+```java
+ChatResponse answer = internalChatClient.chat(request,
+        new InternalCall("grading", workspaceId, "internal-grading", callersTraceId));
+```
+
+The response cache is not used. Each call writes an `INTERNAL_CALL` audit record with its kind, its own
+trace id and the caller's. While it runs, `InternalCall.current()` names it on that thread, and a second
+internal call started from inside it is refused. Only non-streaming calls are supported.
+
 ### Modules
 
 <details>

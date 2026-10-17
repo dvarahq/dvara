@@ -21,6 +21,7 @@ import com.dvarahq.providers.support.WorkspaceScope;
 import com.dvarahq.core.audit.AuditEvent;
 import com.dvarahq.core.audit.AuditWriter;
 import com.dvarahq.core.cache.ResponseCache;
+import com.dvarahq.core.call.InternalCall;
 import com.dvarahq.core.cost.CostCalculationService;
 import com.dvarahq.core.cost.CostEstimator;
 import com.dvarahq.core.filter.FilterContext;
@@ -152,6 +153,8 @@ public class ChatExecutionService {
      * rewritten request + the context, from which callers read {@code policyDecision} and the
      * response headers filters asked for. There is no budget field on it: a filter that enforces
      * budgets, if one is registered, leaves its result and its headers as attributes.
+     *
+     * @param httpResponse null for the gateway's own calls, which have no response to set headers on
      */
     public Prepared prepare(ChatRequest internal, HttpServletRequest httpRequest,
                             HttpServletResponse httpResponse, String traceId) {
@@ -225,8 +228,10 @@ public class ChatExecutionService {
         boolean bypassCache = uncacheable || "no-cache".equalsIgnoreCase(httpRequest.getHeader("X-Cache-Control"));
 
         // Whether a cache can serve or keep this request at all. When none can, the cache key is never
-        // built: for a workspace with PII on, building it is a second scan of the whole request.
-        boolean cacheable = responseCache != null && !uncacheable && !responseCache.skips(workspaceId);
+        // built: for a workspace with PII on, building it is a second scan of the whole request. The
+        // gateway's own calls never use it: their answer belongs to the request that caused them.
+        boolean cacheable = responseCache != null && !uncacheable && InternalCall.current() == null
+                && !responseCache.skips(workspaceId);
 
         // PII-stripped form used as the cache key on BOTH get and put so lookup and store hash
         // to the same key. The dispatcher below still calls upstream with the original request.
@@ -705,6 +710,9 @@ public class ChatExecutionService {
     }
 
     private void applyContextWindowHeaders(HttpServletResponse httpResponse, FilterContext ctx) {
+        if (httpResponse == null) {
+            return;
+        }
         Boolean contextWarning = ctx.getAttribute("context.warning");
         if (Boolean.TRUE.equals(contextWarning)) {
             httpResponse.setHeader("X-Context-Window-Warning", "true");
