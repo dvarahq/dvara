@@ -92,7 +92,7 @@ class TracingIntegrationTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(provider), DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, observationRegistry, TEST_LATENCY_TRACKER,
+                TEST_METRICS, observationRegistry, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         dispatcher.chat(chatRequest("gpt-4o"));
@@ -119,7 +119,7 @@ class TracingIntegrationTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(provider), DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, observationRegistry, TEST_LATENCY_TRACKER,
+                TEST_METRICS, observationRegistry, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         Iterator<SseChunk> result = dispatcher.streamChat(chatRequest("claude-3"));
@@ -145,7 +145,7 @@ class TracingIntegrationTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(provider), DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, observationRegistry, TEST_LATENCY_TRACKER,
+                TEST_METRICS, observationRegistry, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         dispatcher.embed(EmbeddingRequest.builder().model("text-embedding-ada-002").input("hello").build());
@@ -170,7 +170,7 @@ class TracingIntegrationTest {
         FallbackResolver noFallback = (req, failed, all) -> List.of();
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(provider), DEFAULT_STRATEGY, ALWAYS_HEALTHY, noFallback,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, observationRegistry, TEST_LATENCY_TRACKER,
+                TEST_METRICS, observationRegistry, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         try {

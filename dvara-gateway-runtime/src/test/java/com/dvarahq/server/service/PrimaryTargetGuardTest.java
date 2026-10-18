@@ -111,7 +111,7 @@ class PrimaryTargetGuardTest {
 
     private static ProviderDispatcher dispatcher(List<LlmProvider> providers, RoutingEngine routes) {
         return new ProviderDispatcher(providers, routes, HEALTHY, SAME_MODEL,
-                new GatewayMetrics(new SimpleMeterRegistry(), REGION), REGION, new PassthroughDataResidencyPolicy(),
+                new GatewayMetrics(new SimpleMeterRegistry(), REGION),
                 ObservationRegistry.NOOP, mock(LatencyTracker.class), mock(CanaryMetricsCollector.class),
                 TestProviders.of(mock(CostEstimator.class)), (req, resp, latency, route) -> { });
     }
@@ -183,6 +183,33 @@ class PrimaryTargetGuardTest {
         verify(openai, never()).chat(any());
         verify(azure, never()).chat(any());
         assertThat(guard.reported).containsExactly("openai:" + PINNED + ":POLICY_DENIED");
+    }
+
+    @Test
+    void aRefusedFirstTargetWhoseChainIsRefusedByAFallbackGuard_answersWithTheFirstRefusal_only() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider anthropic = provider("anthropic", "claude");
+        TurnedOff primary = new TurnedOff(PINNED);
+        List<String> fallbackReported = new ArrayList<>();
+        com.dvarahq.core.resilience.FallbackTargetGuard elsewhere = new com.dvarahq.core.resilience.FallbackTargetGuard() {
+            @Override public String refuse(ChatRequest request, String provider) { return "outside the region"; }
+            @Override public GatewayException error(ChatRequest request, String provider, String reason) {
+                return new GatewayException("DATA_RESIDENCY_VIOLATION", reason);
+            }
+            @Override public void refused(ChatRequest request, String provider, GatewayException error) {
+                fallbackReported.add(provider);
+            }
+        };
+        ProviderDispatcher d = dispatcher(List.of(openai, anthropic),
+                pinningRoute(new RouteConfig.FallbackTarget("anthropic", "claude-backup")));
+        d.setPrimaryGuards(List.of(primary));
+        d.setFallbackGuards(List.of(elsewhere));
+
+        assertThatThrownBy(() -> d.chat(request("gpt-4o")))
+                .extracting(e -> ((GatewayException) e).getCode()).isEqualTo("POLICY_DENIED");
+        assertThat(primary.reported).hasSize(1);
+        assertThat(fallbackReported).as("the fallback guard's error was not the answer").isEmpty();
+        verify(anthropic, never()).chat(any());
     }
 
     @Test

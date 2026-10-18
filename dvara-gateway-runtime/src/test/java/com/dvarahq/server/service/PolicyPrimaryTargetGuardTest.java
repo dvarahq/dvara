@@ -149,7 +149,7 @@ class PolicyPrimaryTargetGuardTest {
     /** The dispatcher as the application wires it: both policy guards registered. */
     private ProviderDispatcher dispatcher(PolicyEngine policy, List<LlmProvider> providers, RoutingEngine routes) {
         ProviderDispatcher d = new ProviderDispatcher(providers, routes, HEALTHY, SAME_MODEL,
-                new GatewayMetrics(new SimpleMeterRegistry(), REGION), REGION, new PassthroughDataResidencyPolicy(),
+                new GatewayMetrics(new SimpleMeterRegistry(), REGION),
                 ObservationRegistry.NOOP, mock(LatencyTracker.class), mock(CanaryMetricsCollector.class),
                 TestProviders.of(mock(CostEstimator.class)), (req, resp, latency, route) -> { });
         d.setPrimaryGuards(List.of(new PolicyPrimaryTargetGuard(policy, auditWriter)));

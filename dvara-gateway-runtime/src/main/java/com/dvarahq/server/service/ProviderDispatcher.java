@@ -24,8 +24,6 @@ import com.dvarahq.core.model.ResponseFormat;
 import com.dvarahq.core.model.SseChunk;
 import com.dvarahq.core.provider.LlmProvider;
 import com.dvarahq.core.provider.RoutingStrategy;
-import com.dvarahq.core.region.DataResidencyPolicy;
-import com.dvarahq.core.region.RegionContext;
 import com.dvarahq.core.resilience.FallbackResolver;
 import com.dvarahq.core.resilience.ProviderHealthRegistry;
 import com.dvarahq.core.cost.CostEstimator;
@@ -94,8 +92,6 @@ public class ProviderDispatcher {
     private final ProviderHealthRegistry healthRegistry;
     private final FallbackResolver fallbackResolver;
     private final GatewayMetrics metrics;
-    private final RegionContext regionContext;
-    private final DataResidencyPolicy dataResidencyPolicy;
     private final ObservationRegistry observationRegistry;
     /** Null when nothing records latency. Recording into a sink that discards is not recording. */
     private final LatencyTracker latencyTracker;
@@ -119,15 +115,13 @@ public class ProviderDispatcher {
                               ProviderHealthRegistry healthRegistry,
                               FallbackResolver fallbackResolver,
                               GatewayMetrics metrics,
-                              RegionContext regionContext,
-                              DataResidencyPolicy dataResidencyPolicy,
                               ObservationRegistry observationRegistry,
                               @org.springframework.lang.Nullable LatencyTracker latencyTracker,
                               CanaryMetricsCollector canaryMetricsCollector,
                               org.springframework.beans.factory.ObjectProvider<CostEstimator> costEstimator,
                               @org.springframework.lang.Nullable ShadowDispatcher shadowDispatcher) {
         this(com.dvarahq.core.provider.ProviderRegistry.of(providers), routingStrategy, healthRegistry,
-                fallbackResolver, metrics, regionContext, dataResidencyPolicy, observationRegistry, latencyTracker,
+                fallbackResolver, metrics, observationRegistry, latencyTracker,
                 canaryMetricsCollector, costEstimator, shadowDispatcher);
     }
 
@@ -142,15 +136,13 @@ public class ProviderDispatcher {
                               ProviderHealthRegistry healthRegistry,
                               FallbackResolver fallbackResolver,
                               GatewayMetrics metrics,
-                              RegionContext regionContext,
-                              DataResidencyPolicy dataResidencyPolicy,
                               ObservationRegistry observationRegistry,
                               @org.springframework.lang.Nullable LatencyTracker latencyTracker,
                               CanaryMetricsCollector canaryMetricsCollector,
                               org.springframework.beans.factory.ObjectProvider<CostEstimator> costEstimator,
                               @org.springframework.lang.Nullable ShadowDispatcher shadowDispatcher) {
         this(ProviderRegistries.of(registry, providers), routingStrategy, healthRegistry,
-                fallbackResolver, metrics, regionContext, dataResidencyPolicy, observationRegistry, latencyTracker,
+                fallbackResolver, metrics, observationRegistry, latencyTracker,
                 canaryMetricsCollector, costEstimator, shadowDispatcher);
     }
 
@@ -159,8 +151,6 @@ public class ProviderDispatcher {
                               ProviderHealthRegistry healthRegistry,
                               FallbackResolver fallbackResolver,
                               GatewayMetrics metrics,
-                              RegionContext regionContext,
-                              DataResidencyPolicy dataResidencyPolicy,
                               ObservationRegistry observationRegistry,
                               @org.springframework.lang.Nullable LatencyTracker latencyTracker,
                               CanaryMetricsCollector canaryMetricsCollector,
@@ -171,8 +161,6 @@ public class ProviderDispatcher {
         this.healthRegistry = healthRegistry;
         this.fallbackResolver = fallbackResolver;
         this.metrics = metrics;
-        this.regionContext = regionContext;
-        this.dataResidencyPolicy = dataResidencyPolicy;
         this.observationRegistry = observationRegistry;
         this.latencyTracker = latencyTracker;
         this.canaryMetricsCollector = canaryMetricsCollector;
@@ -418,6 +406,7 @@ public class ProviderDispatcher {
                             .filter(p -> p.supportsEmbedding(request.getModel()))
                             .filter(p -> !p.name().equals(provider.name()))
                             .filter(p -> healthRegistry.isAvailable(p.name()))
+                            .filter(p -> embeddingAllowed(request, p.name()))
                             .toList();
                     for (LlmProvider fallback : fallbacks) {
                         try {
@@ -435,6 +424,18 @@ public class ProviderDispatcher {
                 throw e;
             }
         });
+    }
+
+    /** Whether every guard lets an embeddings request fall back to {@code provider}. */
+    private boolean embeddingAllowed(EmbeddingRequest request, String provider) {
+        for (com.dvarahq.core.resilience.FallbackTargetGuard guard : fallbackGuards) {
+            String reason = guard.refuseEmbedding(request, provider);
+            if (reason != null) {
+                log.info("Embedding fallback provider [{}] refused: {}", provider, reason);
+                return false;
+            }
+        }
+        return true;
     }
 
     public List<LlmProvider> allProviders() {
@@ -558,6 +559,7 @@ public class ProviderDispatcher {
     private java.time.Duration fallbackDeadline = java.time.Duration.ofSeconds(60);
     private List<com.dvarahq.core.resilience.FallbackTargetGuard> fallbackGuards = List.of();
     private List<com.dvarahq.core.resilience.PrimaryTargetGuard> primaryGuards = List.of();
+    private List<com.dvarahq.core.resilience.FallbackListener> fallbackListeners = List.of();
 
     /** {@code dvara.llm-gateway.resilience.fallback.*}: on or off, and how far a failover may go. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -572,6 +574,12 @@ public class ProviderDispatcher {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setFallbackGuards(List<com.dvarahq.core.resilience.FallbackTargetGuard> guards) {
         this.fallbackGuards = guards != null ? List.copyOf(guards) : List.of();
+    }
+
+    /** Told when a fallback served a request; none registered changes nothing. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setFallbackListeners(List<com.dvarahq.core.resilience.FallbackListener> listeners) {
+        this.fallbackListeners = listeners != null ? List.copyOf(listeners) : List.of();
     }
 
     /** Every guard the first target must pass, with the model it is sent; none registered allows every target. */
@@ -619,7 +627,7 @@ public class ProviderDispatcher {
         RouteConfig route = routingCtx.getMatchedRoute();
         if (fallbackEnabled && route != null && route.getFallbacks() != null && !route.getFallbacks().isEmpty()) {
             try {
-                return attemptRouteChain(route, request, primary, refusal.error(), startNanos, call);
+                return attemptRouteChain(route, request, primary, refusal.error(), startNanos, call, false);
             } catch (GatewayException noTargetServedIt) {
                 // Whatever the chain ran into, the caller is told why the first target was refused.
             }
@@ -649,6 +657,17 @@ public class ProviderDispatcher {
      */
     private <T> T attemptRouteChain(RouteConfig route, ChatRequest request, LlmProvider failedProvider,
                                     GatewayException originalException, long startNanos, ProviderCall<T> call) {
+        return attemptRouteChain(route, request, failedProvider, originalException, startNanos, call, true);
+    }
+
+    /**
+     * {@code reportDecisive} is false when the first target was refused by a {@link
+     * com.dvarahq.core.resilience.PrimaryTargetGuard}: that refusal is then the answer, so a fallback guard's error
+     * is not reported as one.
+     */
+    private <T> T attemptRouteChain(RouteConfig route, ChatRequest request, LlmProvider failedProvider,
+                                    GatewayException originalException, long startNanos, ProviderCall<T> call,
+                                    boolean reportDecisive) {
         List<RouteConfig.FallbackTarget> chain = route.getFallbacks() == null ? List.of() : route.getFallbacks();
         if (chain.isEmpty()) {
             throw originalException;
@@ -656,6 +675,7 @@ public class ProviderDispatcher {
         long deadlineNanos = startNanos + fallbackDeadline.toNanos();
         int attempts = 0;
         boolean capabilityMismatch = false;
+        GuardRefusal decisive = null;   // the first refusal by a guard that names the caller's error
         for (int i = 0; i < chain.size(); i++) {
             RouteConfig.FallbackTarget target = chain.get(i);
             if (attempts >= fallbackMaxAttempts || System.nanoTime() > deadlineNanos) {
@@ -693,9 +713,12 @@ public class ProviderDispatcher {
                 log.debug("Route [{}]: fallback provider [{}] is paused; skipped", route.getId(), provider.name());
                 continue;
             }
-            String refused = refusal(mapped, provider.name());
+            GuardRefusal refused = refusal(mapped, provider.name());
             if (refused != null) {
-                log.info("Route [{}]: fallback {} refused: {}", route.getId(), target.describe(), refused);
+                log.info("Route [{}]: fallback {} refused: {}", route.getId(), target.describe(), refused.reason());
+                if (decisive == null && refused.error() != null) {
+                    decisive = refused;
+                }
                 continue;
             }
             attempts++;
@@ -706,11 +729,19 @@ public class ProviderDispatcher {
                 setProviderAttribute(provider.name());
                 setServedModelAttribute(mapped.getModel());   // billed as the model that served it
                 clearCredentialFingerprint();
-                return call.execute(provider, mapped);
+                T served = call.execute(provider, mapped);
+                notifyServed(mapped, failedProvider.name(), provider.name());
+                return served;
             } catch (GatewayException e) {
                 log.warn("Route [{}]: fallback {} also failed: {}", route.getId(), target.describe(), e.getCode());
                 metrics.recordProviderError(provider.name(), e.getCode());
             }
+        }
+        if (decisive != null) {
+            if (reportDecisive) {
+                decisive.report();
+            }
+            throw decisive.error();
         }
         if (attempts == 0 && capabilityMismatch) {
             throw new GatewayException("FAILOVER_CAPABILITY_MISMATCH",
@@ -720,15 +751,39 @@ public class ProviderDispatcher {
         throw originalException;
     }
 
-    /** The first guard's reason to keep {@code request} off {@code provider}, or null when all allow it. */
-    private String refusal(ChatRequest request, String provider) {
+    /** The first guard's refusal to send {@code request} to {@code provider}, or null when all allow it. */
+    private GuardRefusal refusal(ChatRequest request, String provider) {
         for (com.dvarahq.core.resilience.FallbackTargetGuard guard : fallbackGuards) {
             String reason = guard.refuse(request, provider);
             if (reason != null) {
-                return reason;
+                return new GuardRefusal(guard, request, provider, reason, guard.error(request, provider, reason));
             }
         }
         return null;
+    }
+
+    /** A fallback a guard refused, with the error it names for the caller (null when it names none). */
+    private record GuardRefusal(com.dvarahq.core.resilience.FallbackTargetGuard guard, ChatRequest request,
+                                String provider, String reason, GatewayException error) {
+        void report() {
+            try {
+                guard.refused(request, provider, error);
+            } catch (RuntimeException e) {
+                // The caller is refused whether or not the guard could record it.
+                log.warn("Guard {} failed to record a refusal: {}", guard.getClass().getSimpleName(), e.getMessage());
+            }
+        }
+    }
+
+    /** Tells every listener that a fallback served the request. A listener cannot fail the request. */
+    private void notifyServed(ChatRequest request, String failedProvider, String servedBy) {
+        for (com.dvarahq.core.resilience.FallbackListener listener : fallbackListeners) {
+            try {
+                listener.served(request, failedProvider, servedBy);
+            } catch (RuntimeException e) {
+                log.warn("Fallback listener {} failed: {}", listener.getClass().getSimpleName(), e.getMessage());
+            }
+        }
     }
 
     private static boolean carriesImage(ChatRequest request) {
@@ -766,9 +821,18 @@ public class ProviderDispatcher {
                     + " Primary provider [" + failedProvider.name() + "] failed: " + originalException.getMessage());
         }
 
+        GuardRefusal decisive = null;   // the first refusal by a guard that names the caller's error
         for (LlmProvider fallback : capableFallbacks) {
             if (!healthRegistry.isAvailable(fallback.name())) {
                 log.debug("Skipping unhealthy fallback provider [{}]", fallback.name());
+                continue;
+            }
+            GuardRefusal refused = refusal(request, fallback.name());
+            if (refused != null) {
+                log.info("Fallback provider [{}] refused: {}", fallback.name(), refused.reason());
+                if (decisive == null && refused.error() != null) {
+                    decisive = refused;
+                }
                 continue;
             }
             try {
@@ -782,13 +846,19 @@ public class ProviderDispatcher {
                 // would inherit the failed primary's — a usage row naming one provider and another's
                 // credential. A fallback that does go through it re-stamps its own.
                 clearCredentialFingerprint();
-                return call.execute(fallback, request);
+                T served = call.execute(fallback, request);
+                notifyServed(request, failedProvider.name(), fallback.name());
+                return served;
             } catch (GatewayException e) {
                 log.warn("Fallback provider [{}] also failed: {}", fallback.name(), e.getMessage());
                 metrics.recordProviderError(fallback.name(), e.getCode());
             }
         }
 
+        if (decisive != null) {
+            decisive.report();
+            throw decisive.error();
+        }
         throw originalException;
     }
 

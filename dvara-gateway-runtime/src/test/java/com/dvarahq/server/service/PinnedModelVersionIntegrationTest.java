@@ -119,7 +119,7 @@ class PinnedModelVersionIntegrationTest {
                         List.of(new RoutingEngine.ResolvedRoute(route, new ModelPrefixRoutingStrategy()))),
                 name -> ProviderHealthStatus.HEALTHY,
                 (request, failed, all) -> all.stream().filter(p -> !p.name().equals(failed.name())).toList(),
-                new GatewayMetrics(new SimpleMeterRegistry(), region), region, new PassthroughDataResidencyPolicy(),
+                new GatewayMetrics(new SimpleMeterRegistry(), region),
                 ObservationRegistry.NOOP, mock(LatencyTracker.class), mock(CanaryMetricsCollector.class),
                 TestProviders.of(mock(CostEstimator.class)), (req, resp, latency, r) -> { });
     }
