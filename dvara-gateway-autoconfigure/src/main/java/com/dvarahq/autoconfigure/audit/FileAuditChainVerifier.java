@@ -277,8 +277,11 @@ public final class FileAuditChainVerifier {
         return run(Path.of(args[0]), secret, out, err);
     }
 
-    /** The same, with the secret already resolved — the form a test can drive. */
-    static int run(Path file, String secret, java.io.PrintStream out, java.io.PrintStream err) {
+    /**
+     * The same, with the secret already resolved — the form a test can drive, and the one the gateway's
+     * {@code --verify-audit} switch calls. Returns the exit code described on {@link #main}.
+     */
+    public static int run(Path file, String secret, java.io.PrintStream out, java.io.PrintStream err) {
         if (!Files.exists(file)) {
             err.println("No file at " + file + " — nothing was checked.");
             return 2;
