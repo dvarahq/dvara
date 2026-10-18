@@ -42,6 +42,10 @@ public class GatewayServerApplication {
         if (KeygenCommand.handles(args)) {
             System.exit(KeygenCommand.run(args, System.in, System.out, System.err));
         }
+        // The same for --verify-audit: it checks an audit file's chain and exits.
+        if (AuditVerifyCommand.handles(args)) {
+            System.exit(AuditVerifyCommand.run(args, System.getenv(), System.out, System.err));
+        }
         SpringApplication.run(GatewayServerApplication.class, args);
     }
 }
