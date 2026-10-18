@@ -131,7 +131,7 @@ class ProviderDispatcherTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(providerA, providerB), alwaysB, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
         ChatRequest request = chatRequest("gpt-4o");
 
@@ -158,7 +158,7 @@ class ProviderDispatcherTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(healthy, unhealthy), DEFAULT_STRATEGY, registry, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         ChatResponse result = dispatcher.chat(chatRequest("gpt-4o"));
@@ -194,7 +194,7 @@ class ProviderDispatcherTest {
         CanaryMetricsCollector collector = mock(CanaryMetricsCollector.class);
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(baseline), strategy, name -> ProviderHealthStatus.HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 collector, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         dispatcher.chat(withWorkspace(chatRequest("gpt-4o"), "another-workspace"));
@@ -222,7 +222,7 @@ class ProviderDispatcherTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(providerA, providerB), DEFAULT_STRATEGY, allUnhealthy, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         assertThatThrownBy(() -> dispatcher.chat(chatRequest("gpt-4o")))
@@ -306,6 +306,39 @@ class ProviderDispatcherTest {
         assertThat(request.getAttribute("gateway.provider")).isEqualTo("custom-embedder");
         assertThat(request.getAttribute(FINGERPRINT)).isNull();
     }
+
+    /** An embeddings fallback a guard refuses is never called; the caller gets the first provider's error. */
+    @Test
+    void embed_aFallbackAGuardRefuses_isNotCalled() {
+        LlmProvider primary = mockProvider("openai", false);
+        LlmProvider refused = mockProvider("elsewhere", false);
+        LlmProvider allowed = mockProvider("allowed-embedder", false);
+        for (LlmProvider p : List.of(primary, refused, allowed)) {
+            when(p.supportsEmbedding("text-embedding-3-small")).thenReturn(true);
+        }
+        GatewayException down = new GatewayException("PROVIDER_ERROR", "upstream down");
+        when(primary.embed(any())).thenThrow(down);
+        when(allowed.embed(any())).thenReturn(mock(EmbeddingResponse.class));
+        com.dvarahq.core.resilience.FallbackTargetGuard guard = new com.dvarahq.core.resilience.FallbackTargetGuard() {
+            @Override public String refuse(ChatRequest r, String provider) { return null; }
+            @Override public String refuseEmbedding(EmbeddingRequest r, String provider) {
+                return "elsewhere".equals(provider) || "allowed-embedder".equals(provider) && onlyElsewhere[0]
+                        ? "not here" : null;
+            }
+        };
+
+        ProviderDispatcher d = dispatcher(List.of(primary, refused, allowed));
+        d.setFallbackGuards(List.of(guard));
+        d.embed(embeddingRequest("text-embedding-3-small"));
+        verify(refused, org.mockito.Mockito.never()).embed(any());
+        verify(allowed).embed(any());
+
+        onlyElsewhere[0] = true;   // now every fallback is refused
+        assertThatThrownBy(() -> d.embed(embeddingRequest("text-embedding-3-small"))).isSameAs(down);
+        verify(refused, org.mockito.Mockito.never()).embed(any());
+    }
+
+    private final boolean[] onlyElsewhere = {false};
 
     /** The primary embed call stamps its provider and keeps its own fingerprint. */
     @Test
@@ -448,7 +481,7 @@ class ProviderDispatcherTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(primary, unhealthy, healthy), DEFAULT_STRATEGY, registry, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         ChatResponse result = dispatcher.chat(chatRequest("gpt-4o"));
@@ -467,7 +500,7 @@ class ProviderDispatcherTest {
         FallbackResolver emptyFallback = (req, failed, all) -> List.of();
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(primary), DEFAULT_STRATEGY, ALWAYS_HEALTHY, emptyFallback,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         assertThatThrownBy(() -> dispatcher.chat(chatRequest("gpt-4o")))
@@ -543,7 +576,7 @@ class ProviderDispatcherTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(primary, fallback1, fallback2), DEFAULT_STRATEGY, registry, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         assertThatThrownBy(() -> dispatcher.chat(chatRequest("gpt-4o")))
@@ -678,7 +711,7 @@ class ProviderDispatcherTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(primary, unhealthy, healthy), DEFAULT_STRATEGY, registry, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         Iterator<SseChunk> result = dispatcher.streamChat(chatRequest("gpt-4o"));
@@ -814,7 +847,7 @@ class ProviderDispatcherTest {
 
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(primary, unhealthy, healthy), DEFAULT_STRATEGY, registry, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         EmbeddingResponse result = dispatcher.embed(embeddingRequest("text-embedding-ada-002"));
@@ -1084,7 +1117,7 @@ class ProviderDispatcherTest {
         LatencyTracker mockTracker = mock(LatencyTracker.class);
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(provider), DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, mockTracker,
+                TEST_METRICS, ObservationRegistry.NOOP, mockTracker,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         dispatcher.chat(chatRequest("gpt-4o"));
@@ -1103,7 +1136,7 @@ class ProviderDispatcherTest {
         LatencyTracker mockTracker = mock(LatencyTracker.class);
         ProviderDispatcher dispatcher = new ProviderDispatcher(
                 List.of(provider), DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, mockTracker,
+                TEST_METRICS, ObservationRegistry.NOOP, mockTracker,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         try {
@@ -1128,7 +1161,7 @@ class ProviderDispatcherTest {
         ProviderHealthRegistry deepseekPaused = name -> "deepseek".equals(name)
                 ? ProviderHealthStatus.UNHEALTHY : ProviderHealthStatus.HEALTHY;
         ProviderDispatcher dispatcher = new ProviderDispatcher(List.of(deepseek, openai), DEFAULT_STRATEGY, deepseekPaused,
-                DEFAULT_FALLBACK, TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                DEFAULT_FALLBACK, TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
 
         assertThatThrownBy(() -> dispatcher.chat(chatRequest("deepseek-chat")))
@@ -1207,7 +1240,7 @@ class ProviderDispatcherTest {
 
     private static ProviderDispatcher dispatcher(List<LlmProvider> providers) {
         return new ProviderDispatcher(providers, DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
     }
 

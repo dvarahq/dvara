@@ -88,7 +88,7 @@ class GenAiSemconvTracingTest {
     private ProviderDispatcher dispatcher(LlmProvider provider) {
         return new ProviderDispatcher(
                 List.of(provider), DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, observationRegistry, TEST_LATENCY_TRACKER,
+                TEST_METRICS, observationRegistry, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
     }
 
@@ -208,7 +208,7 @@ class GenAiSemconvTracingTest {
         when(provider.chat(any())).thenReturn(chatResponse("r", "m", "stop"));
         ProviderDispatcher d = new ProviderDispatcher(
                 List.of(provider), DEFAULT_STRATEGY, ALWAYS_HEALTHY, DEFAULT_FALLBACK,
-                TEST_METRICS, TEST_REGION, TEST_RESIDENCY, reg, TEST_LATENCY_TRACKER,
+                TEST_METRICS, reg, TEST_LATENCY_TRACKER,
                 TEST_CANARY_COLLECTOR, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
         d.chat(chatRequest("m", null, null));
         TestObservationRegistryAssert.assertThat(reg)

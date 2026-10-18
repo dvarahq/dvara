@@ -52,8 +52,7 @@ class ProviderRegistryFollowedTest {
 
     private ProviderDispatcher dispatcher() {
         return new ProviderDispatcher(registry, new ModelPrefixRoutingStrategy(), name -> ProviderHealthStatus.HEALTHY,
-                (request, failed, all) -> List.of(), new GatewayMetrics(new SimpleMeterRegistry(), region), region,
-                new PassthroughDataResidencyPolicy(), ObservationRegistry.NOOP, null,
+                (request, failed, all) -> List.of(), new GatewayMetrics(new SimpleMeterRegistry(), region), ObservationRegistry.NOOP, null,
                 mock(CanaryMetricsCollector.class), TestProviders.of(mock(CostEstimator.class)), null);
     }
 

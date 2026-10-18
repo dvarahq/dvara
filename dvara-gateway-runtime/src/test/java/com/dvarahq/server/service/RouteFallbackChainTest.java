@@ -103,7 +103,7 @@ class RouteFallbackChainTest {
 
     private static ProviderDispatcher dispatcher(List<LlmProvider> providers, RoutingEngine routes) {
         ProviderDispatcher d = new ProviderDispatcher(providers, routes, HEALTHY, SAME_MODEL,
-                new GatewayMetrics(new SimpleMeterRegistry(), REGION), REGION, new PassthroughDataResidencyPolicy(),
+                new GatewayMetrics(new SimpleMeterRegistry(), REGION),
                 ObservationRegistry.NOOP, mock(LatencyTracker.class), mock(CanaryMetricsCollector.class),
                 TestProviders.of(mock(CostEstimator.class)), (req, resp, latency, route) -> { });
         return d;
@@ -263,6 +263,116 @@ class RouteFallbackChainTest {
         verify(anthropic).chat(any());
     }
 
+    // ── A guard can answer with its own error; a listener hears a served fallback ─────────
+
+    /** Refuses one provider and names the caller's error; counts how often it was told that error was the answer. */
+    private static final class RegionGuard implements com.dvarahq.core.resilience.FallbackTargetGuard {
+        final String refusedProvider;
+        final boolean namesError;
+        int reported;
+
+        RegionGuard(String refusedProvider, boolean namesError) {
+            this.refusedProvider = refusedProvider;
+            this.namesError = namesError;
+        }
+
+        @Override public String refuse(ChatRequest request, String provider) {
+            return refusedProvider.equals(provider) ? "outside the allowed regions" : null;
+        }
+
+        @Override public GatewayException error(ChatRequest request, String provider, String reason) {
+            return namesError ? new GatewayException("DATA_RESIDENCY_VIOLATION", "no provider left in region: " + reason)
+                    : null;
+        }
+
+        @Override public void refused(ChatRequest request, String provider, GatewayException error) {
+            reported++;
+        }
+    }
+
+    @Test
+    void aGuardThatRefusesEveryFallback_answersWithItsOwnError_andIsToldOnce() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider us = provider("us", "claude");
+        when(openai.chat(any())).thenThrow(OUTAGE);
+        ProviderDispatcher d = dispatcher(List.of(openai, us), routes(new RouteConfig.FallbackTarget("us", "claude-x")));
+        RegionGuard guard = new RegionGuard("us", true);
+        d.setFallbackGuards(List.of(guard));
+
+        assertThatThrownBy(() -> d.chat(request("gpt-4o")))
+                .isInstanceOf(GatewayException.class)
+                .extracting(e -> ((GatewayException) e).getCode()).isEqualTo("DATA_RESIDENCY_VIOLATION");
+        verify(us, never()).chat(any());
+        assertThat(guard.reported).isEqualTo(1);
+    }
+
+    @Test
+    void aGuardThatNamesNoError_onlySkips_andTheCallerGetsTheFirstProvidersError() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider us = provider("us", "claude");
+        when(openai.chat(any())).thenThrow(OUTAGE);
+        ProviderDispatcher d = dispatcher(List.of(openai, us), routes(new RouteConfig.FallbackTarget("us", "claude-x")));
+        RegionGuard guard = new RegionGuard("us", false);
+        d.setFallbackGuards(List.of(guard));
+
+        assertThatThrownBy(() -> d.chat(request("gpt-4o"))).isSameAs(OUTAGE);
+        verify(us, never()).chat(any());
+        assertThat(guard.reported).isZero();
+    }
+
+    @Test
+    void aRefusedFallbackStillAnswersWithTheGuardsError_whenAnAllowedOneWasTriedAndFailed() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider us = provider("us", "claude");
+        LlmProvider eu = provider("eu", "mistral");
+        when(openai.chat(any())).thenThrow(OUTAGE);
+        when(eu.chat(any())).thenThrow(GatewayException.upstream(502, "eu down"));
+        ProviderDispatcher d = dispatcher(List.of(openai, us, eu), routes(
+                new RouteConfig.FallbackTarget("us", "claude-x"), new RouteConfig.FallbackTarget("eu", "mistral-x")));
+        d.setFallbackGuards(List.of(new RegionGuard("us", true)));
+
+        assertThatThrownBy(() -> d.chat(request("gpt-4o")))
+                .extracting(e -> ((GatewayException) e).getCode()).isEqualTo("DATA_RESIDENCY_VIOLATION");
+        verify(eu).chat(any());
+        verify(us, never()).chat(any());
+    }
+
+    @Test
+    void aRequestMatchingNoRoute_asksTheGuardsToo_andGetsTheGuardsError() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider azure = provider("azure-openai", "gpt");
+        when(openai.chat(any())).thenThrow(OUTAGE);
+        ProviderDispatcher d = dispatcher(List.of(openai, azure),
+                routes(new RouteConfig.FallbackTarget("anthropic", "claude-x")));
+        RegionGuard guard = new RegionGuard("azure-openai", true);
+        d.setFallbackGuards(List.of(guard));
+
+        assertThatThrownBy(() -> d.chat(request("gpt-4o-mini")))   // the route is for gpt-4o only
+                .extracting(e -> ((GatewayException) e).getCode()).isEqualTo("DATA_RESIDENCY_VIOLATION");
+        verify(azure, never()).chat(any());
+        assertThat(guard.reported).isEqualTo(1);
+    }
+
+    @Test
+    void aServedFallbackIsHeardOnce_onBothPaths_andAFailingListenerChangesNothing() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider azure = provider("azure-openai", "gpt");
+        LlmProvider anthropic = provider("anthropic", "claude");
+        when(openai.chat(any())).thenThrow(OUTAGE);
+        when(azure.chat(any())).thenReturn(response("r-a", "gpt-4o-mini"));
+        when(anthropic.chat(any())).thenReturn(response("r-c", "claude-x"));
+        ProviderDispatcher d = dispatcher(List.of(openai, azure, anthropic),
+                routes(new RouteConfig.FallbackTarget("anthropic", "claude-x")));
+        List<String> heard = new java.util.ArrayList<>();
+        d.setFallbackListeners(List.of(
+                (request, failed, servedBy) -> heard.add(failed + "->" + servedBy + ":" + request.getModel()),
+                (request, failed, servedBy) -> { throw new IllegalStateException("listener broke"); }));
+
+        assertThat(d.chat(request("gpt-4o")).getModel()).isEqualTo("claude-x");          // the route's chain
+        assertThat(d.chat(request("gpt-4o-mini")).getModel()).isEqualTo("gpt-4o-mini");  // no route
+        assertThat(heard).containsExactly("openai->anthropic:claude-x", "openai->azure-openai:gpt-4o-mini");
+    }
+
     @Test
     void whenNoTargetCanTakeTheRequest_theFailoverIsReportedAsBlocked() {
         LlmProvider openai = provider("openai", "gpt");
@@ -400,7 +510,7 @@ class RouteFallbackChainTest {
     private static ProviderDispatcher dispatcher(List<LlmProvider> providers, RoutingEngine routes,
                                                  ProviderHealthRegistry health) {
         return new ProviderDispatcher(providers, routes, health, SAME_MODEL,
-                new GatewayMetrics(new SimpleMeterRegistry(), REGION), REGION, new PassthroughDataResidencyPolicy(),
+                new GatewayMetrics(new SimpleMeterRegistry(), REGION),
                 ObservationRegistry.NOOP, mock(LatencyTracker.class), mock(CanaryMetricsCollector.class),
                 TestProviders.of(mock(CostEstimator.class)), (req, resp, latency, route) -> { });
     }
