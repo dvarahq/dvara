@@ -59,11 +59,19 @@ public class ResilientLlmProvider implements LlmProvider {
      */
     private static final ExecutorService CALL_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
+    /**
+     * The four policies a call runs under, swapped together. A call reads them once when it starts, so it keeps the
+     * settings it started with; {@link #reconfigure} changes them for the calls after it.
+     *
+     * @param circuitBreakerSettings the resolved settings the breaker was built from, so a reconfiguration that does
+     *                               not change them can keep the breaker and its state; null when unknown
+     */
+    public record Policies(CircuitBreaker circuitBreaker, Retry retry, TimeLimiter chatTimeLimiter,
+                           TimeLimiter streamingTimeLimiter, Object circuitBreakerSettings) {
+    }
+
     private final LlmProvider delegate;
-    private final CircuitBreaker circuitBreaker;
-    private final Retry retry;
-    private final TimeLimiter chatTimeLimiter;
-    private final TimeLimiter streamingTimeLimiter;
+    private volatile Policies policies;
     /** Run when a retried attempt is actually sent; null counts nothing. */
     private final Runnable retrySent;
 
@@ -81,12 +89,25 @@ public class ResilientLlmProvider implements LlmProvider {
                                 TimeLimiter chatTimeLimiter,
                                 TimeLimiter streamingTimeLimiter,
                                 Runnable retrySent) {
+        this(delegate, new Policies(circuitBreaker, retry, chatTimeLimiter, streamingTimeLimiter, null), retrySent);
+    }
+
+    public ResilientLlmProvider(LlmProvider delegate, Policies policies, Runnable retrySent) {
         this.retrySent = retrySent;
         this.delegate = delegate;
-        this.circuitBreaker = circuitBreaker;
-        this.retry = retry;
-        this.chatTimeLimiter = chatTimeLimiter;
-        this.streamingTimeLimiter = streamingTimeLimiter;
+        this.policies = policies;
+    }
+
+    /** The policies calls start under now. */
+    public Policies policies() {
+        return policies;
+    }
+
+    /**
+     * Calls that start after this run under {@code next}; a call already running keeps the policies it started with.
+     */
+    public void reconfigure(Policies next) {
+        this.policies = java.util.Objects.requireNonNull(next, "policies");
     }
 
     @Override
@@ -111,18 +132,18 @@ public class ResilientLlmProvider implements LlmProvider {
 
     @Override
     public ChatResponse chat(ChatRequest request) {
-        return executeWithResilience(() -> delegate.chat(request), chatTimeLimiter);
+        return executeWithResilience(() -> delegate.chat(request), false);
     }
 
     @Override
     public EmbeddingResponse embed(EmbeddingRequest request) {
-        return executeWithResilience(() -> delegate.embed(request), chatTimeLimiter);
+        return executeWithResilience(() -> delegate.embed(request), false);
     }
 
     @Override
     public Iterator<SseChunk> streamChat(ChatRequest request) {
         // Retry wraps only the connection call, NOT iterator consumption
-        return executeWithResilience(() -> delegate.streamChat(request), streamingTimeLimiter);
+        return executeWithResilience(() -> delegate.streamChat(request), true);
     }
 
     @Override
@@ -163,7 +184,7 @@ public class ResilientLlmProvider implements LlmProvider {
     /** A count calls no model, but it is still a call to the provider, so it is held to the same limits. */
     @Override
     public java.util.OptionalInt countInputTokens(ChatRequest request) {
-        return executeWithResilience(() -> delegate.countInputTokens(request), chatTimeLimiter);
+        return executeWithResilience(() -> delegate.countInputTokens(request), false);
     }
 
     @Override
@@ -214,7 +235,12 @@ public class ResilientLlmProvider implements LlmProvider {
         return delegate;
     }
 
-    private <T> T executeWithResilience(Callable<T> callable, TimeLimiter timeLimiter) {
+    private <T> T executeWithResilience(Callable<T> callable, boolean streaming) {
+        // Read once: the whole call runs under the policies in force when it started.
+        Policies p = policies;
+        CircuitBreaker circuitBreaker = p.circuitBreaker();
+        Retry retry = p.retry();
+        TimeLimiter timeLimiter = streaming ? p.streamingTimeLimiter() : p.chatTimeLimiter();
         try {
             Callable<T> withCircuitBreaker = CircuitBreaker.decorateCallable(circuitBreaker, callable);
             // Checked before every attempt, outside the breaker: a call whose caller timed out must not
