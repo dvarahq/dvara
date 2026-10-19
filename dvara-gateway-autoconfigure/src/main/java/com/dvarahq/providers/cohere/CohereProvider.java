@@ -130,14 +130,8 @@ public class CohereProvider extends AbstractLlmProvider {
     // -------------------------------------------------------------------------
 
     private Map<String, Object> buildChatBody(ChatRequest request) {
-        rejectUnsupportedContentBlocks(request);
         List<Map<String, Object>> messages = request.getMessages().stream()
-                .map(m -> {
-                    Map<String, Object> msg = new LinkedHashMap<>();
-                    msg.put("role", m.getRole());
-                    msg.put("content", extractContent(m));
-                    return msg;
-                })
+                .map(CohereProvider::serializeMessage)
                 .collect(Collectors.toList());
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -148,31 +142,117 @@ public class CohereProvider extends AbstractLlmProvider {
         if (request.getTopP()        != null) body.put("p",           request.getTopP());
         if (request.getStop()        != null) body.put("stop_sequences", request.getStop());
         if (request.getSeed()        != null) body.put("seed",        request.getSeed());
+        applyTools(body, request);
         return body;
     }
 
-    private void rejectUnsupportedContentBlocks(ChatRequest request) {
-        for (MultimodalMessage msg : request.getMessages()) {
-            if (msg.getContent() == null) continue;
-            for (ContentBlock block : msg.getContent()) {
-                if (block instanceof ContentBlock.ImageBlock) {
-                    throw new GatewayException("UNSUPPORTED_CAPABILITY",
-                            "Cohere vision is not yet implemented in DVARA. Use a vision-capable "
-                            + "provider (OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI) for now.");
-                }
-                // No tool-block branch: a tool call travels on the message's toolCalls, not as a
-                // content block, and the dispatcher keeps a request carrying tools off a provider
-                // whose capabilities declare no tool support, as this one's do.
+    /**
+     * One message on Cohere's v2 wire. Tool calls ride on an assistant message as {@code tool_calls}, in
+     * OpenAI's {@code {id, type, function: {name, arguments}}} shape; a tool result is a {@code tool}
+     * message with its {@code tool_call_id} and the result as a string. An assistant message that only
+     * calls tools carries no {@code content}.
+     */
+    private static Map<String, Object> serializeMessage(MultimodalMessage m) {
+        Map<String, Object> msg = new LinkedHashMap<>();
+        msg.put("role", m.getRole());
+        boolean callsTools = m.getToolCalls() != null && !m.getToolCalls().isEmpty();
+        Object content = extractContent(m);
+        if (!(callsTools && "".equals(content))) {
+            msg.put("content", content);
+        }
+        if (callsTools) {
+            msg.put("tool_calls", m.getToolCalls().stream()
+                    .map(tc -> Map.of(
+                            "id", tc.getId() == null ? "" : tc.getId(),
+                            "type", "function",
+                            "function", Map.of(
+                                    "name", tc.getName() == null ? "" : tc.getName(),
+                                    "arguments", tc.getArguments() == null || tc.getArguments().isBlank()
+                                            ? "{}" : tc.getArguments())))
+                    .collect(Collectors.toList()));
+        }
+        if (m.getToolCallId() != null) {
+            msg.put("tool_call_id", m.getToolCallId());
+        }
+        return msg;
+    }
+
+    /**
+     * Tool definitions in Cohere's v2 shape, which is OpenAI's, and {@code tool_choice} in Cohere's words.
+     * Cohere takes {@code REQUIRED} and {@code NONE}, and lets the model choose when it is absent, so
+     * {@code auto} sends nothing. Cohere has no way to name one tool, so a choice that names one offers
+     * that tool alone, as {@code REQUIRED}: the model must call it, which is what the caller asked.
+     */
+    private static void applyTools(Map<String, Object> body, ChatRequest request) {
+        if (request.getTools() == null || request.getTools().isEmpty()) return;
+        List<com.dvarahq.core.model.ToolDefinition> tools = request.getTools().stream()
+                .map(com.dvarahq.core.model.ToolDefinition::asFunction)
+                .toList();
+        Object choice = request.getToolChoice();
+        String forced = namedTool(choice);
+        if (forced != null) {
+            tools = tools.stream().filter(t -> forced.equals(t.getName())).toList();
+            if (tools.isEmpty()) {
+                throw new GatewayException("INVALID_REQUEST",
+                        "tool_choice names the function " + forced + ", which is not among the request's tools");
             }
+        }
+        body.put("tools", tools.stream()
+                .map(t -> {
+                    Map<String, Object> function = new LinkedHashMap<>();
+                    function.put("name", t.getName());
+                    if (t.getDescription() != null) function.put("description", t.getDescription());
+                    function.put("parameters", t.getParameters() != null ? t.getParameters() : Map.of("type", "object"));
+                    return Map.of("type", "function", "function", function);
+                })
+                .collect(Collectors.toList()));
+        if (forced != null || "required".equals(choice)) {
+            body.put("tool_choice", "REQUIRED");
+        } else if ("none".equals(choice)) {
+            body.put("tool_choice", "NONE");
         }
     }
 
-    private Object extractContent(MultimodalMessage msg) {
+    /** The function a {@code {"type": "function", "function": {"name": ...}}} choice names, or null. */
+    private static String namedTool(Object choice) {
+        if (choice instanceof Map<?, ?> m && m.get("function") instanceof Map<?, ?> f && f.get("name") instanceof String n) {
+            return n;
+        }
+        return null;
+    }
+
+    /**
+     * Text alone goes as a string. With an image the content is a list of parts: {@code text}, and
+     * {@code image_url} with its {@code url} (a URL as sent, base64 as a {@code data:} URL) and
+     * {@code detail} when the caller set one. A model with no vision refuses the image itself.
+     */
+    private static Object extractContent(MultimodalMessage msg) {
         if (msg.getContent() == null || msg.getContent().isEmpty()) return "";
+        boolean allText = msg.getContent().stream().allMatch(b -> b instanceof ContentBlock.TextBlock);
+        if (allText) {
+            return msg.getContent().stream()
+                    .map(b -> ((ContentBlock.TextBlock) b).text())
+                    .collect(Collectors.joining("\n"));
+        }
         return msg.getContent().stream()
-                .filter(b -> b instanceof ContentBlock.TextBlock)
-                .map(b -> ((ContentBlock.TextBlock) b).text())
-                .collect(Collectors.joining("\n"));
+                .map(b -> switch (b) {
+                    case ContentBlock.TextBlock tb -> (Object) Map.of("type", "text", "text", tb.text());
+                    case ContentBlock.ImageBlock ib -> Map.of("type", "image_url", "image_url", imageUrl(ib));
+                    // Only an Anthropic provider takes thinking; the dispatcher never sends it here.
+                    case ContentBlock.ThinkingBlock _, ContentBlock.RedactedThinkingBlock _ ->
+                            throw new GatewayException("UNSUPPORTED_CAPABILITY",
+                                    "Cohere cannot take extended thinking; only an Anthropic provider can.");
+                })
+                .collect(Collectors.toList());
+    }
+
+    private static Map<String, Object> imageUrl(ContentBlock.ImageBlock ib) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("url", ib.isUrl() ? ib.data() : "data:" + ib.mediaType() + ";base64," + ib.data());
+        if (ib.detail() != null) {
+            m.put("detail", ib.detail());
+        }
+        return m;
     }
 
     private void rejectUnsupportedResponseFormat(ResponseFormat format) {
@@ -189,9 +269,22 @@ public class CohereProvider extends AbstractLlmProvider {
     private ChatResponse mapChatResponse(CohereChatResponse cohere) {
         String content = extractResponseContent(cohere);
 
+        MultimodalMessage.MultimodalMessageBuilder message = MultimodalMessage.builder()
+                .role("assistant")
+                .content(List.of(new ContentBlock.TextBlock(content)));
+        if (cohere.getMessage() != null && cohere.getMessage().getToolCalls() != null
+                && !cohere.getMessage().getToolCalls().isEmpty()) {
+            message.toolCalls(cohere.getMessage().getToolCalls().stream()
+                    .map(tc -> com.dvarahq.core.model.ToolCall.builder()
+                            .id(tc.getId())
+                            .name(tc.getFunction() != null ? tc.getFunction().getName() : null)
+                            .arguments(tc.getFunction() != null ? tc.getFunction().getArguments() : null)
+                            .build())
+                    .toList());
+        }
         ChatResponse.Choice choice = ChatResponse.Choice.builder()
                 .index(0)
-                .message(MultimodalMessage.assistant(content))
+                .message(message.build())
                 .finishReason(mapFinishReason(cohere.getFinishReason()))
                 .build();
 
@@ -217,8 +310,9 @@ public class CohereProvider extends AbstractLlmProvider {
     static String mapFinishReason(String reason) {
         if (reason == null) return null;
         return switch (reason) {
-            case "COMPLETE" -> "stop";
+            case "COMPLETE", "STOP_SEQUENCE" -> "stop";
             case "MAX_TOKENS" -> "length";
+            case "TOOL_CALL" -> "tool_calls";
             case "ERROR" -> "error";
             default -> reason;
         };
@@ -229,7 +323,7 @@ public class CohereProvider extends AbstractLlmProvider {
      * counted tokens nor billed units. A zeroed block would claim the call consumed nothing, which
      * the metering path cannot tell from a real zero.
      */
-    private ChatResponse.Usage mapUsage(CohereUsage usage) {
+    private static ChatResponse.Usage mapUsage(CohereUsage usage) {
         if (usage == null) return null;
         int inputTokens;
         int outputTokens;
@@ -255,7 +349,15 @@ public class CohereProvider extends AbstractLlmProvider {
 
     @Override
     public ProviderCapabilities capabilities() {
-        return new ProviderCapabilities(true, false, false, false, false, 128_000);
+        return new ProviderCapabilities(
+                /* streaming */ true,
+                /* vision */ true,
+                /* tool calls */ true,
+                /* structured outputs */ false,
+                /* json mode */ false,
+                /* batch */ false,
+                /* streamed tool calls */ true,
+                /* max context */ 128_000);
     }
 
     @Override
@@ -369,20 +471,57 @@ public class CohereProvider extends AbstractLlmProvider {
                         .delta(text)
                         .done(false)
                         .build();
+            } else if ("tool-call-start".equals(event.getType()) || "tool-call-delta".equals(event.getType())) {
+                com.dvarahq.core.model.ToolCallDelta delta = toolCallDelta(event);
+                if (delta == null) return null;
+                return SseChunk.builder()
+                        .model(model)
+                        .toolCalls(List.of(delta))
+                        .done(false)
+                        .build();
             } else if ("message-end".equals(event.getType())) {
                 String finishReason = null;
+                ChatResponse.Usage usage = null;
                 if (event.getDelta() != null) {
                     finishReason = mapFinishReason(event.getDelta().getFinishReason());
+                    usage = mapUsage(event.getDelta().getUsage());
                 }
                 boolean isDone = finishReason != null;
                 return SseChunk.builder()
                         .model(model)
                         .finishReason(finishReason)
+                        .usage(usage)
                         .done(isDone)
                         .build();
             }
-            // Skip other event types (e.g. message-start, content-start, content-end)
+            // Skip other event types: message-start, content-start, content-end, tool-plan-delta (the
+            // model's plan before it calls a tool, not answer text), tool-call-end, citations.
             return null;
+        }
+
+        /**
+         * One fragment of a streamed tool call. {@code tool-call-start} carries the call's id, name and
+         * usually empty arguments; each {@code tool-call-delta} carries more of the arguments. Both name
+         * the call by the event's top-level {@code index}. The docs show {@code delta.message.tool_calls}
+         * as one object in the stream and as a list in an SDK sample, so either is read.
+         */
+        private static com.dvarahq.core.model.ToolCallDelta toolCallDelta(CohereStreamEvent event) {
+            if (event.getDelta() == null || event.getDelta().getMessage() == null) return null;
+            com.fasterxml.jackson.databind.JsonNode calls = event.getDelta().getMessage().getToolCalls();
+            if (calls == null || calls.isNull()) return null;
+            com.fasterxml.jackson.databind.JsonNode call = calls.isArray() ? calls.path(0) : calls;
+            if (call.isMissingNode()) return null;
+            int index = event.getIndex() != null ? event.getIndex() : 0;
+            String id = text(call.path("id"));
+            String name = text(call.path("function").path("name"));
+            String arguments = text(call.path("function").path("arguments"));
+            if (id == null && name == null && (arguments == null || arguments.isEmpty())) return null;
+            return new com.dvarahq.core.model.ToolCallDelta(index, id, name,
+                    arguments == null || arguments.isEmpty() ? null : arguments);
+        }
+
+        private static String text(com.fasterxml.jackson.databind.JsonNode n) {
+            return n == null || n.isMissingNode() || n.isNull() ? null : n.asText();
         }
 
         /** Close the body stream, not the reader: a read parked in readLine() holds the reader's lock. */
@@ -416,6 +555,20 @@ public class CohereProvider extends AbstractLlmProvider {
     private static class CohereMessage {
         private String role;
         private List<CohereContentBlock> content;
+        @JsonProperty("tool_calls") private List<CohereToolCall> toolCalls;
+    }
+
+    @Data @JsonIgnoreProperties(ignoreUnknown = true)
+    private static class CohereToolCall {
+        private String id;
+        private String type;
+        private CohereFunction function;
+    }
+
+    @Data @JsonIgnoreProperties(ignoreUnknown = true)
+    private static class CohereFunction {
+        private String name;
+        private String arguments;
     }
 
     @Data @JsonIgnoreProperties(ignoreUnknown = true)
@@ -449,6 +602,7 @@ public class CohereProvider extends AbstractLlmProvider {
     @Data @JsonIgnoreProperties(ignoreUnknown = true)
     private static class CohereStreamEvent {
         private String type;
+        private Integer index;
         private CohereStreamDelta delta;
     }
 
@@ -462,6 +616,7 @@ public class CohereProvider extends AbstractLlmProvider {
     @Data @JsonIgnoreProperties(ignoreUnknown = true)
     private static class CohereStreamMessage {
         private CohereStreamContent content;
+        @JsonProperty("tool_calls") private com.fasterxml.jackson.databind.JsonNode toolCalls;
     }
 
     @Data @JsonIgnoreProperties(ignoreUnknown = true)
