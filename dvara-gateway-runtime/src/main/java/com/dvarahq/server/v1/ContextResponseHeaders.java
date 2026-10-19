@@ -26,17 +26,14 @@ import org.springframework.http.ResponseEntity;
  * the same way.
  *
  * <p>Two come from the policy decision instead. {@code X-Policy-Warning: true} is set when it carries any
- * warning. {@code X-Budget-Warning: true} is meant for a warning from a rule that tests budget use, but
- * through the 1.9 releases it is still set for every warning, as before, so a client that reads it keeps
- * working. From 1.10.0 it is set only for a budget warning; read {@code X-Policy-Warning} for any warning.
+ * warning. {@code X-Budget-Warning: true} is set only when one of those warnings comes from a rule on budget
+ * use. Through the 1.9 releases it was set for every warning, despite its name, so a client could keep
+ * reading it; from 1.10.0 a client reads {@code X-Policy-Warning} for any warning.
  */
 final class ContextResponseHeaders {
 
     static final String X_BUDGET_WARNING = "X-Budget-Warning";
     static final String X_POLICY_WARNING = "X-Policy-Warning";
-
-    /** Through the 1.9 releases {@code X-Budget-Warning} keeps its old meaning, any warning. False from 1.10.0. */
-    static final boolean BUDGET_HEADER_ON_EVERY_WARNING = true;
 
     private ContextResponseHeaders() {
     }
@@ -46,7 +43,7 @@ final class ContextResponseHeaders {
         ctx.responseHeaders().forEach(builder::header);
         if (decision != null && decision.hasWarnings()) {
             builder.header(X_POLICY_WARNING, "true");
-            if (BUDGET_HEADER_ON_EVERY_WARNING || hasBudgetWarning(decision)) {
+            if (hasBudgetWarning(decision)) {
                 builder.header(X_BUDGET_WARNING, "true");
             }
         }
@@ -58,7 +55,7 @@ final class ContextResponseHeaders {
         ctx.responseHeaders().forEach(response::setHeader);
         if (decision != null && decision.hasWarnings()) {
             response.setHeader(X_POLICY_WARNING, "true");
-            if (BUDGET_HEADER_ON_EVERY_WARNING || hasBudgetWarning(decision)) {
+            if (hasBudgetWarning(decision)) {
                 response.setHeader(X_BUDGET_WARNING, "true");
             }
         }
