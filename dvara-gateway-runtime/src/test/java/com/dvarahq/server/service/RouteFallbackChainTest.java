@@ -374,6 +374,27 @@ class RouteFallbackChainTest {
     }
 
     @Test
+    void failoverFollowsTheResilienceSettingsInForce_turnedOffAndBackOnAtRunTime() {
+        LlmProvider openai = provider("openai", "gpt");
+        LlmProvider anthropic = provider("anthropic", "claude");
+        when(openai.chat(any())).thenThrow(OUTAGE);
+        when(anthropic.chat(any())).thenReturn(response("r-x", "claude-x"));
+        ProviderDispatcher d = dispatcher(List.of(openai, anthropic),
+                routes(new RouteConfig.FallbackTarget("anthropic", "claude-x")));
+        GatewayProperties start = settings(true, 3, Duration.ofSeconds(60));
+        var resilience = new com.dvarahq.autoconfigure.resilience.ResilienceSettings(start.getResilience(), null, null);
+        d.setResilienceSettings(resilience);
+
+        assertThat(d.chat(request("gpt-4o")).getModel()).isEqualTo("claude-x");
+
+        resilience.apply(settings(false, 3, Duration.ofSeconds(60)).getResilience());
+        assertThatThrownBy(() -> d.chat(request("gpt-4o"))).as("failover turned off").isSameAs(OUTAGE);
+
+        resilience.apply(settings(true, 3, Duration.ofSeconds(60)).getResilience());
+        assertThat(d.chat(request("gpt-4o")).getModel()).as("and back on").isEqualTo("claude-x");
+    }
+
+    @Test
     void whenNoTargetCanTakeTheRequest_theFailoverIsReportedAsBlocked() {
         LlmProvider openai = provider("openai", "gpt");
         LlmProvider noTools = provider("notools", "n", new ProviderCapabilities(true, false, false, false, false, 32_000));

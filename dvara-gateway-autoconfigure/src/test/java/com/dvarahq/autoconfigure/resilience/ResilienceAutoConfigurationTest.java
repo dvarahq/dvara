@@ -59,28 +59,23 @@ class ResilienceAutoConfigurationTest {
     // -------------------------------------------------------------------------
 
     @Test
-    void fallbackResolver_whenFallbackEnabled_returnsConfigurableResolver() {
+    void fallbackResolver_followsTheLiveSetting() {
         GatewayProperties properties = new GatewayProperties();
         properties.getResilience().getFallback().setEnabled(true);
-
-        FallbackResolver resolver = autoConfig.fallbackResolver(properties);
-
-        assertThat(resolver).isInstanceOf(ConfigurableFallbackResolver.class);
-    }
-
-    @Test
-    void fallbackResolver_whenFallbackDisabled_returnsEmptyResolver() {
-        GatewayProperties properties = new GatewayProperties();
-        properties.getResilience().getFallback().setEnabled(false);
-
-        FallbackResolver resolver = autoConfig.fallbackResolver(properties);
-
+        ResilienceSettings settings = new ResilienceSettings(properties.getResilience(), null, null);
+        FallbackResolver resolver = autoConfig.fallbackResolver(settings);
         LlmProvider failedProvider = mockProvider("openai");
         LlmProvider otherProvider = mockProvider("anthropic");
-        List<LlmProvider> fallbacks = resolver.resolve(
-                chatRequest(), failedProvider, List.of(failedProvider, otherProvider));
+        when(otherProvider.supports(any())).thenReturn(true);
+        List<LlmProvider> all = List.of(failedProvider, otherProvider);
 
-        assertThat(fallbacks).isEmpty();
+        assertThat(resolver).isInstanceOf(ConfigurableFallbackResolver.class);
+        assertThat(resolver.resolve(chatRequest(), failedProvider, all)).containsExactly(otherProvider);
+
+        GatewayProperties off = new GatewayProperties();
+        off.getResilience().getFallback().setEnabled(false);
+        settings.apply(off.getResilience());
+        assertThat(resolver.resolve(chatRequest(), failedProvider, all)).as("turned off at run time").isEmpty();
     }
 
     // -------------------------------------------------------------------------
@@ -481,13 +476,16 @@ class ResilienceAutoConfigurationTest {
         ApplicationContext context = mock(ApplicationContext.class);
         when(context.getBean(GatewayProperties.class)).thenReturn(properties);
         // created outside when(...): Mockito reports a mock created inside a stubbing as unfinished
-        var healthProvider = healthRegistryProvider(new Resilience4jProviderHealthRegistry());
+        var health = new Resilience4jProviderHealthRegistry();
+        var healthProvider = healthRegistryProvider(health);
         when(context.getBeanProvider(Resilience4jProviderHealthRegistry.class)).thenReturn(healthProvider);
         @SuppressWarnings("unchecked")
         org.springframework.beans.factory.ObjectProvider<io.micrometer.core.instrument.MeterRegistry> p =
                 mock(org.springframework.beans.factory.ObjectProvider.class);
         when(p.getIfAvailable()).thenReturn(registry);
         when(context.getBeanProvider(io.micrometer.core.instrument.MeterRegistry.class)).thenReturn(p);
+        var settings = new ResilienceSettings(properties.getResilience(), health, registry);
+        when(context.getBean(ResilienceSettings.class)).thenReturn(settings);
         return ResilienceAutoConfiguration.resilientProviderPostProcessor(context);
     }
 
@@ -504,6 +502,8 @@ class ResilienceAutoConfigurationTest {
                 mock(org.springframework.beans.factory.ObjectProvider.class);
         when(noRegistry.getIfAvailable()).thenReturn(null);
         when(context.getBeanProvider(io.micrometer.core.instrument.MeterRegistry.class)).thenReturn(noRegistry);
+        var settings = new ResilienceSettings(properties.getResilience(), healthRegistry, null);
+        when(context.getBean(ResilienceSettings.class)).thenReturn(settings);
         return ResilienceAutoConfiguration.resilientProviderPostProcessor(context);
     }
 

@@ -68,41 +68,44 @@ public class ResilienceAutoConfiguration {
      * in every posture, and an application's own resolver wins on absence rather than losing to a
      * framework {@code @Primary}.
      */
+    /**
+     * The configurable resolver, on while {@code fallback.enabled} is: it reads the setting from
+     * {@link ResilienceSettings} on every call, because the setting can change while the gateway runs. Off, it offers
+     * no candidate. Conditional on the interface for the same reason as the registry above: one bean of this type in
+     * every posture, and an application's own resolver wins on absence rather than losing to a framework
+     * {@code @Primary}.
+     */
     @Bean
     @ConditionalOnMissingBean(FallbackResolver.class)
-    public FallbackResolver fallbackResolver(GatewayProperties properties) {
-        if (properties.getResilience().getFallback().isEnabled()) {
-            return new ConfigurableFallbackResolver();
+    public FallbackResolver fallbackResolver(ResilienceSettings settings) {
+        return new ConfigurableFallbackResolver(() -> settings.current().getFallback().isEnabled());
+    }
+
+    /**
+     * The settings providers run under, starting from {@code dvara.llm-gateway.resilience.*}, and the wrappers built
+     * with them. A distribution changes them at run time with {@link ResilienceSettings#apply}.
+     */
+    @Bean
+    public ResilienceSettings resilienceSettings(GatewayProperties properties,
+                                                 org.springframework.beans.factory.ObjectProvider<Resilience4jProviderHealthRegistry> healthRegistry,
+                                                 org.springframework.beans.factory.ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meterRegistry) {
+        // Optional: an application that supplies its own ProviderHealthRegistry stands this one down, and then there is
+        // nowhere to record circuit state. The wrapping still happens; the application's registry answers health
+        // questions from whatever it knows.
+        Resilience4jProviderHealthRegistry registry = healthRegistry.getIfAvailable();
+        if (registry == null) {
+            log.info("Provider health is reported by an application-supplied "
+                    + "ProviderHealthRegistry; circuit-breaker state will not feed it.");
         }
-        return (request, failedProvider, allProviders) -> java.util.List.of();
+        // Optional: a host application without actuator has no registry, and a retry that cannot be counted must
+        // still be retried.
+        return new ResilienceSettings(properties.getResilience(), registry, meterRegistry.getIfAvailable());
     }
 
     @Bean
     public static BeanPostProcessor resilientProviderPostProcessor(ApplicationContext context) {
         return new BeanPostProcessor() {
-            private GatewayProperties properties;
-            private Resilience4jProviderHealthRegistry healthRegistry;
-            private io.micrometer.core.instrument.MeterRegistry meterRegistry;
-
-            private void ensureInitialized() {
-                if (properties == null) {
-                    properties = context.getBean(GatewayProperties.class);
-                    // Optional: an application that supplies its own ProviderHealthRegistry stands
-                    // this one down, and then there is nowhere to record circuit state. The
-                    // wrapping still happens — the breaker, retry and timeout are the point — but
-                    // the application's registry answers health questions from whatever it knows.
-                    healthRegistry = context.getBeanProvider(Resilience4jProviderHealthRegistry.class)
-                            .getIfAvailable();
-                    if (healthRegistry == null) {
-                        log.info("Provider health is reported by an application-supplied "
-                                + "ProviderHealthRegistry; circuit-breaker state will not feed it.");
-                    }
-                    // Optional: a host application without actuator has no registry, and a retry
-                    // that cannot be counted must still be retried.
-                    meterRegistry = context.getBeanProvider(io.micrometer.core.instrument.MeterRegistry.class)
-                            .getIfAvailable();
-                }
-            }
+            private ResilienceSettings settings;
 
             @Override
             public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
@@ -112,97 +115,14 @@ public class ResilienceAutoConfiguration {
                         log.info("Skipping resilience wrapping for MockProvider (always healthy)");
                         return bean;
                     }
-                    ensureInitialized();
-                    return wrapWithResilience(provider, properties, healthRegistry, meterRegistry);
+                    if (settings == null) {
+                        settings = context.getBean(ResilienceSettings.class);
+                    }
+                    return settings.wrap(provider);
                 }
                 return bean;
             }
         };
-    }
-
-    private static ResilientLlmProvider wrapWithResilience(LlmProvider provider,
-                                                    GatewayProperties properties,
-                                                    Resilience4jProviderHealthRegistry healthRegistry,
-                                                    io.micrometer.core.instrument.MeterRegistry meterRegistry) {
-        String name = provider.name();
-        GatewayProperties.Resilience resilience = properties.getResilience();
-
-        // Resolve per-provider overrides
-        GatewayProperties.RetryConfig retryConfig = resolveRetryConfig(name, resilience);
-        GatewayProperties.CircuitBreakerConfig cbConfig = resolveCbConfig(name, resilience);
-        GatewayProperties.TimeoutConfig timeoutConfig = resolveTimeoutConfig(name, resilience);
-
-        // Circuit Breaker
-        CircuitBreakerConfig cbCfg = CircuitBreakerConfig.custom()
-                .failureRateThreshold(cbConfig.getFailureRateThreshold())
-                .slidingWindowSize(cbConfig.getSlidingWindowSize())
-                .minimumNumberOfCalls(cbConfig.getMinimumNumberOfCalls())
-                .waitDurationInOpenState(Duration.ofMillis(cbConfig.getWaitDurationInOpenStateMs()))
-                .permittedNumberOfCallsInHalfOpenState(cbConfig.getPermittedCallsInHalfOpen())
-                // Move to half-open when the wait is over, without waiting for a call. The dispatcher
-                // sends nothing to a provider whose breaker is open, so a breaker that only moves when a
-                // call arrives never gets its trial call, and the provider stays out until a restart.
-                .automaticTransitionFromOpenToHalfOpenEnabled(true)
-                // One breaker serves every workspace on this provider, so only what says the provider
-                // itself is failing may count against it: not a caller's bad key or oversized prompt.
-                .recordException(ResilienceAutoConfiguration::isProviderFailure)
-                .build();
-        CircuitBreaker circuitBreaker = CircuitBreaker.of("provider-" + name, cbCfg);
-
-        // Log state transitions
-        circuitBreaker.getEventPublisher()
-                .onStateTransition(event ->
-                        log.info("Circuit breaker [{}] state transition: {}", name, event.getStateTransition()));
-
-        if (healthRegistry != null) {
-            healthRegistry.register(name, circuitBreaker);
-        }
-
-        // Retry
-        RetryConfig retryCfg = RetryConfig.custom()
-                .maxAttempts(retryConfig.getMaxAttempts())
-                .intervalFunction(attempt -> {
-                    long delay = (long) (retryConfig.getInitialBackoffMs()
-                            * Math.pow(retryConfig.getBackoffMultiplier(), attempt - 1));
-                    return Math.min(delay, retryConfig.getMaxBackoffMs());
-                })
-                .retryOnException(e -> isRetryable(e))
-                .build();
-        Retry retry = Retry.of("provider-" + name, retryCfg);
-
-        // Counted here rather than through GatewayMetrics, which is in the runtime module this
-        // module cannot see, so gateway_retries_total is emitted wherever the retry runs.
-        retry.getEventPublisher()
-                .onRetry(event -> log.warn("Retry attempt #{} for provider [{}]: {}",
-                        event.getNumberOfRetryAttempts(), name, event.getLastThrowable().getMessage()));
-        // gateway_retries_total counts a retry when it is sent (see ResilientLlmProvider), not when it
-        // is scheduled: a timeout during the backoff cancels a retry that never reaches the provider.
-        Runnable retrySent = meterRegistry == null ? null
-                : () -> io.micrometer.core.instrument.Counter.builder("gateway_retries_total")
-                        .description("Total provider call retries")
-                        .tag("provider", name)
-                        .register(meterRegistry)
-                        .increment();
-
-        // Time Limiters
-        TimeLimiter chatTimeLimiter = TimeLimiter.of("provider-" + name + "-chat",
-                TimeLimiterConfig.custom()
-                        .timeoutDuration(Duration.ofMillis(timeoutConfig.getChatTimeoutMs()))
-                        .cancelRunningFuture(true)
-                        .build());
-
-        TimeLimiter streamingTimeLimiter = TimeLimiter.of("provider-" + name + "-stream",
-                TimeLimiterConfig.custom()
-                        .timeoutDuration(Duration.ofMillis(timeoutConfig.getStreamingTimeoutMs()))
-                        .cancelRunningFuture(true)
-                        .build());
-
-        log.info("Wrapped provider [{}] with resilience (retry={}, cb-threshold={}%, timeout={}ms)",
-                name, retryConfig.getMaxAttempts(), cbConfig.getFailureRateThreshold(),
-                timeoutConfig.getChatTimeoutMs());
-
-        return new ResilientLlmProvider(provider, circuitBreaker, retry, chatTimeLimiter, streamingTimeLimiter,
-                retrySent);
     }
 
     /**

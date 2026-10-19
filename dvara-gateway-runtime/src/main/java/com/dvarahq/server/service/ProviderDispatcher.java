@@ -523,7 +523,7 @@ public class ProviderDispatcher {
     private LlmProvider pausedRouteChoice(ChatRequest request, List<LlmProvider> healthy,
                                           List<LlmProvider> capable, RequestContext ctx) {
         RouteConfig route = ctx.getMatchedRoute();
-        if (!fallbackEnabled || route == null || route.getFallbacks() == null || route.getFallbacks().isEmpty()
+        if (!fallbackOn() || route == null || route.getFallbacks() == null || route.getFallbacks().isEmpty()
                 || healthy.size() == capable.size()) {
             return null;
         }
@@ -568,6 +568,37 @@ public class ProviderDispatcher {
         this.fallbackEnabled = f.isEnabled();
         this.fallbackMaxAttempts = Math.max(0, f.getMaxAttempts());
         this.fallbackDeadline = f.getDeadline() != null ? f.getDeadline() : java.time.Duration.ofSeconds(60);
+    }
+
+    /**
+     * The resilience settings in force, when the resilience module is on. Failover reads its switch, attempt limit and
+     * deadline from them on every failover, so they can change while the gateway runs; without them the values given
+     * to {@link #setFallbackSettings} hold.
+     */
+    private com.dvarahq.autoconfigure.resilience.ResilienceSettings resilienceSettings;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setResilienceSettings(com.dvarahq.autoconfigure.resilience.ResilienceSettings settings) {
+        this.resilienceSettings = settings;
+    }
+
+    private com.dvarahq.autoconfigure.GatewayProperties.FallbackConfig liveFallback() {
+        return resilienceSettings == null ? null : resilienceSettings.current().getFallback();
+    }
+
+    private boolean fallbackOn() {
+        var f = liveFallback();
+        return f == null ? fallbackEnabled : f.isEnabled();
+    }
+
+    private int fallbackMaxAttempts() {
+        var f = liveFallback();
+        return f == null ? fallbackMaxAttempts : Math.max(0, f.getMaxAttempts());
+    }
+
+    private java.time.Duration fallbackDeadline() {
+        var f = liveFallback();
+        return f == null || f.getDeadline() == null ? fallbackDeadline : f.getDeadline();
     }
 
     /** Every guard a fallback target must pass (#7 REQ-CPF-05); none registered allows every target. */
@@ -625,7 +656,7 @@ public class ProviderDispatcher {
     private <T> T afterRefusal(Refusal refusal, ChatRequest request, LlmProvider primary, RequestContext routingCtx,
                                long startNanos, ProviderCall<T> call) {
         RouteConfig route = routingCtx.getMatchedRoute();
-        if (fallbackEnabled && route != null && route.getFallbacks() != null && !route.getFallbacks().isEmpty()) {
+        if (fallbackOn() && route != null && route.getFallbacks() != null && !route.getFallbacks().isEmpty()) {
             try {
                 return attemptRouteChain(route, request, primary, refusal.error(), startNanos, call, false);
             } catch (GatewayException noTargetServedIt) {
@@ -638,7 +669,7 @@ public class ProviderDispatcher {
 
     private <T> T attemptFallback(ChatRequest request, LlmProvider failedProvider, GatewayException originalException,
                                   RequestContext routingCtx, long startNanos, ProviderCall<T> call) {
-        if (!fallbackEnabled) {
+        if (!fallbackOn()) {
             throw originalException;
         }
         RouteConfig route = routingCtx.getMatchedRoute();
@@ -672,15 +703,17 @@ public class ProviderDispatcher {
         if (chain.isEmpty()) {
             throw originalException;
         }
-        long deadlineNanos = startNanos + fallbackDeadline.toNanos();
+        int maxAttempts = fallbackMaxAttempts();
+        java.time.Duration deadline = fallbackDeadline();
+        long deadlineNanos = startNanos + deadline.toNanos();
         int attempts = 0;
         boolean capabilityMismatch = false;
         GuardRefusal decisive = null;   // the first refusal by a guard that names the caller's error
         for (int i = 0; i < chain.size(); i++) {
             RouteConfig.FallbackTarget target = chain.get(i);
-            if (attempts >= fallbackMaxAttempts || System.nanoTime() > deadlineNanos) {
+            if (attempts >= maxAttempts || System.nanoTime() > deadlineNanos) {
                 log.warn("Route [{}]: fallback stopped before target {} ({}): {} attempt(s) made, limit {}, deadline {}",
-                        route.getId(), i + 1, target.describe(), attempts, fallbackMaxAttempts, fallbackDeadline);
+                        route.getId(), i + 1, target.describe(), attempts, maxAttempts, deadline);
                 break;
             }
             LlmProvider provider = registry.current().stream().filter(p -> p.name().equals(target.provider())).findFirst().orElse(null);

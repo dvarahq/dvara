@@ -26,8 +26,24 @@ import java.util.stream.Collectors;
 
 public class ConfigurableFallbackResolver implements FallbackResolver {
 
+    /** Whether failover is on now; read on every call, because the setting can change while the gateway runs. */
+    private final java.util.function.BooleanSupplier enabled;
+
+    /** Always on. */
+    public ConfigurableFallbackResolver() {
+        this(() -> true);
+    }
+
+    /** On while {@code enabled} says so; off, it offers no candidate. */
+    public ConfigurableFallbackResolver(java.util.function.BooleanSupplier enabled) {
+        this.enabled = enabled;
+    }
+
     @Override
     public List<LlmProvider> resolve(ChatRequest request, LlmProvider failedProvider, List<LlmProvider> allProviders) {
+        if (!enabled.getAsBoolean()) {
+            return List.of();
+        }
         return allProviders.stream()
                 .filter(p -> p.supports(request))
                 .filter(p -> !p.name().equals(failedProvider.name()))
