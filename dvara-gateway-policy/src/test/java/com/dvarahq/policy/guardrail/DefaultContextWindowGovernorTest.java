@@ -366,4 +366,17 @@ class DefaultContextWindowGovernorTest {
         }
         assertThat(checked).as("fields compared").isGreaterThanOrEqualTo(7);
     }
+
+    @Test
+    void theThresholdsAreTheWorkspacesOwn_andReadingThemWritesNothing() {
+        when(workspaceRepository.findById("t1")).thenReturn(Optional.of(Workspace.builder().id("t1").name("w")
+                .metadata(Map.of("guardrail.context.warning-threshold-pct", "55",
+                        "guardrail.context.hard-threshold-pct", "85")).build()));
+
+        assertThat(governor.thresholds("t1")).isEqualTo(new com.dvarahq.core.guardrail.ContextThresholds(55, 85));
+        assertThat(governor.thresholds("unknown"))
+                .isEqualTo(com.dvarahq.core.guardrail.ContextThresholds.DEFAULTS);
+        assertThat(governor.thresholds(null)).isEqualTo(com.dvarahq.core.guardrail.ContextThresholds.DEFAULTS);
+        verifyNoInteractions(auditWriter, tokenEstimator);
+    }
 }

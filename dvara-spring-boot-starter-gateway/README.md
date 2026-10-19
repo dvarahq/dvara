@@ -26,9 +26,12 @@ request pipeline. Your application keeps everything the first starter gives it a
 | `POST /v1/embeddings` | embeddings |
 | `GET /v1/models` | the models your configured providers offer; a `ModelListFilter` bean narrows it per caller |
 | `POST /v1/batches`, `POST /v1/files` | the OpenAI Batch API |
+| `POST /v1/tokens/count` | a chat request's input tokens, for one model or several, before it is sent: where they go, the context window they use and, where a price source is registered, the cost. No model is called |
 
-Every one of them except the batch paths runs the full governance pipeline: policy, PII,
-guardrails, rate limiting and audit, before the call reaches a provider. A batch input file is
+Every one of them except the batch paths and the token count runs the full governance pipeline: policy, PII,
+guardrails, rate limiting and audit, before the call reaches a provider. The token count is rate-limited and runs only
+the checks that govern what a request says (policy, PII, guardrails), since its text can go to a provider to be
+counted; nothing is billed. A batch input file is
 PII-scanned as a whole, and its models are checked by any `BatchModelCheck` bean your application
 registers, at upload and again at submit; its lines do not run the rest of the pipeline. Batches are
 tracked in memory, so a restart forgets them; the application logs that at startup.

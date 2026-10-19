@@ -123,6 +123,12 @@ public class VendorCountingTokenEstimator implements TokenEstimator {
         return local.upperBound(request);
     }
 
+    /** The local count's parts: a provider's count is a total only. */
+    @Override
+    public java.util.Optional<com.dvarahq.core.guardrail.TokenBreakdown> breakdown(ChatRequest request) {
+        return local.breakdown(request);
+    }
+
     /** A selector that fails picks nothing: the local count is used. */
     private boolean isSelected(ChatRequest request) {
         try {

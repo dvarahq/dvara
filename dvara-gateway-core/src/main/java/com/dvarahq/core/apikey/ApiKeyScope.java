@@ -39,8 +39,8 @@ public enum ApiKeyScope {
 
     /**
      * {@code /v1/chat/completions}, {@code /v1/completions}, {@code /v1/responses},
-     * {@code /v1/messages}, {@code /v1/gemini} (Gemini's {@code generateContent}), and {@code /v1/budget} —
-     * the pre-flight estimate for one of them.
+     * {@code /v1/messages}, {@code /v1/gemini} (Gemini's {@code generateContent}), {@code /v1/budget} —
+     * the pre-flight estimate for one of them — and {@code /v1/tokens}, the pre-flight token count.
      */
     COMPLETIONS_WRITE("completions:write"),
     /** {@code /v1/embeddings}. Not covered by completions, so an embeddings-only key can be issued. */
@@ -92,6 +92,11 @@ public enum ApiKeyScope {
         // not serve the endpoint; its scope is stated here because this method is what the request
         // filter consults for every URI, whichever module mapped it.
         if (under(path, "/v1/budget")) {
+            return Optional.of(COMPLETIONS_WRITE);
+        }
+        // /v1/tokens counts a request the caller intends to make, and its text can go to that request's provider to
+        // be counted, so it takes the scope of the call it counts.
+        if (under(path, "/v1/tokens")) {
             return Optional.of(COMPLETIONS_WRITE);
         }
         if (under(path, "/v1/embeddings")) {

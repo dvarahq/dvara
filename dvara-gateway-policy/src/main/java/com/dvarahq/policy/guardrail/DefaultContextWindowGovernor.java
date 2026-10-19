@@ -17,6 +17,7 @@ package com.dvarahq.policy.guardrail;
 
 import com.dvarahq.core.audit.AuditEvent;
 import com.dvarahq.core.audit.AuditWriter;
+import com.dvarahq.core.guardrail.ContextThresholds;
 import com.dvarahq.core.guardrail.ContextWindowGovernor;
 import com.dvarahq.core.guardrail.ContextWindowResult;
 import com.dvarahq.core.guardrail.PruningStrategy;
@@ -61,12 +62,14 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
     }
 
     @Override
-    public ContextWindowResult evaluate(ChatRequest request, int maxContextTokens, String workspaceId) {
-        if (maxContextTokens <= 0) {
-            return ContextWindowResult.withinLimits(0, maxContextTokens);
-        }
+    public ContextThresholds thresholds(String workspaceId) {
+        return settings(workspaceId).thresholds();
+    }
 
-        // Resolve workspace config
+    /** A workspace's thresholds and pruning strategy, the defaults where it sets none. */
+    private record Settings(ContextThresholds thresholds, PruningStrategy pruningStrategy) {}
+
+    private Settings settings(String workspaceId) {
         int warningThreshold = DEFAULT_WARNING_THRESHOLD_PCT;
         int hardThreshold = DEFAULT_HARD_THRESHOLD_PCT;
         PruningStrategy pruningStrategy = PruningStrategy.NONE;
@@ -98,6 +101,19 @@ public class DefaultContextWindowGovernor implements ContextWindowGovernor {
                 }
             }
         }
+        return new Settings(new ContextThresholds(warningThreshold, hardThreshold), pruningStrategy);
+    }
+
+    @Override
+    public ContextWindowResult evaluate(ChatRequest request, int maxContextTokens, String workspaceId) {
+        if (maxContextTokens <= 0) {
+            return ContextWindowResult.withinLimits(0, maxContextTokens);
+        }
+
+        Settings settings = settings(workspaceId);
+        int warningThreshold = settings.thresholds().warningPct();
+        int hardThreshold = settings.thresholds().hardPct();
+        PruningStrategy pruningStrategy = settings.pruningStrategy();
 
         // A request whose upper bound is under both thresholds is under them by its count too, and nothing reads the
         // count of a request inside its window. Counting is most of what a large request costs here, so it is done

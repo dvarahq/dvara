@@ -129,6 +129,15 @@ public class ContextWindowFilter implements ChatFilter {
      * any of them. A non-positive window states no limit and is skipped.
      */
     private int resolveMaxContextTokens(ChatRequest request) {
+        return windowFor(request);
+    }
+
+    /**
+     * The context window this filter holds a request for {@code request.getModel()} to: the smallest window among the
+     * providers that could serve it, {@value #FALLBACK_MAX_CONTEXT_TOKENS} when none claims the model. For a caller that
+     * reports a request's utilisation without sending it.
+     */
+    public int windowFor(ChatRequest request) {
         int smallest = Integer.MAX_VALUE;
         for (LlmProvider provider : registry.current()) {
             if (!supportsQuietly(provider, request)) {

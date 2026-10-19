@@ -37,4 +37,12 @@ public interface TokenEstimator {
     default int upperBound(ChatRequest request) {
         return estimateTokens(request);
     }
+
+    /**
+     * Where the request's tokens go, part by part, adding up to {@link #estimateTokens(ChatRequest)}. Empty from an
+     * estimator that only counts a total, such as the character-based stand-in.
+     */
+    default java.util.Optional<TokenBreakdown> breakdown(ChatRequest request) {
+        return java.util.Optional.empty();
+    }
 }
