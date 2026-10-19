@@ -69,14 +69,14 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void handleGatewayException_unsupportedCapability_returns400() {
-        // UNSUPPORTED_CAPABILITY is thrown by Cohere, Groq, Ollama when a
-        // request asks for a capability they don't support (vision, tool
-        // calls). It's a request-side mismatch, not a provider outage —
+        // UNSUPPORTED_CAPABILITY is thrown by a provider when a request asks
+        // for something it cannot take (extended thinking outside Anthropic,
+        // for one). It's a request-side mismatch, not a provider outage —
         // 400 invalid_request_error matches UNSUPPORTED_RESPONSE_FORMAT,
         // which has the same shape.
         HttpServletResponse response = mockResponse("trace-vision");
         GatewayException ex = new GatewayException("UNSUPPORTED_CAPABILITY",
-                "Cohere vision is not yet implemented in DVARA.");
+                "Mistral cannot take extended thinking; only an Anthropic provider can.");
 
         ResponseEntity<ErrorResponse> result = handler.handleGatewayException(ex, mockRequest(), response);
 

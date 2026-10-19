@@ -25,4 +25,20 @@ public interface StreamingEnforcementTelemetry {
     default void overflow(String plane, String mode, String bound) { }
 
     default void cancellationFinalizationIncomplete(String plane, String reason) { }
+
+    /**
+     * A streamed response that grounding is switched on for, but that cannot be checked because no usable source
+     * document came with the request.
+     *
+     * @param reason {@code no_sources}, or {@code sources_over_limits} when every source was dropped by the limits
+     */
+    default void groundingUnchecked(String plane, String workspaceId, String reason) { }
+
+    /**
+     * A streamed response that grounding checked, at the end of the stream.
+     *
+     * @param grounded whether every claim was supported
+     * @param action   the workspace's grounding action, {@code LOG}, {@code FLAG} or {@code BLOCK}
+     */
+    default void groundingChecked(String plane, String workspaceId, boolean grounded, String action) { }
 }

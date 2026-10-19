@@ -171,10 +171,10 @@ ChatGLM (Zhipu), Cohere, Groq, Qwen and Ollama, plus a mock provider for tests a
 | Provider | Streaming | Vision | Tool calls | Structured outputs | Batch |
 |---|:-:|:-:|:-:|:-:|:-:|
 | OpenAI, Azure OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Anthropic, Gemini, Bedrock, Grok, Ollama | ✅ | ✅ | ✅ | ✅ | — |
-| Mistral | ✅ | — | ✅ | ✅ | — |
+| Anthropic, Gemini, Bedrock, Grok, Mistral, Ollama | ✅ | ✅ | ✅ | ✅ | — |
+| Cohere, Groq | ✅ | ✅ | ✅ | — | — |
 | DeepSeek, Moonshot, ChatGLM | ✅ | — | ✅ | — | — |
-| Cohere, Groq, Qwen | ✅ | — | — | — | — |
+| Qwen | ✅ | — | — | — | — |
 
 ## Use it as a library
 

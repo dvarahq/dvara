@@ -216,17 +216,28 @@ public class MistralProvider extends AbstractLlmProvider {
         return msg.getContent().stream()
                 .map(b -> switch (b) {
                     case ContentBlock.TextBlock tb -> (Object) Map.of("type", "text", "text", tb.text());
-                    // This provider declares supportsVision=false, so an image is refused outright,
-                    // as Cohere, Groq and Ollama do, rather than relayed as text.
-                    case ContentBlock.ImageBlock ib -> throw new GatewayException("UNSUPPORTED_CAPABILITY",
-                            "Mistral does not support image input through this gateway. Send text only, "
-                            + "or route the request to a vision-capable provider.");
+                    // Mistral's image part: image_url is a string or an {url, detail} object; the object
+                    // carries detail. A model with no vision refuses the image itself, with a 400.
+                    case ContentBlock.ImageBlock ib -> Map.of("type", "image_url", "image_url", imageUrl(ib));
                     // Only an Anthropic provider takes thinking; the dispatcher never sends it here.
                     case ContentBlock.ThinkingBlock _, ContentBlock.RedactedThinkingBlock _ ->
                             throw new GatewayException("UNSUPPORTED_CAPABILITY",
                                     "Mistral cannot take extended thinking; only an Anthropic provider can.");
                 })
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * The {@code image_url} object: a URL the caller sent goes as-is, base64 goes back into a
+     * {@code data:} URL, and {@code detail} travels when the caller set it.
+     */
+    private static Map<String, Object> imageUrl(ContentBlock.ImageBlock ib) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("url", ib.isUrl() ? ib.data() : "data:" + ib.mediaType() + ";base64," + ib.data());
+        if (ib.detail() != null) {
+            m.put("detail", ib.detail());
+        }
+        return m;
     }
 
     private ChatResponse mapChatResponse(MistralChatResponse mistral) {
@@ -279,7 +290,15 @@ public class MistralProvider extends AbstractLlmProvider {
 
     @Override
     public ProviderCapabilities capabilities() {
-        return new ProviderCapabilities(true, false, true, true, true, false, true, 128_000);
+        return new ProviderCapabilities(
+                /* streaming */ true,
+                /* vision */ true,
+                /* tool calls */ true,
+                /* structured outputs */ true,
+                /* json mode */ true,
+                /* batch */ false,
+                /* streamed tool calls */ true,
+                /* max context */ 128_000);
     }
 
     @Override

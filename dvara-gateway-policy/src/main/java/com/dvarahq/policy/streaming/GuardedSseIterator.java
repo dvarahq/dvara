@@ -582,8 +582,9 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
             scanIncomplete = true; // relayed under LOG; the raw text is scanned for the record only
         }
         EnforcementResult result;
+        ResponseDocument enforced = document(calls);
         try {
-            result = engine.enforce(document(calls), posture, workspaceId);
+            result = engine.enforce(enforced, posture, workspaceId);
         } catch (RuntimeException e) {
             if (deferred) {
                 // Nothing can vouch for the text and nothing has left yet.
@@ -602,6 +603,7 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
         }
 
         count(result);
+        countGrounding(enforced, result);
         if (deferred && result.refused()) {
             terminated = true;
             finalized = false;
@@ -657,6 +659,21 @@ public class GuardedSseIterator implements Iterator<SseChunk>, AutoCloseable, Re
             }
         }
         return "STREAM_ERROR";
+    }
+
+    /**
+     * Counts a grounding check that ran. The engine judges grounding on the whole answer, once, here, and only when
+     * the posture has sources to judge against and the answer has prose: a bare tool call makes no claim and is not
+     * judged. Ungrounded is a grounding finding in the result.
+     */
+    private void countGrounding(ResponseDocument enforced, EnforcementResult result) {
+        if (!posture.groundingActive() || enforced.assistantText().isEmpty()) {
+            return;
+        }
+        boolean grounded = result.findings().stream()
+                .noneMatch(f -> f.control() == ControlFinding.Control.GROUNDING);
+        telemetry.groundingChecked("LLM", workspaceId, grounded,
+                posture.groundingAction() == null ? "LOG" : posture.groundingAction().name());
     }
 
     private void count(EnforcementResult result) {

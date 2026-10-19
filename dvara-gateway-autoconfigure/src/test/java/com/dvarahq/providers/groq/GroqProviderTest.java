@@ -296,13 +296,10 @@ class GroqProviderTest {
         ProviderCapabilities caps = provider.capabilities();
 
         assertThat(caps.supportsStreaming()).isTrue();
-        assertThat(caps.supportsVision()).isFalse();
-        // Groq's API supports tool calls on every hosted model, but this provider does not
-        // serialize tool definitions, so the flag says what actually flows end to end. The
-        // dispatcher's capability filter relies on it to keep a request carrying tools off this
-        // provider.
-        assertThat(caps.supportsToolCalls()).isFalse();
-        assertThat(caps.supportsStreamingToolCalls()).isFalse();
+        // Images and tools both flow end to end now; the dispatcher's capability filter reads these.
+        assertThat(caps.supportsVision()).isTrue();
+        assertThat(caps.supportsToolCalls()).isTrue();
+        assertThat(caps.supportsStreamingToolCalls()).isTrue();
         assertThat(caps.supportsStructuredOutputs()).isFalse();
         assertThat(caps.supportsJsonMode()).isTrue();
         assertThat(caps.maxContextTokens()).isEqualTo(131_072);
@@ -403,25 +400,188 @@ class GroqProviderTest {
     }
 
     // -------------------------------------------------------------------------
-    // Unsupported content-block rejection
+    // Images and tools
     // -------------------------------------------------------------------------
 
-    @Test
-    void chat_rejectsImageBlockWithUnsupportedCapability() {
-        ChatRequest request = ChatRequest.builder()
-                .model("groq/llama-3.3-70b-versatile")
-                .messages(List.of(MultimodalMessage.builder()
-                        .role("user")
-                        .content(List.of(
-                                new com.dvarahq.core.model.ContentBlock.TextBlock("Describe this image."),
-                                new com.dvarahq.core.model.ContentBlock.ImageBlock("image/png", "BASE64DATA")))
-                        .build()))
-                .build();
+    private static final String OK = """
+            {"id": "c-1", "object": "chat.completion", "created": 1704067200, "model": "qwen/qwen3.8-27b",
+             "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
+            """;
 
-        assertThatThrownBy(() -> provider.chat(request))
+    /** A base64 image goes as a data: URL and a URL image as sent, in OpenAI's image_url object, with detail. */
+    @Test
+    void chat_imageBlocks_goAsImageUrlParts() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.model").value("qwen/qwen3.8-27b"))
+              .andExpect(jsonPath("$.messages[0].content[0].type").value("text"))
+              .andExpect(jsonPath("$.messages[0].content[0].text").value("Describe these."))
+              .andExpect(jsonPath("$.messages[0].content[1].type").value("image_url"))
+              .andExpect(jsonPath("$.messages[0].content[1].image_url.url").value("data:image/png;base64,BASE64DATA"))
+              .andExpect(jsonPath("$.messages[0].content[2].image_url.url").value("https://example.com/cat.jpg"))
+              .andExpect(jsonPath("$.messages[0].content[2].image_url.detail").value("low"))
+              .andRespond(withSuccess(OK, MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder()
+                .model("groq/qwen/qwen3.8-27b")
+                .messages(List.of(MultimodalMessage.builder().role("user").content(List.of(
+                        new ContentBlock.TextBlock("Describe these."),
+                        new ContentBlock.ImageBlock("image/png", "BASE64DATA"),
+                        new ContentBlock.ImageBlock(ContentBlock.ImageBlock.URL_MEDIA_TYPE,
+                                "https://example.com/cat.jpg", "low"))).build()))
+                .build());
+        server.verify();
+    }
+
+    /** A model with no vision refuses an image with a 400; Groq's message reaches the caller. */
+    @Test
+    void chat_imageOnATextModel_surfacesGroqsRefusal() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                      .withBadRequest().contentType(MediaType.APPLICATION_JSON).body("""
+                      {"error":{"message":"messages[0].content must be a string","type":"invalid_request_error"}}
+                      """));
+        assertThatThrownBy(() -> provider.chat(ChatRequest.builder()
+                .model("groq/llama-3.3-70b-versatile")
+                .messages(List.of(MultimodalMessage.builder().role("user").content(List.of(
+                        new ContentBlock.TextBlock("Describe this."),
+                        new ContentBlock.ImageBlock("image/png", "BASE64DATA"))).build()))
+                .build()))
                 .isInstanceOf(GatewayException.class)
-                .hasMessageContaining("vision")
-                .extracting("code").isEqualTo("UNSUPPORTED_CAPABILITY");
+                .hasMessageContaining("Groq API error 400")
+                .hasMessageContaining("messages[0].content must be a string");
+    }
+
+    private static final String TOOL_CALL_RESPONSE = """
+            {"id":"g-1","object":"chat.completion","created":1,"model":"llama-3.3-70b-versatile",
+             "choices":[{"index":0,"message":{"role":"assistant","content":null,
+               "tool_calls":[{"id":"call_abc123","type":"function","function":{"name":"get_weather","arguments":"{\\"location\\":\\"Paris\\"}"}}]},
+               "finish_reason":"tool_calls"}],
+             "usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+            """;
+
+    private static ChatRequest withTools(Object toolChoice) {
+        return ChatRequest.builder()
+                .model("groq/llama-3.3-70b-versatile")
+                .messages(List.of(MultimodalMessage.user("weather in Paris?")))
+                .tools(List.of(com.dvarahq.core.model.ToolDefinition.builder()
+                        .name("get_weather").description("Get weather")
+                        .parameters(Map.of("type", "object")).build()))
+                .toolChoice(toolChoice)
+                .build();
+    }
+
+    /** Definitions and tool_choice go upstream in OpenAI's shape; tool_calls come back as tool calls. */
+    @Test
+    void chat_withTools_sendsDefinitionsAndMapsToolCallsBack() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.model").value("llama-3.3-70b-versatile"))
+              .andExpect(jsonPath("$.tools[0].type").value("function"))
+              .andExpect(jsonPath("$.tools[0].function.name").value("get_weather"))
+              .andExpect(jsonPath("$.tools[0].function.description").value("Get weather"))
+              .andExpect(jsonPath("$.tools[0].function.parameters.type").value("object"))
+              .andExpect(jsonPath("$.tool_choice").value("required"))
+              .andRespond(withSuccess(TOOL_CALL_RESPONSE, MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(withTools("required"));
+
+        assertThat(response.getChoices().get(0).getFinishReason()).isEqualTo("tool_calls");
+        List<com.dvarahq.core.model.ToolCall> calls = response.getChoices().get(0).getMessage().getToolCalls();
+        assertThat(calls).hasSize(1);
+        assertThat(calls.get(0).getId()).isEqualTo("call_abc123");
+        assertThat(calls.get(0).getName()).isEqualTo("get_weather");
+        assertThat(calls.get(0).getArguments()).isEqualTo("{\"location\":\"Paris\"}");
+        server.verify();
+    }
+
+    /** The object form of tool_choice (one named function) is sent as the caller wrote it. */
+    @Test
+    void chat_toolChoiceNamingAFunction_isSentAsIs() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.tool_choice.type").value("function"))
+              .andExpect(jsonPath("$.tool_choice.function.name").value("get_weather"))
+              .andRespond(withSuccess(TOOL_CALL_RESPONSE, MediaType.APPLICATION_JSON));
+        provider.chat(withTools(Map.of("type", "function", "function", Map.of("name", "get_weather"))));
+        server.verify();
+    }
+
+    /** Groq takes parallel_tool_calls; a caller's false is sent on. */
+    @Test
+    void chat_parallelToolCallsOff_isSent() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.parallel_tool_calls").value(false))
+              .andRespond(withSuccess(TOOL_CALL_RESPONSE, MediaType.APPLICATION_JSON));
+        provider.chat(withTools("auto").toBuilder().parallelToolCalls(false).build());
+        server.verify();
+    }
+
+    /** The second turn: the assistant's tool_calls and the tool's result travel with their ids. */
+    @Test
+    void chat_toolResultTurn_carriesToolCallsAndToolCallId() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.messages[1].role").value("assistant"))
+              .andExpect(jsonPath("$.messages[1].tool_calls[0].id").value("call_abc123"))
+              .andExpect(jsonPath("$.messages[1].tool_calls[0].type").value("function"))
+              .andExpect(jsonPath("$.messages[1].tool_calls[0].function.name").value("get_weather"))
+              .andExpect(jsonPath("$.messages[1].tool_calls[0].function.arguments").value("{\"location\":\"Paris\"}"))
+              .andExpect(jsonPath("$.messages[2].role").value("tool"))
+              .andExpect(jsonPath("$.messages[2].tool_call_id").value("call_abc123"))
+              .andExpect(jsonPath("$.messages[2].content").value("{\"temp\":21}"))
+              .andRespond(withSuccess(OK, MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder()
+                .model("groq/llama-3.3-70b-versatile")
+                .messages(List.of(
+                        MultimodalMessage.user("weather in Paris?"),
+                        MultimodalMessage.builder().role("assistant")
+                                .content(List.of(new ContentBlock.TextBlock("")))
+                                .toolCalls(List.of(com.dvarahq.core.model.ToolCall.builder()
+                                        .id("call_abc123").name("get_weather").arguments("{\"location\":\"Paris\"}").build()))
+                                .build(),
+                        MultimodalMessage.toolResult("call_abc123", "{\"temp\":21}")))
+                .tools(withTools("auto").getTools())
+                .build());
+        server.verify();
+    }
+
+    /** A streamed tool call arrives in fragments; each becomes a tool-call delta under one index. */
+    @Test
+    void streamChat_toolCallFragments_becomeToolCallDeltas() {
+        String sse = """
+                data: {"id":"g2","object":"chat.completion.chunk","created":1,"model":"llama-3.3-70b-versatile","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}
+
+                data: {"id":"g2","object":"chat.completion.chunk","created":1,"model":"llama-3.3-70b-versatile","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"location\\":"}}]},"finish_reason":null}]}
+
+                data: {"id":"g2","object":"chat.completion.chunk","created":1,"model":"llama-3.3-70b-versatile","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"Paris\\"}"}}]},"finish_reason":null}]}
+
+                data: {"id":"g2","object":"chat.completion.chunk","created":1,"model":"llama-3.3-70b-versatile","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"x_groq":{"id":"req","usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}
+
+                data: [DONE]
+
+                """;
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.stream").value(true))
+              .andExpect(jsonPath("$.stream_options.include_usage").value(true))
+              .andExpect(jsonPath("$.tools[0].function.name").value("get_weather"))
+              .andRespond(withSuccess(sse, MediaType.TEXT_EVENT_STREAM));
+
+        Iterator<SseChunk> it = provider.streamChat(withTools("auto").toBuilder().stream(true).build());
+        List<SseChunk> chunks = new ArrayList<>();
+        while (it.hasNext()) chunks.add(it.next());
+
+        List<com.dvarahq.core.model.ToolCallDelta> deltas = chunks.stream()
+                .filter(c -> c.getToolCalls() != null).flatMap(c -> c.getToolCalls().stream()).toList();
+        assertThat(deltas).extracting(com.dvarahq.core.model.ToolCallDelta::index).containsOnly(0);
+        assertThat(deltas.get(0).id()).isEqualTo("call_abc123");
+        assertThat(deltas.get(0).name()).isEqualTo("get_weather");
+        assertThat(deltas.stream().map(com.dvarahq.core.model.ToolCallDelta::argumentsFragment)
+                .filter(java.util.Objects::nonNull).reduce("", String::concat))
+                .isEqualTo("{\"location\":\"Paris\"}");
+        SseChunk last = chunks.get(chunks.size() - 1);
+        assertThat(last.isDone()).isTrue();
+        assertThat(last.getFinishReason()).isEqualTo("tool_calls");
+        assertThat(last.getUsage().getTotalTokens()).isEqualTo(15);
+        server.verify();
     }
 
     @Test

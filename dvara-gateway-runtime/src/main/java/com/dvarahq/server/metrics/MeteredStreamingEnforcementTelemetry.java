@@ -26,9 +26,32 @@ import org.springframework.stereotype.Component;
 public final class MeteredStreamingEnforcementTelemetry implements StreamingEnforcementTelemetry {
 
     private final MeterRegistry registry;
+    private final GatewayMetrics metrics;
 
+    /** Without gateway metrics: unchecked grounding is not reported. */
     public MeteredStreamingEnforcementTelemetry(MeterRegistry registry) {
+        this(registry, null);
+    }
+
+    /** @param metrics where unchecked grounding is counted and warned about, shared with non-streamed responses */
+    @org.springframework.beans.factory.annotation.Autowired
+    public MeteredStreamingEnforcementTelemetry(MeterRegistry registry, GatewayMetrics metrics) {
         this.registry = registry;
+        this.metrics = metrics;
+    }
+
+    @Override
+    public void groundingChecked(String plane, String workspaceId, boolean grounded, String action) {
+        if (metrics != null) {
+            metrics.recordGroundingCheck(String.valueOf(grounded), action, "streaming");
+        }
+    }
+
+    @Override
+    public void groundingUnchecked(String plane, String workspaceId, String reason) {
+        if (metrics != null) {
+            metrics.recordGroundingUnchecked(workspaceId, reason, "streaming");
+        }
     }
 
     @Override
