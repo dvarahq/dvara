@@ -382,7 +382,7 @@ class MistralProviderTest {
         ProviderCapabilities caps = provider.capabilities();
 
         assertThat(caps.supportsStreaming()).isTrue();
-        assertThat(caps.supportsVision()).isFalse();
+        assertThat(caps.supportsVision()).isTrue();
         assertThat(caps.supportsToolCalls()).isTrue();
         assertThat(caps.supportsStreamingToolCalls()).isTrue();
         assertThat(caps.supportsStructuredOutputs()).isTrue();
@@ -465,30 +465,57 @@ class MistralProviderTest {
     }
 
     /**
-     * An image is refused, not stringified into the prompt. This provider declares no vision, so
-     * an ImageBlock must never be turned into text and sent to the model; Cohere, Groq and Ollama
-     * refuse an image the same way.
-     *
-     * <p>No request is expected, so {@code MockRestServiceServer} verifying zero expectations is part
-     * of the assertion: the refusal happens before anything is sent.
+     * An image goes as Mistral's image part: base64 as a {@code data:} URL and a URL as sent, in the
+     * {@code {url, detail}} form Mistral's API takes, next to the text part.
      */
     @Test
-    void imageInput_isRefusedBeforeAnythingIsSent() {
-        ChatRequest request = ChatRequest.builder()
-                .model("mistral-large-latest")
+    void imageInput_goesAsImageUrlParts() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andExpect(jsonPath("$.model").value("pixtral-large-latest"))
+              .andExpect(jsonPath("$.messages[0].content[0].type").value("text"))
+              .andExpect(jsonPath("$.messages[0].content[0].text").value("what is in this picture?"))
+              .andExpect(jsonPath("$.messages[0].content[1].type").value("image_url"))
+              .andExpect(jsonPath("$.messages[0].content[1].image_url.url").value("data:image/png;base64,aGVsbG8="))
+              .andExpect(jsonPath("$.messages[0].content[1].image_url.detail").doesNotExist())
+              .andExpect(jsonPath("$.messages[0].content[2].image_url.url").value("https://example.com/eiffel.jpg"))
+              .andExpect(jsonPath("$.messages[0].content[2].image_url.detail").value("high"))
+              .andRespond(withSuccess("""
+                      {"id":"m-3","object":"chat.completion","created":1,"model":"pixtral-large-latest",
+                       "choices":[{"index":0,"message":{"role":"assistant","content":"A tower."},"finish_reason":"stop"}],
+                       "usage":{"prompt_tokens":1200,"completion_tokens":3,"total_tokens":1203}}
+                      """, MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(ChatRequest.builder()
+                .model("pixtral-large-latest")
                 .messages(List.of(MultimodalMessage.builder()
                         .role("user")
                         .content(List.of(new ContentBlock.TextBlock("what is in this picture?"),
-                                new ContentBlock.ImageBlock("image/png", "aGVsbG8=")))
+                                new ContentBlock.ImageBlock("image/png", "aGVsbG8="),
+                                new ContentBlock.ImageBlock(ContentBlock.ImageBlock.URL_MEDIA_TYPE,
+                                        "https://example.com/eiffel.jpg", "high")))
                         .build()))
-                .build();
+                .build());
 
-        assertThatThrownBy(() -> provider.chat(request))
-                .isInstanceOf(GatewayException.class)
-                .hasMessageContaining("does not support image input")
-                .satisfies(e -> assertThat(((GatewayException) e).getCode())
-                        .isEqualTo("UNSUPPORTED_CAPABILITY"));
-
+        assertThat(response.getChoices().get(0).getMessage().getContent().get(0).textContent()).isEqualTo("A tower.");
         server.verify();
+    }
+
+    /** A model with no vision refuses the image with a 400; Mistral's own message reaches the caller. */
+    @Test
+    void imageOnATextModel_surfacesMistralsRefusal() {
+        server.expect(requestTo(containsString("/chat/completions")))
+              .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                      .withBadRequest().contentType(MediaType.APPLICATION_JSON).body("""
+                      {"object":"error","message":"Image input is not supported for this model","type":"invalid_request_error","code":"3051"}
+                      """));
+        assertThatThrownBy(() -> provider.chat(ChatRequest.builder()
+                .model("codestral-latest")
+                .messages(List.of(MultimodalMessage.builder().role("user").content(List.of(
+                        new ContentBlock.TextBlock("what is this?"),
+                        new ContentBlock.ImageBlock("image/png", "aGVsbG8="))).build()))
+                .build()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("Mistral API error 400")
+                .hasMessageContaining("Image input is not supported for this model");
     }
 }
