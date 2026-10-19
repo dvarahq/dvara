@@ -30,8 +30,22 @@ final class UncollectedRoutingMetrics {
     private UncollectedRoutingMetrics() {}
 
     static final class Canary implements CanaryMetricsCollector {
+        private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(Canary.class);
+        /** Routes already reported, so each says so once rather than on every request. */
+        private final java.util.Set<String> reported = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
         @Override public void record(String routeId, String variant, long latencyMs, double costUsd, boolean error) {
-            // Discarded: nothing in this build reads it.
+            // Discarded: nothing in this build reads it. The split itself works; only the comparison is missing,
+            // and a canary is usually run to read that comparison, so it is said once per route.
+            if (routeId != null && reported.add(routeId)) {
+                log.warn("Canary route [{}] splits traffic as configured, but this build records no canary "
+                        + "comparison (latency, cost, errors per variant). Compare the variants with your own "
+                        + "metrics, or run a distribution that stores them.", routeId);
+            }
+        }
+
+        boolean hasReported(String routeId) {
+            return reported.contains(routeId);
         }
     }
 }

@@ -95,4 +95,22 @@ class DefaultRoutingStrategyFactoryTest {
                 .hasMessageContaining(strategy.name())
                 .hasMessageContaining("model-prefix, round-robin, weighted, canary");
     }
+
+    /**
+     * A strategy this build does not carry is refused, naming the ones it does: routing a latency-aware route by some
+     * other rule would send traffic in a way nobody chose.
+     */
+    @Test
+    void aStrategyThisBuildDoesNotCarry_isRefused_andTheSupportedOnesAreNamed() {
+        for (RouteConfig.Strategy strategy : List.of(RouteConfig.Strategy.LATENCY_AWARE, RouteConfig.Strategy.COST_AWARE,
+                RouteConfig.Strategy.GEO_AWARE, RouteConfig.Strategy.INTELLIGENT)) {
+            RouteConfig config = RouteConfig.builder().id("r-" + strategy).strategy(strategy).build();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> factory.create(config))
+                    .as(strategy.name())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("r-" + strategy)
+                    .hasMessageContaining("is not part of this build")
+                    .hasMessageContaining("model-prefix, round-robin, weighted, canary");
+        }
+    }
 }
