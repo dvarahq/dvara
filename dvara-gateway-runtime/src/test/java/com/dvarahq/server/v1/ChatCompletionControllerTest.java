@@ -1340,7 +1340,7 @@ class ChatCompletionControllerTest {
     }
 
     @Test
-    void aModelOrToolWarningSetsThePolicyHeader_andTheBudgetHeaderStillThrough19() throws Exception {
+    void aModelOrToolWarningSetsThePolicyHeader_andNotTheBudgetHeader() throws Exception {
         policyWarns("WARN_AGENT");
 
         mockMvc.perform(post("/v1/chat/completions")
@@ -1348,8 +1348,8 @@ class ChatCompletionControllerTest {
                         .content(validBody()))
                 .andExpect(status().isOk())
                 .andExpect(header().string("X-Policy-Warning", "true"))
-                // Kept for clients that read it for every warning; budget warnings only from 1.10.0.
-                .andExpect(header().string("X-Budget-Warning", "true"));
+                // Only a rule on budget use sets it, from 1.10.0. Through 1.9 every warning did.
+                .andExpect(header().doesNotExist("X-Budget-Warning"));
     }
 
     // -------------------------------------------------------------------------
