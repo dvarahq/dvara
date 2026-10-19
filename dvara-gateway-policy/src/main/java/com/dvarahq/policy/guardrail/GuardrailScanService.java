@@ -406,11 +406,15 @@ public class GuardrailScanService implements GuardrailEnforcer {
             mlPayload.put("source", source);
             mlPayload.put("action", action.name());
             mlPayload.put("detections", mlDetections.stream()
-                    .map(d -> Map.of(
-                            "provider", d.ruleId(),
-                            "category", d.category().name(),
-                            "label", d.label(),
-                            "confidence", d.confidence()))
+                    .map(d -> {
+                        // A hook's own fields first, so they can never replace the four the audit trail relies on.
+                        Map<String, Object> entry = new LinkedHashMap<>(d.attributes());
+                        entry.put("provider", d.ruleId());
+                        entry.put("category", d.category().name());
+                        entry.put("label", d.label());
+                        entry.put("confidence", d.confidence());
+                        return entry;
+                    })
                     .toList());
             auditWriter.write(new AuditEvent(
                     Ids.newId(),

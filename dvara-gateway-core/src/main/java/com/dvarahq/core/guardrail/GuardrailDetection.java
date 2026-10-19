@@ -37,7 +37,22 @@ public record GuardrailDetection(
         double riskScore,
         double confidence,
         String ruleId,
-        boolean fromClassifier) {
+        boolean fromClassifier,
+        java.util.Map<String, Object> attributes) {
+
+    /**
+     * {@code attributes} are extra fields a classifier hook reports about how it reached this detection, for example
+     * whether the result came from a cache and which classifier version produced it. They are copied into the
+     * detection's entry in the {@code ML_INJECTION_DETECTED} audit record. Never null; empty by default.
+     */
+    public GuardrailDetection {
+        attributes = attributes == null ? java.util.Map.of() : java.util.Map.copyOf(attributes);
+    }
+
+    public GuardrailDetection(GuardrailCategory category, String label, String matchedText,
+                              double riskScore, double confidence, String ruleId, boolean fromClassifier) {
+        this(category, label, matchedText, riskScore, confidence, ruleId, fromClassifier, java.util.Map.of());
+    }
 
     /** A detection from anything other than the ML classifier; {@code fromClassifier} is {@code false}. */
     public GuardrailDetection(GuardrailCategory category, String label, String matchedText,
@@ -45,8 +60,16 @@ public record GuardrailDetection(
         this(category, label, matchedText, riskScore, confidence, ruleId, false);
     }
 
-    /** The same detection, marked as the ML classifier's. */
+    /** The same detection, marked as the ML classifier's. Its attributes are kept. */
     public GuardrailDetection asClassifierDetection() {
-        return new GuardrailDetection(category, label, matchedText, riskScore, confidence, ruleId, true);
+        return new GuardrailDetection(category, label, matchedText, riskScore, confidence, ruleId, true, attributes);
+    }
+
+    /** The same detection with {@code more} added to its attributes; a key in both takes the new value. */
+    public GuardrailDetection withAttributes(java.util.Map<String, ?> more) {
+        java.util.Map<String, Object> merged = new java.util.LinkedHashMap<>(attributes);
+        merged.putAll(more);
+        return new GuardrailDetection(category, label, matchedText, riskScore, confidence, ruleId, fromClassifier,
+                merged);
     }
 }

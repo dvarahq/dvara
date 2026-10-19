@@ -144,6 +144,8 @@ class InjectionDetectorTest {
     void scan_mlClassifierDetectionIncluded() {
         MlClassifierHook mlHook = mock(MlClassifierHook.class);
         when(mlHook.isAvailable()).thenReturn(true);
+        // A hook that does not override the workspace form answers it through classify(text), its default.
+        when(mlHook.classify(anyString(), any())).thenCallRealMethod();
         when(mlHook.classify(anyString())).thenReturn(Optional.of(
                 new GuardrailDetection(GuardrailCategory.INJECTION, "classifier:prompt_injection",
                         "benign looking text", 0.95, 0.95, "classifier")));
@@ -266,6 +268,7 @@ class InjectionDetectorTest {
         // The flag the ML audit event and the ML metric key on. A regex detection must not carry it.
         MlClassifierHook hook = mock(MlClassifierHook.class);
         when(hook.isAvailable()).thenReturn(true);
+        when(hook.classify(anyString(), any())).thenCallRealMethod();
         when(hook.classify(anyString())).thenReturn(Optional.of(new GuardrailDetection(
                 GuardrailCategory.INJECTION, "onnx-injection", "text", 0.99, 0.99, "onnx-injection")));
 
@@ -275,6 +278,43 @@ class InjectionDetectorTest {
 
         assertThat(result.detections()).anyMatch(d -> d.fromClassifier() && "onnx-injection".equals(d.ruleId()));
         assertThat(result.detections()).anyMatch(d -> !d.fromClassifier() && d.ruleId().startsWith("jb-"));
+    }
+
+    @Test
+    void theClassifierIsAskedWithTheScansWorkspace_andNullWhenThereIsNone() {
+        java.util.List<String> asked = new java.util.ArrayList<>();
+        MlClassifierHook hook = new MlClassifierHook() {
+            @Override public Optional<GuardrailDetection> classify(String text) { return Optional.empty(); }
+            @Override public Optional<GuardrailDetection> classify(String text, String workspaceId) {
+                asked.add(String.valueOf(workspaceId));
+                return Optional.empty();
+            }
+            @Override public boolean isAvailable() { return true; }
+        };
+        InjectionDetector withHook = new InjectionDetector(new InjectionPatternRegistry(), hook);
+
+        withHook.scan("hello", "workspace-7");
+        withHook.scanWithCustomPatterns("hello", java.util.Map.of());
+
+        assertThat(asked).containsExactly("workspace-7", "null");
+    }
+
+    @Test
+    void aClassifiersAttributesSurviveBeingMarkedAsTheClassifiers() {
+        MlClassifierHook hook = new MlClassifierHook() {
+            @Override public Optional<GuardrailDetection> classify(String text) {
+                return Optional.of(new GuardrailDetection(GuardrailCategory.INJECTION, "x", text, 0.9, 0.9, "hook")
+                        .withAttributes(java.util.Map.of("cache_hit", true, "classifier_version", "v2")));
+            }
+            @Override public boolean isAvailable() { return true; }
+        };
+
+        GuardrailScanResult result = new InjectionDetector(new InjectionPatternRegistry(), hook).scan("hi", "w");
+
+        assertThat(result.detections()).anySatisfy(d -> {
+            assertThat(d.fromClassifier()).isTrue();
+            assertThat(d.attributes()).containsEntry("cache_hit", true).containsEntry("classifier_version", "v2");
+        });
     }
 
     @Test

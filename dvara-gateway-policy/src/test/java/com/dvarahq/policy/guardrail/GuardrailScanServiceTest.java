@@ -457,6 +457,33 @@ class GuardrailScanServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void aClassifiersAttributesAreInItsMlAuditEntry_andCannotReplaceTheStandardFields() {
+        GuardrailDetection mlDetection = new GuardrailDetection(
+                GuardrailCategory.INJECTION, "classifier:prompt_injection", "bad text",
+                0.95, 0.95, "classifier", true)
+                .withAttributes(java.util.Map.of("cache_hit", true, "classifier_version", "model-v2",
+                        "provider", "spoofed"));
+        when(detector.scanRequest(any(), any())).thenReturn(
+                List.of(new GuardrailScanResult(List.of(mlDetection), "source")));
+
+        assertThatThrownBy(() -> serviceWith("INHERIT").enforceRequest(buildRequest("bad text"), "workspace-1"))
+                .isInstanceOf(GatewayException.class);
+
+        ArgumentCaptor<AuditEvent> captor = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditWriter, atLeast(2)).write(captor.capture());
+        AuditEvent mlEvent = captor.getAllValues().stream()
+                .filter(e -> "ML_INJECTION_DETECTED".equals(e.eventType()))
+                .findFirst().orElseThrow();
+        List<java.util.Map<String, Object>> entries =
+                (List<java.util.Map<String, Object>>) mlEvent.payload().get("detections");
+        assertThat(entries).singleElement().satisfies(entry -> assertThat(entry)
+                .containsEntry("cache_hit", true)
+                .containsEntry("classifier_version", "model-v2")
+                .containsEntry("provider", "classifier"));
+    }
+
+    @Test
     void enforceRequest_mlDetection_fromAnyClassifier_stillEmitsMlAuditEvent() {
         // The ML audit event keys on the detection's fromClassifier flag, not on a list of
         // classifier names, so any classifier produces one. The provider reported is the rule id.
