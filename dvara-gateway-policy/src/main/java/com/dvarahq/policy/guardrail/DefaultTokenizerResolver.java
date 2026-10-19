@@ -25,8 +25,15 @@ import java.util.Map;
  *   <li><b>OpenAI</b> is counted with its own vocabulary: {@code o200k_base} for GPT-4o, GPT-4.1, GPT-4.5, GPT-5, the
  *       o-series and gpt-oss; {@code cl100k_base} for GPT-4, GPT-3.5 and the older embeddings. Dated and suffixed names
  *       ({@code gpt-4o-2024-08-06}, {@code gpt-4.1-mini}) count as their base model.</li>
- *   <li><b>Every other family</b> (Anthropic, Gemini, Mistral, DeepSeek, Meta, Qwen, Cohere, xAI) is counted with
- *       {@code cl100k_base} as a stand-in, marked not exact: their own tokenizers are not available in-process.</li>
+ *   <li><b>Mistral</b> is counted with its own Tekken vocabulary, for every model that uses it: Nemo, Ministral,
+ *       Pixtral 12B, Small from 2409, Medium 3, Magistral, Devstral, Codestral from 25.01, Voxtral and the
+ *       {@code -latest} names. The older models that use a SentencePiece vocabulary (Large 2402 to 2411, Pixtral
+ *       Large, Mixtral, the 7B, Codestral 22B and Mamba, Small and Medium 2312 and Small 2402) are counted with the
+ *       stand-in, not exact.</li>
+ *   <li><b>DeepSeek</b> is counted with its own V3 vocabulary for V3 and R1 and the API's {@code deepseek-chat} and
+ *       {@code deepseek-reasoner}. Earlier models (Coder, V2, LLM) have other vocabularies and use the stand-in.</li>
+ *   <li><b>Every other family</b> (Anthropic, Gemini, Meta, Qwen, Cohere, xAI) is counted with {@code cl100k_base} as a
+ *       stand-in, marked not exact: their own tokenizers are not available in-process.</li>
  *   <li><b>A model no family claims</b> is {@code unknown}: cl100k, not exact. That is the stated default, not a guess
  *       hidden in a catch block.</li>
  * </ul>
@@ -44,6 +51,10 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
 
     public static final String O200K = "o200k_base";
     public static final String CL100K = "cl100k_base";
+    /** Mistral's Tekken vocabulary. */
+    public static final String TEKKEN = "tekken";
+    /** DeepSeek's V3 vocabulary. */
+    public static final String DEEPSEEK_V3 = "deepseek_v3";
 
     /**
      * Measured with claude-haiku-4-5 on 2026-10-16: over prose, Java code and text in seven scripts, Anthropic billed
@@ -96,9 +107,47 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
     public Resolution resolve(String model) {
         String name = name(model);
         String family = family(name);
-        boolean openai = "openai".equals(family);
-        String encoding = openai && !olderOpenAi(name) ? O200K : CL100K;
-        return new Resolution(family, encoding, openai, correction(family), toolOverhead(family));
+        String encoding;
+        boolean exact;
+        switch (family) {
+            case "openai" -> {
+                encoding = olderOpenAi(name) ? CL100K : O200K;
+                exact = true;
+            }
+            case "mistral" -> {
+                exact = !sentencePieceMistral(name);
+                encoding = exact ? TEKKEN : CL100K;
+            }
+            case "deepseek" -> {
+                exact = deepseekV3(name);
+                encoding = exact ? DEEPSEEK_V3 : CL100K;
+            }
+            default -> {
+                encoding = CL100K;
+                exact = false;
+            }
+        }
+        return new Resolution(family, encoding, exact, correction(family), toolOverhead(family));
+    }
+
+    /**
+     * The Mistral models whose vocabulary is SentencePiece, not Tekken: everything released before Tekken (mid 2024)
+     * and the Large line up to 2411. Their own vocabularies are not shipped, so they keep the stand-in.
+     */
+    static boolean sentencePieceMistral(String name) {
+        return name.startsWith("mixtral") || name.startsWith("open-mixtral") || name.startsWith("mistral-7b")
+                || name.startsWith("open-mistral-7b") || name.startsWith("mistral-tiny")
+                || name.startsWith("mistral-small-2312") || name.startsWith("mistral-small-2402")
+                || name.startsWith("mistral-medium-2312") || name.startsWith("mistral-large-2402")
+                || name.startsWith("mistral-large-2407") || name.startsWith("mistral-large-2411")
+                || name.startsWith("pixtral-large") || name.startsWith("codestral-2405")
+                || name.startsWith("codestral-22b") || name.startsWith("codestral-mamba");
+    }
+
+    /** DeepSeek's V3 vocabulary: V3, R1 and the API's two names for them. */
+    static boolean deepseekV3(String name) {
+        return name.startsWith("deepseek-chat") || name.startsWith("deepseek-reasoner")
+                || name.startsWith("deepseek-v3") || name.startsWith("deepseek-r1");
     }
 
     private double correction(String family) {
@@ -137,7 +186,9 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
         for (String vendor : new String[] {"anthropic.", "meta.", "mistral.", "cohere.", "deepseek.", "qwen."}) {
             int at = name.indexOf(vendor);
             if (at >= 0 && (at == 0 || name.charAt(at - 1) == '.')) {
-                return name.substring(at + vendor.length());
+                String rest = name.substring(at + vendor.length());
+                // Bedrock names DeepSeek's models by version alone ("deepseek.r1-v1:0"), so the family stays in front.
+                return "deepseek.".equals(vendor) && !rest.startsWith("deepseek") ? "deepseek-" + rest : rest;
             }
         }
         return name;
@@ -156,7 +207,8 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
         }
         if (name.startsWith("mistral") || name.startsWith("mixtral") || name.startsWith("codestral")
                 || name.startsWith("ministral") || name.startsWith("magistral") || name.startsWith("pixtral")
-                || name.startsWith("devstral")) {
+                || name.startsWith("devstral") || name.startsWith("voxtral") || name.startsWith("open-mistral")
+                || name.startsWith("open-mixtral")) {
             return "mistral";
         }
         if (name.startsWith("deepseek")) {

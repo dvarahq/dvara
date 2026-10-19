@@ -107,8 +107,10 @@ jobs:
       - name: Only allow-listed documents ship inside a jar
         run: |
           set -uo pipefail
-          # Empty on purpose: nothing ships a document today.
-          ALLOWED=""
+          # Each entry ships on purpose, with its reason:
+          #   vocab/SOURCES.md: where each bundled tokenizer vocabulary came from, its licence and SHA-256, beside the
+          #   files themselves, so a consumer of the jar can check what it ships.
+          ALLOWED="dvara-gateway-policy/src/main/resources/com/dvarahq/policy/guardrail/vocab/SOURCES.md"
           FAIL=0
           for f in $(git ls-files | grep -E '^[^/]+/src/main/resources/.*\.(md|markdown|adoc|rst)$' || true); do
             case " $ALLOWED " in

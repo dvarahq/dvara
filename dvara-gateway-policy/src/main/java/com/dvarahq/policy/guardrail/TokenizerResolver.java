@@ -26,9 +26,10 @@ public interface TokenizerResolver {
      * How a model is counted.
      *
      * @param family     the model's family, such as {@code openai}, {@code anthropic} or {@code unknown}
-     * @param encoding   the BPE vocabulary its text is counted with: {@code o200k_base} or {@code cl100k_base}
-     * @param exact      whether that vocabulary is the model's own. False for every family but OpenAI's: they are
-     *                   counted with cl100k as a stand-in, since their own tokenizers are not available locally
+     * @param encoding   the BPE vocabulary its text is counted with: {@code o200k_base}, {@code cl100k_base},
+     *                   {@code tekken} (Mistral) or {@code deepseek_v3}
+     * @param exact      whether that vocabulary is the model's own. False where a family is counted with cl100k as a
+     *                   stand-in, because its own tokenizer is not available locally
      * @param correction what a request's count is multiplied by, 1.0 where nothing was measured
      * @param toolOverhead tokens added to the count of a request that carries tools, 0 where nothing was measured.
      *                   Some providers put a fixed block of their own text in front of the tool definitions, which no
