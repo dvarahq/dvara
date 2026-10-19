@@ -31,5 +31,21 @@ public interface MlClassifierHook {
 
     Optional<GuardrailDetection> classify(String text);
 
+    /**
+     * The same question for a scan on behalf of {@code workspaceId} (null when the scan has no workspace). A hook that
+     * keeps state per workspace, such as a result cache, overrides this; by default it asks {@link #classify(String)}.
+     */
+    default Optional<GuardrailDetection> classify(String text, String workspaceId) {
+        return classify(text);
+    }
+
     boolean isAvailable();
+
+    /**
+     * The version of the classifier that answers, for example a model name with its checksum; empty when unknown. A
+     * result kept from an earlier version must not be reused, so a cache puts this in its key.
+     */
+    default String version() {
+        return "";
+    }
 }

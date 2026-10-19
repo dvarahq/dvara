@@ -78,7 +78,7 @@ public class InjectionDetector implements GuardrailDetector {
 
     @Override
     public GuardrailScanResult scan(String text, String workspaceId) {
-        return scanWithPatterns(text, resolvePatterns(workspaceId));
+        return scanWithPatterns(text, resolvePatterns(workspaceId), workspaceId);
     }
 
     /**
@@ -88,7 +88,7 @@ public class InjectionDetector implements GuardrailDetector {
      */
     public GuardrailScanResult scanWithCustomPatterns(String text, Map<String, String> customPatterns) {
         List<InjectionPatternRegistry.PatternEntry> patterns = patternRegistry.mergeWithCustom(customPatterns);
-        return scanWithPatterns(text, patterns);
+        return scanWithPatterns(text, patterns, null);
     }
 
     @Override
@@ -103,7 +103,7 @@ public class InjectionDetector implements GuardrailDetector {
             if (msg.getContent() != null) {
                 for (ContentBlock block : msg.getContent()) {
                     if (block instanceof ContentBlock.TextBlock tb) {
-                        GuardrailScanResult result = scanWithPatterns(tb.text(), patterns);
+                        GuardrailScanResult result = scanWithPatterns(tb.text(), patterns, workspaceId);
                         if (result.hasDetections()) {
                             results.add(result);
                         }
@@ -113,7 +113,7 @@ public class InjectionDetector implements GuardrailDetector {
             // scan tool-call arguments (model output replayed next turn) so
             // an injection smuggled into a tool call is caught, not just message text.
             for (String args : GuardrailScanSupport.toolCallArguments(msg)) {
-                GuardrailScanResult result = scanWithPatterns(args, patterns);
+                GuardrailScanResult result = scanWithPatterns(args, patterns, workspaceId);
                 if (result.hasDetections()) {
                     results.add(result);
                 }
@@ -134,7 +134,7 @@ public class InjectionDetector implements GuardrailDetector {
             if (choice.getMessage().getContent() != null) {
                 for (ContentBlock block : choice.getMessage().getContent()) {
                     if (block instanceof ContentBlock.TextBlock tb) {
-                        GuardrailScanResult result = scanWithPatterns(tb.text(), patterns);
+                        GuardrailScanResult result = scanWithPatterns(tb.text(), patterns, workspaceId);
                         if (result.hasDetections()) {
                             results.add(result);
                         }
@@ -144,7 +144,7 @@ public class InjectionDetector implements GuardrailDetector {
             // Symmetric with the request side: a tool call is model output, and an indirect injection
             // that reached the model can come back out in the arguments it asks to be called with.
             for (String args : GuardrailScanSupport.toolCallArguments(choice.getMessage())) {
-                GuardrailScanResult result = scanWithPatterns(args, patterns);
+                GuardrailScanResult result = scanWithPatterns(args, patterns, workspaceId);
                 if (result.hasDetections()) {
                     results.add(result);
                 }
@@ -198,7 +198,8 @@ public class InjectionDetector implements GuardrailDetector {
         return out;
     }
 
-    private GuardrailScanResult scanWithPatterns(String text, List<InjectionPatternRegistry.PatternEntry> patterns) {
+    private GuardrailScanResult scanWithPatterns(String text, List<InjectionPatternRegistry.PatternEntry> patterns,
+                                                 String workspaceId) {
         if (text == null || text.isEmpty()) {
             return GuardrailScanResult.EMPTY;
         }
@@ -229,7 +230,7 @@ public class InjectionDetector implements GuardrailDetector {
                 // Marked as the classifier's on the way in. This is the only place in the build that
                 // knows a detection came from a hook rather than a pattern, and the audit and metric
                 // paths downstream need to know without recognising vendors by name.
-                mlClassifierHook.classify(text)
+                mlClassifierHook.classify(text, workspaceId)
                         .map(GuardrailDetection::asClassifierDetection)
                         .ifPresent(detections::add);
             } catch (Exception e) {
