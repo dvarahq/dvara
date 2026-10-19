@@ -41,6 +41,13 @@ public final class MeteredStreamingEnforcementTelemetry implements StreamingEnfo
     }
 
     @Override
+    public void groundingChecked(String plane, String workspaceId, boolean grounded, String action) {
+        if (metrics != null) {
+            metrics.recordGroundingCheck(String.valueOf(grounded), action, "streaming");
+        }
+    }
+
+    @Override
     public void groundingUnchecked(String plane, String workspaceId, String reason) {
         if (metrics != null) {
             metrics.recordGroundingUnchecked(workspaceId, reason, "streaming");

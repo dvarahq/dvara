@@ -36,7 +36,7 @@ import java.time.Duration;
  *   <li>{@code gateway_provider_errors_total} — provider errors (provider, error_code)</li>
  *   <li>{@code gateway_retries_total} — retry attempts (provider)</li>
  *   <li>{@code gateway_fallbacks_total} — fallback activations (from_provider, to_provider)</li>
- *   <li>{@code gateway_grounding_check_total} — grounding checks run (grounded, action)</li>
+ *   <li>{@code gateway_grounding_check_total} — grounding checks run (grounded, action, mode)</li>
  *   <li>{@code gateway_grounding_unchecked_total} — responses grounding was on for but could not check
  *       (workspace, reason=no_sources|sources_over_limits, mode)</li>
  * </ul>
@@ -359,11 +359,23 @@ public class GatewayMetrics {
         }
     }
 
+    /** A non-streamed grounding check. */
     public void recordGroundingCheck(String grounded, String action) {
+        recordGroundingCheck(grounded, action, "non_streaming");
+    }
+
+    /**
+     * A grounding check that ran, with its verdict and action.
+     *
+     * @param mode {@code non_streaming} or {@code streaming}; every series carries it, because one metric name must
+     *             keep one set of tag keys
+     */
+    public void recordGroundingCheck(String grounded, String action, String mode) {
         Counter.builder("gateway_grounding_check_total")
                 .description("Total grounding/hallucination checks")
                 .tag("grounded", safe(grounded))
                 .tag("action", safe(action))
+                .tag("mode", safe(mode))
                 .register(registry)
                 .increment();
     }
