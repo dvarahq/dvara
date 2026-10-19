@@ -132,6 +132,12 @@ public class StreamingResponseEnforcerImpl implements StreamingResponseEnforcer 
         java.util.List<String> sourceDocuments = extractSourceDocuments(request);
         var posture = withPromptLeakReference(postureProvider.resolve(workspaceId, sourceDocuments),
                 request);
+        if (posture.groundingEnabled() && !posture.groundingActive()) {
+            // On, but nothing to judge against: the stream passes unchecked. Counted, and warned about once per workspace,
+            // by the telemetry, the same as a non-streamed response.
+            telemetry.groundingUnchecked("LLM", workspaceId,
+                    sourceDocuments.isEmpty() ? "no_sources" : "sources_over_limits");
+        }
         StreamingEnforcementConfig config = configFor(posture);
 
         if (!config.piiEnabled() && !config.guardrailEnabled() && !config.groundingEnabled()) {
