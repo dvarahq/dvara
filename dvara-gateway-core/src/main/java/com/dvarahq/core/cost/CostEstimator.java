@@ -49,4 +49,16 @@ public interface CostEstimator {
     default boolean hasPricing(String model) {
         return true;
     }
+
+    /**
+     * The prices this estimator would charge a model at, by a provider when one is named: the input price and the
+     * price of the output a request may use. Empty when it has no price for the model, or does not say: a caller
+     * must then report the cost as unknown, never as zero.
+     *
+     * @param model    the model as it would be sent
+     * @param provider the provider that would serve it, or null for any
+     */
+    default java.util.Optional<TokenPrices> prices(String model, String provider) {
+        return java.util.Optional.empty();
+    }
 }

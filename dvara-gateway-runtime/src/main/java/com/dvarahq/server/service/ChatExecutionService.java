@@ -197,6 +197,22 @@ public class ChatExecutionService {
      * provider; nothing is admitted, counted as a call, metered or billed.
      */
     public int countInputTokens(ChatRequest internal, HttpServletRequest httpRequest, String traceId) {
+        return countInput(internal, httpRequest, traceId).tokens();
+    }
+
+    /**
+     * A request's input count as {@link #countInputTokens} makes it, with where it came from.
+     *
+     * @param tokens     the input tokens
+     * @param byProvider true when the provider counted them, false when the gateway estimated them
+     * @param provider   the provider routing picked, or null when none was recorded
+     * @param model      the model that provider would be sent, after route resolution
+     * @param governed   the request as it would be sent: what the governing filters left of it, with that model
+     */
+    public record InputCount(int tokens, boolean byProvider, String provider, String model, ChatRequest governed) {}
+
+    /** As {@link #countInputTokens}, saying who counted, which provider and model the call would go to. */
+    public InputCount countInput(ChatRequest internal, HttpServletRequest httpRequest, String traceId) {
         String workspaceId = (String) httpRequest.getAttribute("workspaceId");
         String apiKeyId = (String) httpRequest.getAttribute(ApiKeyAuthFilter.API_KEY_ID_ATTR);
         injectResolvedWorkspace(internal, workspaceId);
@@ -204,10 +220,20 @@ public class ChatExecutionService {
                 .workspaceId(workspaceId).apiKey(apiKeyId).traceId(traceId).build();
         ChatRequest governed = requestPipeline.preDispatchTokenCount(internal, ctx);
         java.util.OptionalInt counted;
+        // A count before this one in the same HTTP request (several models in one call) must not name this one's.
+        httpRequest.removeAttribute("gateway.provider");
+        httpRequest.removeAttribute(ProviderDispatcher.SERVED_MODEL_ATTR);
         try (WorkspaceScope.Scope ignored = WorkspaceScope.open(workspaceId)) {
             counted = dispatcher.countInputTokens(governed);
         }
-        return counted.isPresent() ? counted.getAsInt() : tokenEstimator.estimateTokens(governed);
+        String provider = (String) httpRequest.getAttribute("gateway.provider");
+        Object served = httpRequest.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR);
+        String model = served != null ? served.toString() : governed.getModel();
+        ChatRequest sent = model.equals(governed.getModel()) ? governed : governed.toBuilder().model(model).build();
+        if (counted.isPresent()) {
+            return new InputCount(counted.getAsInt(), true, provider, model, sent);
+        }
+        return new InputCount(tokenEstimator.estimateTokens(sent), false, provider, model, sent);
     }
 
     /**

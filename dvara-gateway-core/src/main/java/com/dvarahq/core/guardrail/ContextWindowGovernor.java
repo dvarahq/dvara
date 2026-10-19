@@ -27,4 +27,14 @@ import com.dvarahq.core.model.ChatRequest;
 public interface ContextWindowGovernor {
 
     ContextWindowResult evaluate(ChatRequest request, int maxContextTokens, String workspaceId);
+
+    /**
+     * The thresholds {@link #evaluate} applies for a workspace, without evaluating a request: reading them writes no
+     * audit record. {@link ContextThresholds#DEFAULTS} unless an implementation reads the workspace's own.
+     *
+     * @param workspaceId the workspace, or null for none
+     */
+    default ContextThresholds thresholds(String workspaceId) {
+        return ContextThresholds.DEFAULTS;
+    }
 }

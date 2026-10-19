@@ -17,6 +17,7 @@ package com.dvarahq.policy.guardrail;
 
 import com.dvarahq.core.guardrail.ImageTokens;
 import com.dvarahq.core.guardrail.TokenEstimation;
+import com.dvarahq.core.guardrail.TokenBreakdown;
 import com.dvarahq.core.guardrail.TokenEstimator;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.model.ContentBlock;
@@ -26,6 +27,9 @@ import com.knuddels.jtokkit.api.EncodingRegistry;
 import com.knuddels.jtokkit.api.EncodingType;
 import com.knuddels.jtokkit.api.ModelType;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ToIntFunction;
 
@@ -55,11 +59,17 @@ public class TiktokenEstimator implements TokenEstimator {
     private static final ToIntFunction<String> DEFAULT_COUNTER = DEFAULT_ENCODING::countTokensOrdinary;
     private static final ToIntFunction<String> O200K_COUNTER = O200K_ENCODING::countTokensOrdinary;
 
-    /** How a model's text is counted, the correction its family's count is multiplied by, and what tools add. */
-    private record Counting(ToIntFunction<String> counter, double correction, int toolOverhead) {
+    /**
+     * How a model's text is counted, the correction its family's count is multiplied by, and what tools add; with the
+     * vocabulary's name and whether it is the model's own, for a caller that shows how a count was made.
+     */
+    private record Counting(ToIntFunction<String> counter, double correction, int toolOverhead, String encoding,
+                            boolean exact) {
 
-        static final Counting DEFAULT = new Counting(DEFAULT_COUNTER, 1.0, 0);
+        static final Counting DEFAULT = new Counting(DEFAULT_COUNTER, 1.0, 0, CL100K, false);
     }
+
+    private static final String CL100K = EncodingType.CL100K_BASE.getName();
 
     private final ConcurrentHashMap<String, Counting> encodingCache = new ConcurrentHashMap<>();
     private final TokenizerResolver resolver;
@@ -130,6 +140,94 @@ public class TiktokenEstimator implements TokenEstimator {
         // Reply priming overhead
         total += 3;
         return corrected(total, counting.correction(), images + toolOverhead(request, counting));
+    }
+
+    /**
+     * The same count as {@link #estimateTokens(ChatRequest)}, part by part. Each part is its text's count times the
+     * family's correction, rounded down; {@code overhead} takes the per-message and priming tokens, the tool overhead
+     * and what rounding left, so the parts add up to the total exactly.
+     */
+    @Override
+    public Optional<TokenBreakdown> breakdown(ChatRequest request) {
+        if (request == null || request.getMessages() == null) {
+            return Optional.empty();
+        }
+        Counting counting = resolveEncoding(request.getModel());
+        ToIntFunction<String> encoding = counting.counter();
+        long system = 0;
+        long user = 0;
+        long assistant = 0;
+        long toolResults = 0;
+        long images = 0;
+        long framing = 0;
+        List<Integer> perMessage = new ArrayList<>(request.getMessages().size());
+        for (var message : request.getMessages()) {
+            framing += 4;
+            long text = 0;
+            if (message.getContent() != null) {
+                for (var block : message.getContent()) {
+                    if (block instanceof ContentBlock.ImageBlock image) {
+                        images += ImageTokens.estimate(image, request.getModel());
+                        continue;
+                    }
+                    text += switch (block) {
+                        case ContentBlock.TextBlock t -> countTokens(encoding, t.text());
+                        case ContentBlock.ImageBlock image -> 0;
+                        case ContentBlock.ThinkingBlock thinking -> countTokens(encoding, thinking.thinking());
+                        case ContentBlock.RedactedThinkingBlock redacted -> countTokens(encoding, redacted.data());
+                        case null -> 0;
+                    };
+                }
+            }
+            if (message.getToolCalls() != null) {
+                for (var toolCall : message.getToolCalls()) {
+                    text += countTokens(encoding, toolCall.getName());
+                    text += countTokens(encoding, toolCall.getArguments());
+                }
+            }
+            perMessage.add(scaled(text, counting.correction()));
+            switch (part(message.getRole())) {
+                case SYSTEM -> system += text;
+                case ASSISTANT -> assistant += text;
+                case TOOL -> toolResults += text;
+                case USER -> user += text;
+            }
+        }
+        long tools = countTokens(encoding, TokenEstimation.renderTools(request.getTools()));
+        framing += 3;
+        int total = corrected(system + user + assistant + toolResults + tools + framing, counting.correction(),
+                images + toolOverhead(request, counting));
+        double c = counting.correction();
+        int s = scaled(system, c);
+        int u = scaled(user, c);
+        int a = scaled(assistant, c);
+        int t = scaled(tools, c);
+        int r = scaled(toolResults, c);
+        int i = (int) Math.min(images, Integer.MAX_VALUE);
+        long overhead = (long) total - s - u - a - t - r - i;
+        return Optional.of(new TokenBreakdown(s, u, a, t, r, i, (int) Math.max(0, overhead), perMessage,
+                counting.encoding(), counting.exact()));
+    }
+
+    /** The part of the request a message's tokens belong to. */
+    private enum Part { SYSTEM, USER, ASSISTANT, TOOL }
+
+    private static Part part(String role) {
+        if (role == null) {
+            return Part.USER;
+        }
+        return switch (role.toLowerCase(java.util.Locale.ROOT)) {
+            case "system", "developer" -> Part.SYSTEM;
+            case "assistant", "model" -> Part.ASSISTANT;
+            case "tool", "function" -> Part.TOOL;
+            default -> Part.USER;
+        };
+    }
+
+    /** A part's count times the correction, rounded down, so the parts never add up to more than the total. */
+    private static int scaled(long count, double correction) {
+        long value = correction == 1.0 ? count : (long) Math.floor(count * correction);
+        return (int) Math.min(value, Integer.MAX_VALUE);
     }
 
     /** The provider's own text in front of the tools, when the request has any. */
@@ -258,12 +356,20 @@ public class TiktokenEstimator implements TokenEstimator {
         try {
             ModelType modelType = ModelType.fromName(model).orElse(null);
             if (modelType != null) {
-                return new Counting(REGISTRY.getEncodingForModel(modelType)::countTokensOrdinary, correction, overhead);
+                // jtokkit's own table names the model's vocabulary, so the count is exact.
+                return new Counting(REGISTRY.getEncodingForModel(modelType)::countTokensOrdinary, correction, overhead,
+                        modelType.getEncodingType().getName(), true);
             }
         } catch (RuntimeException ignored) {
             // the resolver decides
         }
-        return new Counting(counter(resolution == null ? null : resolution.encoding()), correction, overhead);
+        String encoding = resolution == null ? null : resolution.encoding();
+        ToIntFunction<String> counter = counter(encoding);
+        if (counter == DEFAULT_COUNTER && !CL100K.equals(encoding)) {
+            // No vocabulary, or one that did not load: counted with the cl100k stand-in, so not exact.
+            return new Counting(counter, correction, overhead, CL100K, false);
+        }
+        return new Counting(counter, correction, overhead, encoding, resolution.exact());
     }
 
     /**
