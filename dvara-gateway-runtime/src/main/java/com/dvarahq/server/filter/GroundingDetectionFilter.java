@@ -116,16 +116,27 @@ public class GroundingDetectionFilter implements ChatFilter {
                         + "the workspace, or run a build that provides a detector.");
     }
 
+    /**
+     * The response header saying what grounding did to this response, set only where grounding is switched on:
+     * {@code grounded}, {@code ungrounded} (with {@code LOG} or {@code FLAG}; {@code BLOCK} refuses instead), or
+     * {@code unchecked} when the request carried no source document grounding could use. {@code X-Gateway-*}, like every
+     * header the gateway puts on a response.
+     */
+    public static final String GROUNDING_HEADER = "X-Gateway-Grounding";
+
     @Override
     public ChatResponse postDispatch(ChatRequest request, ChatResponse response, FilterContext ctx) {
         GroundingConfig effective = resolveConfig(ctx.getWorkspaceId());
-        if (!effective.enabled() || request.getMetadata() == null) {
+        if (!effective.enabled()) {
             return response;
         }
 
-        Object sourcesObj = request.getMetadata().get("grounding.sources");
+        // Grounding is on but judges a response only against the sources the request sends. With none, the response
+        // passes unchecked; that is counted, warned about once per workspace and said on the response, so "grounding is
+        // on" is never read as "this answer was checked".
+        Object sourcesObj = request.getMetadata() == null ? null : request.getMetadata().get("grounding.sources");
         if (!(sourcesObj instanceof List<?> rawList) || rawList.isEmpty()) {
-            return response;
+            return unchecked(response, ctx, "no_sources");
         }
 
         List<String> sources = rawList.stream()
@@ -135,7 +146,10 @@ public class GroundingDetectionFilter implements ChatFilter {
                 .limit(effective.maxSources() > 0 ? effective.maxSources() : Long.MAX_VALUE)
                 .toList();
 
-        if (sources.isEmpty()) return response;
+        if (sources.isEmpty()) {
+            boolean anyText = rawList.stream().anyMatch(e -> e instanceof String);
+            return unchecked(response, ctx, anyText ? "sources_over_limits" : "no_sources");
+        }
 
         // Enabled, with sources to check, and no detector to check them: refuse rather than report
         // "grounded" for an answer nothing verified.
@@ -154,7 +168,24 @@ public class GroundingDetectionFilter implements ChatFilter {
                                 + String.join("; ", result.ungroundedClaims()));
             }
         }
-        return response;
+        return withGroundingHeader(response, result.grounded() ? "grounded" : "ungrounded");
+    }
+
+    private ChatResponse unchecked(ChatResponse response, FilterContext ctx, String reason) {
+        metrics.recordGroundingUnchecked(ctx.getWorkspaceId(), reason, "non_streaming");
+        return withGroundingHeader(response, "unchecked");
+    }
+
+    private static ChatResponse withGroundingHeader(ChatResponse response, String value) {
+        if (response == null) {
+            return null;
+        }
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (response.getGatewayHeaders() != null) {
+            headers.putAll(response.getGatewayHeaders());
+        }
+        headers.put(GROUNDING_HEADER, value);
+        return response.toBuilder().gatewayHeaders(headers).build();
     }
 
     /** The typed guardrail store, or null to read the legacy metadata keys. */

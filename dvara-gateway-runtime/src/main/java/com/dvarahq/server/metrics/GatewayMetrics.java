@@ -36,6 +36,9 @@ import java.time.Duration;
  *   <li>{@code gateway_provider_errors_total} — provider errors (provider, error_code)</li>
  *   <li>{@code gateway_retries_total} — retry attempts (provider)</li>
  *   <li>{@code gateway_fallbacks_total} — fallback activations (from_provider, to_provider)</li>
+ *   <li>{@code gateway_grounding_check_total} — grounding checks run (grounded, action)</li>
+ *   <li>{@code gateway_grounding_unchecked_total} — responses grounding was on for but could not check
+ *       (workspace, reason=no_sources|sources_over_limits, mode)</li>
  * </ul>
  *
  * <h3>Histograms</h3>
@@ -322,6 +325,38 @@ public class GatewayMetrics {
                 .tag("selected_model", safe(selectedModel))
                 .register(registry)
                 .increment();
+    }
+
+    private static final org.slf4j.Logger groundingLog = org.slf4j.LoggerFactory.getLogger(GatewayMetrics.class);
+
+    /** Workspaces already warned about unchecked grounding, so the warning is written once each. */
+    private final java.util.Set<String> warnedUncheckedGrounding = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * A response that grounding is switched on for, but that was not checked: the request carried no source documents
+     * ({@code reason=no_sources}), or every source it carried was dropped by {@code grounding.max-sources} or
+     * {@code grounding.max-source-length} ({@code reason=sources_over_limits}). Grounding can only judge a response
+     * against sources, so such a response passes unjudged. Counted in {@code gateway_grounding_unchecked_total}, beside
+     * {@code gateway_grounding_check_total}, so the share of traffic grounding actually checks can be measured. The
+     * first one for each workspace is also logged at WARN.
+     *
+     * @param mode {@code non_streaming} or {@code streaming}
+     */
+    public void recordGroundingUnchecked(String workspace, String reason, String mode) {
+        Counter.builder("gateway_grounding_unchecked_total")
+                .description("Responses grounding was switched on for but could not check, because no usable source "
+                        + "document came with the request")
+                .tag("workspace", safe(workspace))
+                .tag("reason", safe(reason))
+                .tag("mode", safe(mode))
+                .register(registry)
+                .increment();
+        if (warnedUncheckedGrounding.add(safe(workspace))) {
+            groundingLog.warn("Grounding is on for workspace {}, but a response was not checked ({}): grounding judges a "
+                    + "response only against the source documents a request sends in metadata[\"grounding.sources\"], "
+                    + "and this one had none it could use. Such responses pass unchecked; "
+                    + "gateway_grounding_unchecked_total counts them. Logged once per workspace.", safe(workspace), reason);
+        }
     }
 
     public void recordGroundingCheck(String grounded, String action) {
