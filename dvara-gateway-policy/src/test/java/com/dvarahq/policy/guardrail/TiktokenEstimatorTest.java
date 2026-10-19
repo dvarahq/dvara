@@ -116,6 +116,32 @@ class TiktokenEstimatorTest {
                 .content(List.of(new ContentBlock.TextBlock(text))).build();
     }
 
+    /**
+     * A Mistral or DeepSeek request is counted with that vendor's own vocabulary: the same overheads as any request
+     * (4 for the message, 3 for the reply), and the text counted as the vendor's tokenizer counts it.
+     */
+    @Test
+    void mistralAndDeepSeekRequestsAreCountedWithTheirOwnVocabularies() {
+        // Counted by the vendors' tools: Tekken 35, DeepSeek 30, cl100k 47.
+        String text = "गेटवे हर अनुरोध के टोकन गिनता है। 数据驻留规则 0123456789";
+        int tekken = Vocabularies.tekken().applyAsInt(text);
+        int deepseek = Vocabularies.deepseek().applyAsInt(text);
+        int cl100k = estimator.estimateTokens(text);
+        assertThat(List.of(tekken, deepseek, cl100k)).as("the vendors' own counts, and the stand-in's")
+                .containsExactly(35, 30, 47);
+
+        ChatRequest mistral = withMessages(List.of(user(text))).toBuilder().model("mistral-small-latest").build();
+        ChatRequest deepseekRequest = withMessages(List.of(user(text))).toBuilder().model("deepseek-chat").build();
+        ChatRequest oldMistral = withMessages(List.of(user(text))).toBuilder().model("mistral-large-2411").build();
+
+        assertThat(estimator.estimateTokens(mistral)).isEqualTo(4 + tekken + 3);
+        assertThat(estimator.estimateTokens(deepseekRequest)).isEqualTo(4 + deepseek + 3);
+        assertThat(estimator.estimateTokens(oldMistral)).as("a SentencePiece Mistral model keeps the stand-in")
+                .isEqualTo(4 + cl100k + 3);
+        assertThat(estimator.upperBound(mistral)).as("the byte bound still holds").isGreaterThanOrEqualTo(
+                estimator.estimateTokens(mistral));
+    }
+
     @Test
     void toolResultContentIsCounted() {
         int withoutResult = estimator.estimateTokens(withMessages(List.of(user("hi"))));

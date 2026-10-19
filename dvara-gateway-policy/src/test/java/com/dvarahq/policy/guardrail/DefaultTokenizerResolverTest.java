@@ -26,7 +26,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Each model is counted by its family: OpenAI with its own vocabulary, the rest with a stated stand-in. */
+/** Each model is counted by its family: OpenAI, Mistral's Tekken models and DeepSeek V3 with their own vocabulary, the rest with a stated stand-in. */
 class DefaultTokenizerResolverTest {
 
     private final DefaultTokenizerResolver resolver = new DefaultTokenizerResolver();
@@ -50,8 +50,24 @@ class DefaultTokenizerResolverTest {
             "anthropic.claude-3-5-sonnet-20240620-v1:0, anthropic, cl100k_base, false",
             "us.anthropic.claude-haiku-4-5, anthropic, cl100k_base, false",
             "gemini-2.5-flash, gemini, cl100k_base, false",
-            "mistral-large-latest, mistral, cl100k_base, false",
-            "deepseek-chat, deepseek, cl100k_base, false",
+            "mistral-large-latest, mistral, tekken, true",
+            "mistral-small-2506, mistral, tekken, true",
+            "open-mistral-nemo, mistral, tekken, true",
+            "ministral-8b-2410, mistral, tekken, true",
+            "magistral-medium-latest, mistral, tekken, true",
+            "devstral-small-2507, mistral, tekken, true",
+            "codestral-2508, mistral, tekken, true",
+            "mistral/mistral-medium-2508, mistral, tekken, true",
+            "mistral-large-2411, mistral, cl100k_base, false",
+            "mistral.mistral-large-2407-v1:0, mistral, cl100k_base, false",
+            "open-mixtral-8x22b, mistral, cl100k_base, false",
+            "open-mistral-7b, mistral, cl100k_base, false",
+            "codestral-2405, mistral, cl100k_base, false",
+            "deepseek-chat, deepseek, deepseek_v3, true",
+            "deepseek-reasoner, deepseek, deepseek_v3, true",
+            "deepseek.r1-v1:0, deepseek, deepseek_v3, true",
+            "deepseek-v3.1, deepseek, deepseek_v3, true",
+            "deepseek-coder-6.7b, deepseek, cl100k_base, false",
             "meta.llama3-70b-instruct-v1:0, meta, cl100k_base, false",
             "qwen-max, qwen, cl100k_base, false",
             "command-r-plus, cohere, cl100k_base, false",

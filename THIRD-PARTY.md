@@ -34,6 +34,18 @@ exempted arm**, which is why they are accepted rather than removed:
 The remaining non-Apache, non-MIT entries are permissive: EDL 1.0 and Eclipse Distribution
 License 1.0 (both BSD-3 equivalents), BSD-2-Clause / CC0, and Public Domain.
 
+## Bundled data files
+
+Two token vocabularies ship as data inside `dvara-gateway-policy`, beside the code that reads them
+(`com/dvarahq/policy/guardrail/vocab/`, with `SOURCES.md` giving each source URL and checksum):
+
+| file | from | licence |
+|---|---|---|
+| `tekken.bin.gz` | Mistral AI's Tekken vocabulary (`tekken.json`, Mistral-Small-3.2-24B-Instruct-2506; the same bytes as mistral-common's `tekken_240911.json`) | Apache-2.0 |
+| `deepseek-v3.bin.gz` | DeepSeek's V3 tokenizer (`tokenizer.json`, DeepSeek-V3-0324) | MIT; notice in `LICENSE-deepseek-v3.txt` beside it |
+
+They are not Maven dependencies, so the plugin above does not list them.
+
 ## Licence distribution
 
 ```

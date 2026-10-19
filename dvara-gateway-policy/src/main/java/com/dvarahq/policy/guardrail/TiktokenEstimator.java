@@ -27,6 +27,7 @@ import com.knuddels.jtokkit.api.EncodingType;
 import com.knuddels.jtokkit.api.ModelType;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.ToIntFunction;
 
 /**
  * BPE tokenizer using jtokkit for accurate token counting. Model-aware encoding resolution with
@@ -51,10 +52,13 @@ public class TiktokenEstimator implements TokenEstimator {
     private static final Encoding DEFAULT_ENCODING = REGISTRY.getEncoding(EncodingType.CL100K_BASE);
     private static final Encoding O200K_ENCODING = REGISTRY.getEncoding(EncodingType.O200K_BASE);
 
-    /** A model's encoding, the correction its family's count is multiplied by, and what a request with tools adds. */
-    private record Counting(Encoding encoding, double correction, int toolOverhead) {
+    private static final ToIntFunction<String> DEFAULT_COUNTER = DEFAULT_ENCODING::countTokensOrdinary;
+    private static final ToIntFunction<String> O200K_COUNTER = O200K_ENCODING::countTokensOrdinary;
 
-        static final Counting DEFAULT = new Counting(DEFAULT_ENCODING, 1.0, 0);
+    /** How a model's text is counted, the correction its family's count is multiplied by, and what tools add. */
+    private record Counting(ToIntFunction<String> counter, double correction, int toolOverhead) {
+
+        static final Counting DEFAULT = new Counting(DEFAULT_COUNTER, 1.0, 0);
     }
 
     private final ConcurrentHashMap<String, Counting> encodingCache = new ConcurrentHashMap<>();
@@ -89,7 +93,7 @@ public class TiktokenEstimator implements TokenEstimator {
             return 0;
         }
         Counting counting = resolveEncoding(request.getModel());
-        Encoding encoding = counting.encoding();
+        ToIntFunction<String> encoding = counting.counter();
         int total = 0;
         // Images are counted by the provider's own formula, so the family's correction, which is for text, skips them.
         long images = 0;
@@ -209,8 +213,8 @@ public class TiktokenEstimator implements TokenEstimator {
      * Counted as ordinary text. A caller's text can contain a special token's spelling, {@code <|endoftext|>} for one,
      * which the plain count refuses with an exception; a provider reads it as text, and so does this.
      */
-    private static int countTokens(Encoding encoding, String text) {
-        return text == null || text.isEmpty() ? 0 : encoding.countTokensOrdinary(text);
+    private static int countTokens(ToIntFunction<String> counter, String text) {
+        return text == null || text.isEmpty() ? 0 : counter.applyAsInt(text);
     }
 
     @Override
@@ -254,13 +258,28 @@ public class TiktokenEstimator implements TokenEstimator {
         try {
             ModelType modelType = ModelType.fromName(model).orElse(null);
             if (modelType != null) {
-                return new Counting(REGISTRY.getEncodingForModel(modelType), correction, overhead);
+                return new Counting(REGISTRY.getEncodingForModel(modelType)::countTokensOrdinary, correction, overhead);
             }
         } catch (RuntimeException ignored) {
             // the resolver decides
         }
-        Encoding encoding = resolution != null && DefaultTokenizerResolver.O200K.equals(resolution.encoding())
-                ? O200K_ENCODING : DEFAULT_ENCODING;
-        return new Counting(encoding, correction, overhead);
+        return new Counting(counter(resolution == null ? null : resolution.encoding()), correction, overhead);
+    }
+
+    /**
+     * The counter for a vocabulary name. Mistral's and DeepSeek's are loaded once, on first use; one that did not load
+     * counts as cl100k, the stand-in those families used before.
+     */
+    private static ToIntFunction<String> counter(String encoding) {
+        if (encoding == null) {
+            return DEFAULT_COUNTER;
+        }
+        ToIntFunction<String> counter = switch (encoding) {
+            case DefaultTokenizerResolver.O200K -> O200K_COUNTER;
+            case DefaultTokenizerResolver.TEKKEN -> Vocabularies.tekken();
+            case DefaultTokenizerResolver.DEEPSEEK_V3 -> Vocabularies.deepseek();
+            default -> DEFAULT_COUNTER;
+        };
+        return counter == null ? DEFAULT_COUNTER : counter;
     }
 }
