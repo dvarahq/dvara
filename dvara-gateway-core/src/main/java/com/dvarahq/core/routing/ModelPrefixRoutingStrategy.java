@@ -53,6 +53,11 @@ public class ModelPrefixRoutingStrategy implements RoutingStrategy {
         map.put("claude", "ANTHROPIC_API_KEY");
         map.put("gemini", "GEMINI_API_KEY");
         map.put("mistral", "MISTRAL_API_KEY");
+        // Mistral's other model families route through the same provider.
+        for (String family : List.of("open-mistral", "open-mixtral", "codestral", "devstral",
+                "magistral", "ministral", "pixtral", "voxtral")) {
+            map.put(family, "MISTRAL_API_KEY");
+        }
         map.put("command", "COHERE_API_KEY");
         // First-class OpenAI-compatible providers.
         map.put("qwen", "QWEN_API_KEY");

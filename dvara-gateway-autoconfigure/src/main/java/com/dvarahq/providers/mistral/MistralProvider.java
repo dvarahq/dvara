@@ -303,7 +303,21 @@ public class MistralProvider extends AbstractLlmProvider {
 
     @Override
     protected List<String> modelPrefixes() {
-        return List.of("mistral");
+        // Mistral names its model families separately, and most of them do not start with
+        // "mistral". Each family Mistral's own API serves is listed, so a request can name any of
+        // them without a route. Bare "mixtral" is left out: Mistral's API serves it as
+        // "open-mixtral", and a bare "mixtral-*" name is another host's copy of the model.
+        return List.of(
+                "mistral",       // mistral-large-latest, mistral-small-latest, mistral-embed, ...
+                "open-mistral",  // open-mistral-7b, open-mistral-nemo
+                "open-mixtral",  // open-mixtral-8x7b, open-mixtral-8x22b
+                "codestral",     // codestral-latest, codestral-embed
+                "devstral",      // devstral-small-latest, devstral-medium-latest
+                "magistral",     // magistral-medium-latest, magistral-small-latest
+                "ministral",     // ministral-3b-latest, ministral-8b-latest
+                "pixtral",       // pixtral-large-latest, pixtral-12b
+                "voxtral"        // voxtral-small-latest, voxtral-mini-latest
+        );
     }
 
     @Override

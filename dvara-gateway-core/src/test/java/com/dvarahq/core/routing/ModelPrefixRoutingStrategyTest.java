@@ -24,6 +24,8 @@ import com.dvarahq.core.model.SseChunk;
 import com.dvarahq.core.provider.LlmProvider;
 import com.dvarahq.core.provider.ProviderCapabilities;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Iterator;
 import java.util.List;
@@ -86,6 +88,24 @@ class ModelPrefixRoutingStrategyTest {
                 .isInstanceOf(GatewayException.class)
                 .hasMessageContaining("No provider configured for model: unknown-model")
                 .hasMessageContaining("Check GET /v1/models");
+    }
+
+    // ---------- Mistral model-family hints ----------
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "pixtral-large-latest", "codestral-latest", "ministral-8b-latest",
+            "magistral-medium-latest", "devstral-small-latest", "voxtral-small-latest",
+            "open-mistral-nemo", "open-mixtral-8x22b"})
+    void throwsGatewayException_withMistralHint_forEveryMistralFamily(String model) {
+        // Without these entries the message would fall through to the generic
+        // "Check GET /v1/models" hint.
+        ChatRequest request = ChatRequest.builder().model(model).build();
+
+        assertThatThrownBy(() -> strategy.route(request, List.of()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining(model)
+                .hasMessageContaining("MISTRAL_API_KEY");
     }
 
     // ---------- Reasoning-model hints ----------
