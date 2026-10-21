@@ -26,6 +26,8 @@ import com.dvarahq.core.model.SseChunk;
 import com.dvarahq.core.provider.ProviderCapabilities;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -83,6 +85,41 @@ class MistralProviderTest {
     @Test
     void supports_claudeModel_returnsFalse() {
         ChatRequest request = ChatRequest.builder().model("claude-sonnet-4-5").messages(List.of()).build();
+        assertThat(provider.supports(request)).isFalse();
+    }
+
+    // Each model family Mistral's API serves is claimed by name, not only names that start with
+    // "mistral".
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "pixtral-large-latest", "pixtral-12b",
+            "codestral-latest",
+            "ministral-3b-latest", "ministral-8b-latest",
+            "magistral-medium-latest",
+            "devstral-small-latest", "devstral-medium-2507",
+            "voxtral-small-latest",
+            "open-mistral-nemo", "open-mistral-7b",
+            "open-mixtral-8x7b", "open-mixtral-8x22b"})
+    void supports_everyMistralModelFamily(String model) {
+        ChatRequest request = ChatRequest.builder().model(model).messages(List.of()).build();
+        assertThat(provider.supports(request)).isTrue();
+    }
+
+    // Names that belong to another provider, or to another host's copy of a Mistral model, are
+    // not claimed.
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "mixtral-8x7b-32768",
+            "groq/mixtral-8x7b-32768",
+            "ollama/mistral",
+            "ollama/pixtral",
+            "bedrock/mistral.pixtral-large-2502-v1:0",
+            "azure/mistral-large",
+            "open-llama-7b",
+            "command-r-plus",
+            "gemini-2.5-pro"})
+    void supports_otherProvidersNames_returnsFalse(String model) {
+        ChatRequest request = ChatRequest.builder().model(model).messages(List.of()).build();
         assertThat(provider.supports(request)).isFalse();
     }
 
