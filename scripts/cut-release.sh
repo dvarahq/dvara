@@ -13,6 +13,7 @@
 #   scripts/cut-release.sh 1.8.5 --rc 1              # plan only
 #   scripts/cut-release.sh 1.8.5 --rc 1 --execute    # tag 1.8.5-rc1, main opens 1.8.5-SNAPSHOT
 #   scripts/cut-release.sh 1.8.5 --execute           # tag 1.8.5,     main opens 1.8.6-SNAPSHOT
+#   scripts/cut-release.sh 1.10.0 --next 1.11.0-SNAPSHOT --execute   # main opens the next minor instead
 #
 # Cut it from main's commit: a checkout of main, or a worktree detached at origin/main. The script
 # works on a detached HEAD and leaves the checkout detached at main's new head.
@@ -25,11 +26,13 @@ set -uo pipefail
 VERSION=""
 RC=""
 EXECUTE=0
+NEXT_ARG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --rc) RC="${2:-}"; shift 2 ;;
     --execute) EXECUTE=1; shift ;;
+    --next) NEXT_ARG="${2:-}"; shift 2 ;;
     -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     -*) echo "unknown option $1" >&2; exit 2 ;;
     *) VERSION="$1"; shift ;;
@@ -66,6 +69,16 @@ if [ -n "$RC" ]; then
   NEXT="$VERSION-SNAPSHOT"
 else
   NEXT="$(echo "$VERSION" | awk -F. '{print $1"."$2"."$3+1"-SNAPSHOT"}')"
+fi
+# --next names the version main opens at after a release, when that is not the next patch, for
+# example 1.11.0-SNAPSHOT after 1.10.0. A candidate keeps main on its own release, so it takes none.
+if [ -n "$NEXT_ARG" ]; then
+  [ -z "$RC" ] || die "--next is for a release; after a candidate main stays at $VERSION-SNAPSHOT"
+  echo "$NEXT_ARG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-SNAPSHOT$' || die "--next '$NEXT_ARG' is not X.Y.Z-SNAPSHOT"
+  base="${NEXT_ARG%-SNAPSHOT}"
+  { [ "$base" != "$VERSION" ] && [ "$(printf '%s\n%s\n' "$VERSION" "$base" | sort -V | tail -1)" = "$base" ]; } \
+    || die "--next '$NEXT_ARG' does not come after $VERSION"
+  NEXT="$NEXT_ARG"
 fi
 
 REPO="dvarahq/dvara"

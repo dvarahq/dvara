@@ -120,6 +120,20 @@ check "plan exits 0" '[ "$rc" = 0 ]'
 check "plan names the pull requests" 'grep -q "open \"Release $X-rc1\"" "$d/out.log" && grep -q "release/$X-rc1-next" "$d/out.log"'
 check "plan pushes, commits and tags nothing" '[ "$(refs "$d")" = "$before" ] && [ "$(git -C "$d/cut" rev-parse HEAD)" = "$head_before" ] && [ -z "$(git -C "$d/cut" status --porcelain)" ] && ! grep -q "^gh pr " "$d/stub/calls"'
 
+echo "case: --next names the version main opens at"
+d="$(fresh next)"; before="$(refs "$d")"
+nm="$(echo "$X" | awk -F. '{print $1"."$2+1".0-SNAPSHOT"}')"
+cut "$d" "$X" --next "$nm"; rc=$?
+check "plan exits 0" '[ "$rc" = 0 ]'
+check "plan opens main at $nm" 'grep -q "main then opens $nm" "$d/out.log" && grep -q "main opens $nm" "$d/out.log"'
+cut "$d" "$X" --next "$X-SNAPSHOT"; rc=$?
+check "refuses a next version that is the release" '[ "$rc" != 0 ] && grep -q "does not come after" "$d/out.log"'
+cut "$d" "$X" --next "${nm%-SNAPSHOT}"; rc=$?
+check "refuses a next version that is not a snapshot" '[ "$rc" != 0 ] && grep -q "is not X.Y.Z-SNAPSHOT" "$d/out.log"'
+cut "$d" "$X" --rc 1 --next "$nm"; rc=$?
+check "refuses --next with a candidate" '[ "$rc" != 0 ] && grep -q "is for a release" "$d/out.log"'
+check "nothing reached origin" '[ "$(refs "$d")" = "$before" ]'
+
 echo "case: a release candidate goes through two pull requests"
 d="$(fresh rc)"
 cut "$d" "$X" --rc 1 --execute; rc=$?
