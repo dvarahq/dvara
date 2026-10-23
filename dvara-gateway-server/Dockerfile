@@ -40,7 +40,11 @@ USER dvara
 # under the defaults above, which the cache must match; the JVM ignores a cache that does not match
 # and starts as it would without one. The dummy keys register two providers, so their classes are
 # in the cache too; nothing is called.
-RUN OPENAI_API_KEY=aot-training ANTHROPIC_API_KEY=aot-training \
+# A buildx builder gives each build step OpenTelemetry settings that point at its own socket, which
+# the gateway refuses as a trace endpoint and does not start. The run is cleared of them: nothing
+# sets them when the image runs, and the training run must start as the image does.
+RUN unset $(env | sed -n 's/^\(OTEL_[A-Za-z0-9_]*\)=.*/\1/p'); \
+    OPENAI_API_KEY=aot-training ANTHROPIC_API_KEY=aot-training \
     java -XX:AOTCacheOutput=/app/app.aot -Dspring.context.exit=onRefresh -jar /app/app.jar > /tmp/aot-training.log 2>&1 \
     || { cat /tmp/aot-training.log; exit 1; }; \
     rm -f /tmp/aot-training.log; test -s /app/app.aot

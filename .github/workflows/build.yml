@@ -48,8 +48,15 @@ jobs:
           mkdir -p dvara-gateway-server/target/image
           cp dvara-gateway-server/target/dvara-gateway-server-*-app.jar dvara-gateway-server/target/image/app.jar
 
+      # The release builds with buildx, so this does too. A buildx builder hands each build step its
+      # own OpenTelemetry settings, which plain docker build does not; a step that starts the gateway
+      # sees them only here.
+      - uses: docker/setup-buildx-action@v3
+
       - name: Build the image
-        run: docker build -t dvara-gateway-oss:ci -f dvara-gateway-server/Dockerfile dvara-gateway-server/target/image
+        run: >-
+          docker buildx build --load -t dvara-gateway-oss:ci
+          -f dvara-gateway-server/Dockerfile dvara-gateway-server/target/image
 
       # A wrong option must stop the boot: a check that a good one boots proves nothing. Then the good
       # ones are read back with where each came from: the image defaults from the environment, the

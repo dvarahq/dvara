@@ -5,6 +5,15 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+*'
       - 'v[0-9]+.[0-9]+.[0-9]+*'
+  # For a tag already on Maven Central whose image or GitHub Release did not get published. It
+  # publishes nothing to Central: the image is built from the jar Central holds for that tag, with
+  # the Dockerfile of the branch it is run from, and the GitHub Release is created on the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing release tag, such as 1.10.0, whose jar is already on Maven Central
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -35,9 +44,14 @@ jobs:
 
       - name: Version from tag
         id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then TAG="$INPUT_TAG"; else TAG="$GITHUB_REF_NAME"; fi
+          [[ "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.-]*$ ]] || { echo "::error::$TAG is not a release tag"; exit 1; }
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # The minor-line image tag (1.8), cut from the first two numbers. The semver rule in the
           # metadata action cannot read a four-part hotfix version such as 1.8.2.1.
@@ -46,16 +60,26 @@ jobs:
             *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
             *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
           esac
-          echo "Releasing $VERSION from tag $GITHUB_REF_NAME"
+          # latest and the minor-line tag move only to the highest release. A tag push is the newest
+          # release; a run for an older tag must not move them back.
+          HIGHEST=$(git ls-remote --tags --refs origin | sed 's|.*refs/tags/v\{0,1\}||' | grep -v -- - | sort -V | tail -1)
+          if [ "$GITHUB_EVENT_NAME" = push ] || [ "$VERSION" = "$HIGHEST" ]; then
+            echo "newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "newest=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Releasing $VERSION from tag $TAG (highest release: $HIGHEST)"
 
       # The version is read from the tagged commit, never set here. What is published must be what
       # the tag records, so that checking out the tag and building it gives the same artifact. A
       # tag on a commit whose poms say anything else stops the release before it builds or
       # publishes anything; scripts/cut-release.sh commits the version and tags that commit.
       - name: The committed version is the tag's version
+        if: github.event_name == 'push'
         run: scripts/check-version-matches-tag.sh "${{ steps.version.outputs.version }}"
 
       - name: Build and test
+        if: github.event_name == 'push'
         run: ./mvnw -B -ntp clean install
 
       # The credentials are checked BEFORE anything is published, and a missing one fails the
@@ -64,6 +88,7 @@ jobs:
       # shipped. Nothing here is recoverable by re-running once the tag has been advertised, so the
       # cheap failure is the one that happens first.
       - name: The Central credentials are present
+        if: github.event_name == 'push'
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
@@ -99,6 +124,7 @@ jobs:
       #
       # Tests are skipped because the step above already ran them on this exact tree.
       - name: Publish to Maven Central
+        if: github.event_name == 'push'
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
@@ -106,6 +132,7 @@ jobs:
         run: ./mvnw -B -ntp -Prelease -DskipTests deploy
 
       - name: Stage the runnable jar
+        if: github.event_name == 'push'
         id: jar
         run: |
           set -euo pipefail
@@ -116,6 +143,29 @@ jobs:
           cp "$JAR" dvara-gateway-server/target/image/app.jar
           (cd dvara-gateway-server/target && sha256sum "$(basename "$JAR")" > "$(basename "$JAR").sha256")
           echo "path=$JAR" >> "$GITHUB_OUTPUT"
+
+      # The run for an existing tag takes the jar Central holds, checked against Central's own
+      # SHA-256, so the image carries exactly what was released.
+      - name: The released jar from Maven Central
+        if: github.event_name == 'workflow_dispatch'
+        id: central-jar
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null \
+            || { echo "::error::there is no tag $TAG"; exit 1; }
+          NAME=dvara-gateway-server-$VERSION-app.jar
+          URL=https://repo1.maven.org/maven2/com/dvarahq/dvara-gateway-server/$VERSION/$NAME
+          mkdir -p dvara-gateway-server/target/image
+          curl -fsSL -o "dvara-gateway-server/target/$NAME" "$URL" \
+            || { echo "::error::$NAME is not on Maven Central (yet)"; exit 1; }
+          EXPECTED=$(curl -fsSL "$URL.sha256" | cut -d' ' -f1)
+          (cd dvara-gateway-server/target && echo "$EXPECTED  $NAME" | sha256sum -c - && sha256sum "$NAME" > "$NAME.sha256")
+          cp "dvara-gateway-server/target/$NAME" dvara-gateway-server/target/image/app.jar
+          echo "path=dvara-gateway-server/target/$NAME" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -133,14 +183,15 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
-            type=raw,value=${{ steps.version.outputs.stream }},enable=${{ steps.version.outputs.prerelease == 'false' }}
-            type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable=${{ steps.version.outputs.prerelease == 'false' }}
+            type=raw,value=${{ steps.version.outputs.stream }},enable=${{ steps.version.outputs.prerelease == 'false' && steps.version.outputs.newest == 'true' }}
+            type=sha,prefix=sha-,format=short,enable=${{ github.event_name == 'push' }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.prerelease == 'false' && steps.version.outputs.newest == 'true' }}
           labels: |
             org.opencontainers.image.title=DVARA Gateway (open source)
             org.opencontainers.image.description=The open-source LLM Gateway of the DVARA AI governance platform: an OpenAI-compatible API in front of OpenAI, Anthropic, Gemini, Bedrock, Ollama and more, with policy, PII detection and redaction, guardrails, rate limiting and an HMAC-chained audit log. One process, one gateway.yaml.
             org.opencontainers.image.documentation=https://dvarahq.com/docs
             org.opencontainers.image.licenses=Apache-2.0
+            ${{ github.event_name == 'workflow_dispatch' && format('org.opencontainers.image.revision={0}', steps.central-jar.outputs.revision) || '' }}
 
       - name: Publish image
         uses: docker/build-push-action@v6
@@ -155,9 +206,10 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.version }}
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           generate_release_notes: true
           files: |
-            ${{ steps.jar.outputs.path }}
-            ${{ steps.jar.outputs.path }}.sha256
+            ${{ steps.jar.outputs.path || steps.central-jar.outputs.path }}
+            ${{ steps.jar.outputs.path || steps.central-jar.outputs.path }}.sha256
