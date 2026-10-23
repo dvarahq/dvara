@@ -7,7 +7,7 @@ dependency and the auto-configuration does the rest.
 <dependency>
     <groupId>com.dvarahq</groupId>
     <artifactId>dvara-spring-boot-starter-gateway</artifactId>
-    <version>1.9.0</version>
+    <version>1.10.0</version>
 </dependency>
 ```
 
