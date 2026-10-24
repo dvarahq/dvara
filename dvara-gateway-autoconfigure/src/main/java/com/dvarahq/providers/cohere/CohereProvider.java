@@ -462,9 +462,8 @@ public class CohereProvider extends AbstractLlmProvider {
         private SseChunk mapStreamEvent(CohereStreamEvent event) {
             if ("content-delta".equals(event.getType())) {
                 String text = null;
-                if (event.getDelta() != null && event.getDelta().getMessage() != null
-                        && event.getDelta().getMessage().getContent() != null) {
-                    text = event.getDelta().getMessage().getContent().getText();
+                if (event.getDelta() != null && event.getDelta().getMessage() != null) {
+                    text = event.getDelta().getMessage().text();
                 }
                 return SseChunk.builder()
                         .model(model)
@@ -615,13 +614,21 @@ public class CohereProvider extends AbstractLlmProvider {
 
     @Data @JsonIgnoreProperties(ignoreUnknown = true)
     private static class CohereStreamMessage {
-        private CohereStreamContent content;
+        /**
+         * An object with the text on {@code content-delta} and {@code content-start}, and a list on
+         * {@code message-start} ({@code "content": []}). Read as a tree, so the list does not fail the whole stream.
+         */
+        private com.fasterxml.jackson.databind.JsonNode content;
         @JsonProperty("tool_calls") private com.fasterxml.jackson.databind.JsonNode toolCalls;
-    }
 
-    @Data @JsonIgnoreProperties(ignoreUnknown = true)
-    private static class CohereStreamContent {
-        private String text;
+        /** The text of an object {@code content}, or null for a list or no content. */
+        String text() {
+            if (content == null || !content.isObject()) {
+                return null;
+            }
+            com.fasterxml.jackson.databind.JsonNode text = content.get("text");
+            return text == null || text.isNull() ? null : text.asText();
+        }
     }
 
     @Data

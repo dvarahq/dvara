@@ -569,6 +569,40 @@ class CohereProviderTest {
     }
 
     /**
+     * Cohere's message-start carries {@code "content": []}, a list, where content-delta carries an object. The list
+     * failed the first event, so every stream ended with "Error reading Cohere stream" before any text.
+     */
+    @Test
+    void streamChat_messageStartWithAContentList_isReadAndTheTextFollows() {
+        String sse = """
+                data: {"id":"s1","type":"message-start","delta":{"message":{"role":"assistant","content":[],"tool_plan":"","tool_calls":[],"citations":[]}}}
+
+                data: {"type":"content-start","index":0,"delta":{"message":{"content":{"type":"text","text":""}}}}
+
+                data: {"type":"content-delta","index":0,"delta":{"message":{"content":{"text":"Hello"}}}}
+
+                data: {"type":"content-delta","index":0,"delta":{"message":{"content":{"text":" world"}}}}
+
+                data: {"type":"content-end","index":0}
+
+                data: {"type":"message-end","delta":{"finish_reason":"COMPLETE","usage":{"tokens":{"input_tokens":5,"output_tokens":2}}}}
+
+                """;
+        server.expect(requestTo(containsString("/chat")))
+              .andRespond(withSuccess(sse, MediaType.TEXT_EVENT_STREAM));
+
+        Iterator<SseChunk> it = provider.streamChat(ChatRequest.builder().model("command-a-03-2025")
+                .messages(List.of(MultimodalMessage.user("Hi"))).stream(true).build());
+        List<SseChunk> chunks = new ArrayList<>();
+        while (it.hasNext()) chunks.add(it.next());
+
+        assertThat(chunks.stream().map(SseChunk::getDelta).filter(java.util.Objects::nonNull)
+                .reduce("", String::concat)).isEqualTo("Hello world");
+        assertThat(chunks.get(chunks.size() - 1).getFinishReason()).isEqualTo("stop");
+        server.verify();
+    }
+
+    /**
      * A streamed tool call, as Cohere's stream reference shows it: tool-plan-delta (skipped), then
      * tool-call-start with the id and name, tool-call-delta fragments of the arguments, tool-call-end,
      * and message-end with TOOL_CALL and the usage.
@@ -576,7 +610,7 @@ class CohereProviderTest {
     @Test
     void streamChat_toolCallEvents_becomeToolCallDeltas() {
         String sse = """
-                data: {"id":"s1","type":"message-start","delta":{"message":{"role":"assistant"}}}
+                data: {"id":"s1","type":"message-start","delta":{"message":{"role":"assistant","content":[],"tool_plan":"","tool_calls":[],"citations":[]}}}
 
                 data: {"delta":{"message":{"tool_plan":"I"}},"type":"tool-plan-delta"}
 
