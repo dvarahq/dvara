@@ -57,6 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
@@ -284,6 +285,126 @@ class MessagesControllerTest {
                         """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("unsupported_api_version"));
+    }
+
+    // -------- API version 2026-10-21 --------
+
+    private static MockHttpServletRequestBuilder messages20261021(String body) {
+        return post("/v1/messages")
+                .header("anthropic-version", "2026-10-21")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body);
+    }
+
+    /** The current Anthropic SDKs send 2026-10-21; it was refused as an unknown version. */
+    @Test
+    void aRequestOn20261021IsServed() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(reply("Paris", "stop",
+                ChatResponse.Usage.builder().promptTokens(10).completionTokens(1).totalTokens(11).build()));
+
+        mockMvc.perform(messages20261021("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100,
+                         "messages": [{"role": "user", "content": "Capital of France?"}]}
+                        """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].text").value("Paris"));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"temperature", "top_p", "top_k"})
+    void aSamplingParameterOn20261021IsRefusedEvenAtItsDefault(String field) throws Exception {
+        mockMvc.perform(messages20261021("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100, "%s": 1,
+                         "messages": [{"role": "user", "content": "Hi"}]}
+                        """.formatted(field)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.type").value("error"))
+                .andExpect(jsonPath("$.error.type").value("invalid_request_error"))
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString(field)));
+        verify(dispatcher, never()).chat(any());
+    }
+
+    @Test
+    void aSamplingParameterOn20230601IsStillServed() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(reply("Hi", "stop",
+                ChatResponse.Usage.builder().promptTokens(5).completionTokens(1).totalTokens(6).build()));
+        mockMvc.perform(messages("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100, "temperature": 0.2,
+                         "messages": [{"role": "user", "content": "Hi"}]}
+                        """))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void aDocumentInAnAssistantMessageOn20261021IsRefused() throws Exception {
+        mockMvc.perform(messages20261021("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100, "messages": [
+                          {"role": "user", "content": "Read this"},
+                          {"role": "assistant", "content": [{"type": "document",
+                            "source": {"type": "text", "media_type": "text/plain", "data": "x"}}]},
+                          {"role": "user", "content": "And?"}]}
+                        """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("messages.1.content.0")));
+        verify(dispatcher, never()).chat(any());
+    }
+
+    @Test
+    void citationsOnAUsersTextOn20261021AreRefused_alsoInsideASearchResult() throws Exception {
+        String cited = """
+                {"type": "text", "text": "quoted", "citations": [{"type": "char_location", "cited_text": "q",
+                 "document_index": 0, "start_char_index": 0, "end_char_index": 1}]}""";
+        mockMvc.perform(messages20261021("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100,
+                         "messages": [{"role": "user", "content": [%s]}]}
+                        """.formatted(cited)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("messages.0.content.0.citations")));
+        mockMvc.perform(messages20261021("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100,
+                         "messages": [{"role": "user", "content": [{"type": "search_result", "source": "s",
+                           "title": "t", "content": [%s]}]}]}
+                        """.formatted(cited)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("messages.0.content.0.content.0.citations")));
+        verify(dispatcher, never()).chat(any());
+    }
+
+    /** What 2026-10-21 keeps: citations on Claude's own earlier text, and an empty citations array. */
+    @Test
+    void citationsOnAnAssistantsTextOn20261021AreServed() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(reply("Yes", "stop",
+                ChatResponse.Usage.builder().promptTokens(5).completionTokens(1).totalTokens(6).build()));
+        mockMvc.perform(messages20261021("""
+                        {"model": "claude-sonnet-4-5", "max_tokens": 100, "messages": [
+                          {"role": "user", "content": [{"type": "text", "text": "Hi", "citations": []}]},
+                          {"role": "assistant", "content": [{"type": "text", "text": "quoted",
+                            "citations": [{"type": "char_location", "cited_text": "q", "document_index": 0,
+                             "start_char_index": 0, "end_char_index": 1}]}]},
+                          {"role": "user", "content": "Sure?"}]}
+                        """))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void anUnknownVersionNamesBothVersionsTheGatewaySpeaks() throws Exception {
+        mockMvc.perform(post("/v1/messages").header("anthropic-version", "2099-01-01")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\":\"claude-sonnet-4-5\",\"max_tokens\":1,\"messages\":[]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("2023-06-01 and 2026-10-21")));
+    }
+
+    @Test
+    void countTokensOn20261021AppliesTheSameRules() throws Exception {
+        mockMvc.perform(post("/v1/messages/count_tokens").header("anthropic-version", "2026-10-21")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model": "claude-sonnet-4-5", "temperature": 0.5,
+                                 "messages": [{"role": "user", "content": "Hi"}]}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("temperature")));
     }
 
     @Test
