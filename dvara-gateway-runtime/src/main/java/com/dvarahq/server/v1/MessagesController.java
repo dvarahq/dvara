@@ -91,7 +91,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * it, again with only the governed edits. A response that governance had to hold or rebuild, or one from
  * another provider, is written in Anthropic's shape here (see {@link AnthropicMessages}).</p>
  *
- * <p>The {@code anthropic-version} header is required and must be the version this doorway speaks. The
+ * <p>The {@code anthropic-version} header is required and must be one this doorway speaks: {@code 2023-06-01},
+ * or {@code 2026-10-21}, whose removed fields are refused as Anthropic refuses them. The
  * {@code anthropic-beta} header is sent on to an Anthropic provider as it came. Errors come back in
  * Anthropic's envelope ({@code {"type":"error","error":{...}}}) with the status and code the gateway would
  * give on any other doorway; the filters that refuse before a controller runs write the same envelope
@@ -156,8 +157,9 @@ public class MessagesController {
                            @RequestBody(required = false) byte[] rawBody,
                            HttpServletRequest httpRequest,
                            HttpServletResponse httpResponse) {
-        AnthropicMessages.checkVersion(version);
+        String apiVersion = AnthropicMessages.checkVersion(version);
         AnthropicMessagesBody body = AnthropicMessagesBody.parse(rawBody);
+        AnthropicMessages.checkVersionRules(apiVersion, body.raw());
         MessagesRequest request = body.bind(MessagesRequest.class);
         requireModelAndMessages(request);
         if (request.getMaxTokens() == null) {
@@ -241,8 +243,9 @@ public class MessagesController {
                                            @RequestHeader(value = "anthropic-beta", required = false) String beta,
                                            @RequestBody(required = false) byte[] rawBody,
                                            HttpServletRequest httpRequest) {
-        AnthropicMessages.checkVersion(version);
+        String apiVersion = AnthropicMessages.checkVersion(version);
         AnthropicMessagesBody body = AnthropicMessagesBody.parse(rawBody);
+        AnthropicMessages.checkVersionRules(apiVersion, body.raw());
         MessagesRequest request = body.bind(MessagesRequest.class);
         requireModelAndMessages(request);
         String traceId = (String) httpRequest.getAttribute(TraceIdFilter.ATTR);

@@ -61,8 +61,21 @@ import java.util.UUID;
  */
 final class AnthropicMessages {
 
-    /** The one API version this doorway speaks. */
+    /** The API version this doorway has always spoken. */
     static final String VERSION = "2023-06-01";
+
+    /**
+     * The API version the current Anthropic SDKs send (Java 3, Python 2, TypeScript 1 and the rest). It removes the
+     * sampling parameters, document blocks placed directly in an assistant message and citations on a user's text,
+     * and Anthropic answers 400 to each; {@link #checkVersionRules} answers the same, whatever the provider.
+     */
+    static final String VERSION_2026_10_21 = "2026-10-21";
+
+    /** The versions this doorway speaks, in the order they are named in an error. */
+    static final List<String> VERSIONS = List.of(VERSION, VERSION_2026_10_21);
+
+    /** Request fields {@value #VERSION_2026_10_21} removes: Anthropic refuses them even at their defaults. */
+    private static final List<String> SAMPLING_REMOVED_IN_2026_10_21 = List.of("temperature", "top_p", "top_k");
 
     /**
      * Top-level fields the gateway cannot govern: with them the provider itself would call MCP servers or run
@@ -76,16 +89,86 @@ final class AnthropicMessages {
     /**
      * Refuses a request with no {@code anthropic-version} header or one this doorway does not speak,
      * rather than serving it under an assumed version.
+     *
+     * @return the version the request is served under
      */
-    static void checkVersion(String version) {
+    static String checkVersion(String version) {
+        String spoken = String.join(" and ", VERSIONS);
         if (version == null || version.isBlank()) {
             throw new GatewayException("UNSUPPORTED_API_VERSION",
-                    "The anthropic-version header is required; this gateway speaks " + VERSION + ".");
+                    "The anthropic-version header is required; this gateway speaks " + spoken + ".");
         }
-        if (!VERSION.equals(version.trim())) {
+        String trimmed = version.trim();
+        if (!VERSIONS.contains(trimmed)) {
             throw new GatewayException("UNSUPPORTED_API_VERSION",
-                    "anthropic-version " + version.trim() + " is not supported; this gateway speaks " + VERSION + ".");
+                    "anthropic-version " + trimmed + " is not supported; this gateway speaks " + spoken + ".");
         }
+        return trimmed;
+    }
+
+    /**
+     * Under {@value #VERSION_2026_10_21}, refuses what that version removed, with the 400 Anthropic gives: the
+     * sampling parameters (even at their defaults), a {@code document} block placed directly in an
+     * {@code assistant} message, and a {@code text} block with non-empty {@code citations} in a {@code user}
+     * message, including inside a {@code search_result} block. A document nested in another block, citations on
+     * an assistant's text, and {@code "citations": {"enabled": true}} on a document stay accepted. Checked on the
+     * body as the client sent it, so the answer is the same whichever provider the route reaches.
+     */
+    static void checkVersionRules(String version, com.fasterxml.jackson.databind.node.ObjectNode raw) {
+        if (!VERSION_2026_10_21.equals(version) || raw == null) {
+            return;
+        }
+        for (String field : SAMPLING_REMOVED_IN_2026_10_21) {
+            if (raw.has(field)) {
+                throw new GatewayException("INVALID_REQUEST", field + ": this parameter is not supported in API "
+                        + "version " + VERSION_2026_10_21 + "; remove it from the request");
+            }
+        }
+        com.fasterxml.jackson.databind.JsonNode messages = raw.get("messages");
+        if (messages == null || !messages.isArray()) {
+            return;
+        }
+        for (int i = 0; i < messages.size(); i++) {
+            com.fasterxml.jackson.databind.JsonNode message = messages.get(i);
+            String role = message.path("role").asText("");
+            com.fasterxml.jackson.databind.JsonNode content = message.get("content");
+            if (content == null || !content.isArray()) {
+                continue;
+            }
+            for (int j = 0; j < content.size(); j++) {
+                com.fasterxml.jackson.databind.JsonNode block = content.get(j);
+                String type = block.path("type").asText("");
+                String where = "messages." + i + ".content." + j;
+                if ("assistant".equals(role) && "document".equals(type)) {
+                    throw new GatewayException("INVALID_REQUEST", where + ": a document block in an assistant "
+                            + "message is not supported in API version " + VERSION_2026_10_21
+                            + "; send documents in user messages");
+                }
+                if ("user".equals(role)) {
+                    if (citedText(block)) {
+                        throw new GatewayException("INVALID_REQUEST", where + ".citations: citations on text in a "
+                                + "user message are not supported in API version " + VERSION_2026_10_21);
+                    }
+                    if ("search_result".equals(type) && block.get("content") != null) {
+                        com.fasterxml.jackson.databind.JsonNode inner = block.get("content");
+                        for (int k = 0; inner.isArray() && k < inner.size(); k++) {
+                            if (citedText(inner.get(k))) {
+                                throw new GatewayException("INVALID_REQUEST", where + ".content." + k
+                                        + ".citations: citations on text in a user message are not supported in "
+                                        + "API version " + VERSION_2026_10_21);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** A {@code text} block with a non-empty {@code citations} array. */
+    private static boolean citedText(com.fasterxml.jackson.databind.JsonNode block) {
+        com.fasterxml.jackson.databind.JsonNode citations = block.get("citations");
+        return "text".equals(block.path("type").asText("")) && citations != null && citations.isArray()
+                && !citations.isEmpty();
     }
 
     // -------------------------------------------------------------------------
