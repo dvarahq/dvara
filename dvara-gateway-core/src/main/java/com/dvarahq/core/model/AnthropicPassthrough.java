@@ -36,17 +36,26 @@ import java.util.Map;
  * @param fields   top-level request fields the gateway does not model, by name; never null
  * @param beta     the {@code anthropic-beta} header, or null
  * @param body     the request body as it came, or null when the request was not a Messages API body
+ * @param version  the caller's {@code anthropic-version}, or null; an Anthropic provider sends the caller's body with
+ *                 the caller's version, so what the body may carry and what Anthropic accepts always agree
  */
 public record AnthropicPassthrough(Map<String, Object> thinking, Map<String, Object> fields, String beta,
-                                   @JsonIgnore AnthropicMessagesBody body) {
+                                   @JsonIgnore AnthropicMessagesBody body, String version) {
 
     public AnthropicPassthrough {
         fields = fields == null ? Map.of() : java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(fields));
         beta = beta == null || beta.isBlank() ? null : beta.trim();
+        version = version == null || version.isBlank() ? null : version.trim();
+    }
+
+    /** No caller version: the provider's own applies. */
+    public AnthropicPassthrough(Map<String, Object> thinking, Map<String, Object> fields, String beta,
+                                AnthropicMessagesBody body) {
+        this(thinking, fields, beta, body, null);
     }
 
     public AnthropicPassthrough(Map<String, Object> thinking, Map<String, Object> fields, String beta) {
-        this(thinking, fields, beta, null);
+        this(thinking, fields, beta, null, null);
     }
 
     /** Whether the request turns thinking on. {@code {"type": "disabled"}} does not. */

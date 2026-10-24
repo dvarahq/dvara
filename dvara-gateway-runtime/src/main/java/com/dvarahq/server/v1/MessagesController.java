@@ -170,7 +170,7 @@ public class MessagesController {
         httpRequest.setAttribute(AccessLogFilter.ATTR_MODEL, request.getModel());
         httpRequest.setAttribute(AccessLogFilter.ATTR_STREAM, String.valueOf(stream));
 
-        ChatRequest internal = AnthropicMessages.toInternal(request, beta, body);
+        ChatRequest internal = AnthropicMessages.toInternal(request, beta, body, apiVersion);
         body.opaqueBlocks().forEach((type, count) -> metrics.recordAnthropicOpaqueBlocks("request", type, count));
         if (stream) {
             return handleStreaming(internal, traceId, httpRequest, httpResponse);
@@ -250,7 +250,7 @@ public class MessagesController {
         requireModelAndMessages(request);
         String traceId = (String) httpRequest.getAttribute(TraceIdFilter.ATTR);
         httpRequest.setAttribute(AccessLogFilter.ATTR_MODEL, request.getModel());
-        int tokens = executionService.countInputTokens(AnthropicMessages.toInternal(request, beta, body),
+        int tokens = executionService.countInputTokens(AnthropicMessages.toInternal(request, beta, body, apiVersion),
                 httpRequest, traceId);
         return AnthropicMessages.map("input_tokens", tokens);
     }

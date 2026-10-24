@@ -176,6 +176,11 @@ final class AnthropicMessages {
     // -------------------------------------------------------------------------
 
     static ChatRequest toInternal(MessagesRequest r, String beta, AnthropicMessagesBody body) {
+        return toInternal(r, beta, body, null);
+    }
+
+    /** @param version the caller's {@code anthropic-version}, sent on with the caller's body to an Anthropic provider */
+    static ChatRequest toInternal(MessagesRequest r, String beta, AnthropicMessagesBody body, String version) {
         rejectUnsupported(r);
         return ChatRequest.builder()
                 .model(r.getModel())
@@ -188,7 +193,7 @@ final class AnthropicMessages {
                 .tools(tools(r.getTools()))
                 .toolChoice(toolChoice(r.getToolChoice()))
                 .user(endUser(r.getMetadata()))
-                .anthropic(new AnthropicPassthrough(r.getThinking(), r.getOther(), beta, body))
+                .anthropic(new AnthropicPassthrough(r.getThinking(), r.getOther(), beta, body, version))
                 .build();
     }
 
