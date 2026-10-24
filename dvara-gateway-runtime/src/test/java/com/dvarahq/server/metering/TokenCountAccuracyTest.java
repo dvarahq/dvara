@@ -23,7 +23,9 @@ import com.dvarahq.core.provider.LlmProvider;
 import com.dvarahq.core.secret.SecretProvider;
 import com.dvarahq.policy.guardrail.TiktokenEstimator;
 import com.dvarahq.providers.anthropic.AnthropicProvider;
+import com.dvarahq.providers.deepseek.DeepSeekProvider;
 import com.dvarahq.providers.gemini.GeminiProvider;
+import com.dvarahq.providers.mistral.MistralProvider;
 import com.dvarahq.providers.openai.OpenAiProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -57,7 +59,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * that is set, writing {@code target/token-accuracy.md}:
  *
  * <pre>
- *   OPENAI_API_KEY=… ANTHROPIC_API_KEY=… GEMINI_API_KEY=… \
+ *   OPENAI_API_KEY=… ANTHROPIC_API_KEY=… GEMINI_API_KEY=… DEEPSEEK_API_KEY=… MISTRAL_API_KEY=… \
  *     ./mvnw -pl dvara-gateway-runtime -am test -Dtest=TokenCountAccuracyTest -Ddvara.token-accuracy=true \
  *       -Dsurefire.failIfNoSpecifiedTests=false
  * </pre>
@@ -91,9 +93,13 @@ class TokenCountAccuracyTest {
                 new Family("Gemini", System.getProperty("dvara.token-accuracy.gemini-model", "gemini-3.8-flash"),
                         "GEMINI_API_KEY", s -> new GeminiProvider(s, "https://generativelanguage.googleapis.com",
                         RestClient.builder())),
-                // Counted locally with the cl100k fallback; no vendor column without a provider here.
-                new Family("DeepSeek", "deepseek-chat", null, null),
-                new Family("Mistral", "mistral-large-latest", null, null));
+                // Neither has a free counting endpoint, so these two get a billed count and no vendor count.
+                new Family("DeepSeek", System.getProperty("dvara.token-accuracy.deepseek-model", "deepseek-chat"),
+                        "DEEPSEEK_API_KEY", s -> new DeepSeekProvider(s, "https://api.deepseek.com/v1",
+                        RestClient.builder())),
+                new Family("Mistral", System.getProperty("dvara.token-accuracy.mistral-model", "mistral-large-latest"),
+                        "MISTRAL_API_KEY", s -> new MistralProvider(s, "https://api.mistral.ai/v1",
+                        RestClient.builder())));
     }
 
     static String text(Sample sample) {
