@@ -79,7 +79,12 @@ class DefaultTokenizerResolverTest {
         assertThat(r.encoding()).isEqualTo(encoding);
         assertThat(r.exact()).isEqualTo(exact);
         assertThat(r.correction()).isEqualTo("anthropic".equals(family) ? 1.05 : 1.0);
-        assertThat(r.toolOverhead()).isEqualTo("anthropic".equals(family) ? 540 : 0);
+        assertThat(r.toolOverhead()).isEqualTo(switch (family) {
+            case "anthropic" -> 540;
+            case "mistral" -> 28;
+            default -> 0;
+        });
+        assertThat(r.requestOverhead()).isEqualTo("mistral".equals(family) ? 8 : 0);
     }
 
     @Test
@@ -142,10 +147,25 @@ class DefaultTokenizerResolverTest {
                 .toolOverhead()).as("negative").isZero();
     }
 
+    /** #3847's measurement: a request overhead per family, defaulted for Mistral, replaced by a setting. */
+    @Test
+    void aRequestOverheadIsMeasuredForMistralAndASettingReplacesIt() {
+        assertThat(resolver.resolve("mistral-medium-latest").requestOverhead()).isEqualTo(8);
+        var configured = new DefaultTokenizerResolver(Map.of(), Map.of(), Map.of("mistral", 12, "gemini", 3));
+        assertThat(configured.resolve("mistral-medium-latest").requestOverhead()).as("setting wins").isEqualTo(12);
+        assertThat(configured.resolve("gemini-3.8-flash").requestOverhead()).isEqualTo(3);
+        assertThat(configured.resolve("mistral-medium-latest").toolOverhead()).as("measured default kept")
+                .isEqualTo(28);
+        assertThat(new DefaultTokenizerResolver(Map.of(), Map.of(), Map.of("mistral", -1))
+                .resolve("mistral-medium-latest").requestOverhead()).as("negative").isZero();
+    }
+
     @Test
     void uncorrectedIsTheRawCount() {
         var raw = DefaultTokenizerResolver.uncorrected().resolve("claude-haiku-4-5");
         assertThat(raw.correction()).isEqualTo(1.0);
         assertThat(raw.toolOverhead()).isZero();
+        assertThat(DefaultTokenizerResolver.uncorrected().resolve("mistral-medium-latest").requestOverhead())
+                .isZero();
     }
 }

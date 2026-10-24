@@ -63,10 +63,10 @@ public class TiktokenEstimator implements TokenEstimator {
      * How a model's text is counted, the correction its family's count is multiplied by, and what tools add; with the
      * vocabulary's name and whether it is the model's own, for a caller that shows how a count was made.
      */
-    private record Counting(ToIntFunction<String> counter, double correction, int toolOverhead, String encoding,
-                            boolean exact) {
+    private record Counting(ToIntFunction<String> counter, double correction, int toolOverhead, int requestOverhead,
+                            String encoding, boolean exact) {
 
-        static final Counting DEFAULT = new Counting(DEFAULT_COUNTER, 1.0, 0, CL100K, false);
+        static final Counting DEFAULT = new Counting(DEFAULT_COUNTER, 1.0, 0, 0, CL100K, false);
     }
 
     private static final String CL100K = EncodingType.CL100K_BASE.getName();
@@ -139,7 +139,7 @@ public class TiktokenEstimator implements TokenEstimator {
         total += countTokens(encoding, TokenEstimation.renderTools(request.getTools()));
         // Reply priming overhead
         total += 3;
-        return corrected(total, counting.correction(), images + toolOverhead(request, counting));
+        return corrected(total, counting.correction(), images + fixedOverhead(request, counting));
     }
 
     /**
@@ -196,7 +196,7 @@ public class TiktokenEstimator implements TokenEstimator {
         long tools = countTokens(encoding, TokenEstimation.renderTools(request.getTools()));
         framing += 3;
         int total = corrected(system + user + assistant + toolResults + tools + framing, counting.correction(),
-                images + toolOverhead(request, counting));
+                images + fixedOverhead(request, counting));
         double c = counting.correction();
         int s = scaled(system, c);
         int u = scaled(user, c);
@@ -230,9 +230,13 @@ public class TiktokenEstimator implements TokenEstimator {
         return (int) Math.min(value, Integer.MAX_VALUE);
     }
 
-    /** The provider's own text in front of the tools, when the request has any. */
-    private static int toolOverhead(ChatRequest request, Counting counting) {
-        return request.getTools() == null || request.getTools().isEmpty() ? 0 : counting.toolOverhead();
+    /**
+     * The provider's own tokens around the request, and its text in front of the tools when the request has any. Both
+     * are fixed per family, so the family's correction, which is for text, does not scale them.
+     */
+    private static int fixedOverhead(ChatRequest request, Counting counting) {
+        int tools = request.getTools() == null || request.getTools().isEmpty() ? 0 : counting.toolOverhead();
+        return counting.requestOverhead() + tools;
     }
 
     /**
@@ -280,7 +284,7 @@ public class TiktokenEstimator implements TokenEstimator {
         total += 3;
         // A correction above 1 raises the count, so it raises the bound too, or the bound could fall below it.
         Counting counting = resolveEncoding(request.getModel());
-        return corrected(total, Math.max(1.0, counting.correction()), toolOverhead(request, counting));
+        return corrected(total, Math.max(1.0, counting.correction()), fixedOverhead(request, counting));
     }
 
     /** The text's length in UTF-8 bytes, without encoding it. */
@@ -353,12 +357,13 @@ public class TiktokenEstimator implements TokenEstimator {
         }
         double correction = resolution == null ? 1.0 : resolution.correction();
         int overhead = resolution == null ? 0 : Math.max(0, resolution.toolOverhead());
+        int requestOverhead = resolution == null ? 0 : Math.max(0, resolution.requestOverhead());
         try {
             ModelType modelType = ModelType.fromName(model).orElse(null);
             if (modelType != null) {
                 // jtokkit's own table names the model's vocabulary, so the count is exact.
                 return new Counting(REGISTRY.getEncodingForModel(modelType)::countTokensOrdinary, correction, overhead,
-                        modelType.getEncodingType().getName(), true);
+                        requestOverhead, modelType.getEncodingType().getName(), true);
             }
         } catch (RuntimeException ignored) {
             // the resolver decides
@@ -367,9 +372,9 @@ public class TiktokenEstimator implements TokenEstimator {
         ToIntFunction<String> counter = counter(encoding);
         if (counter == DEFAULT_COUNTER && !CL100K.equals(encoding)) {
             // No vocabulary, or one that did not load: counted with the cl100k stand-in, so not exact.
-            return new Counting(counter, correction, overhead, CL100K, false);
+            return new Counting(counter, correction, overhead, requestOverhead, CL100K, false);
         }
-        return new Counting(counter, correction, overhead, encoding, resolution.exact());
+        return new Counting(counter, correction, overhead, requestOverhead, encoding, resolution.exact());
     }
 
     /**

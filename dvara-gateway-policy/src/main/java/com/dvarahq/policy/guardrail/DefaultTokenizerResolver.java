@@ -39,10 +39,12 @@ import java.util.Map;
  * </ul>
  *
  * <p>Each family's count can be multiplied by a correction, {@code dvara.llm-gateway.token-count.corrections.<family>},
- * and a request with tools can have a fixed number of tokens added, {@code dvara.llm-gateway.token-count.tool-overhead.<family>}.
+ * a request with tools can have a fixed number of tokens added, {@code dvara.llm-gateway.token-count.tool-overhead.<family>},
+ * and every chat request can have a fixed number added, {@code dvara.llm-gateway.token-count.request-overhead.<family>}.
  * The values come from measuring the local count against what each provider bills ({@code TokenCountAccuracyTest});
  * they are never guessed. A family with no measurement gets 1.0 and 0. The measured values ship as defaults
- * ({@link #MEASURED_CORRECTIONS}, {@link #MEASURED_TOOL_OVERHEADS}), and a setting for a family replaces its default.
+ * ({@link #MEASURED_CORRECTIONS}, {@link #MEASURED_TOOL_OVERHEADS}, {@link #MEASURED_REQUEST_OVERHEADS}), and a setting
+ * for a family replaces its default.
  *
  * <p>A provider prefix or path is ignored: {@code openai/gpt-4.1}, {@code anthropic.claude-sonnet-4-5} (Bedrock) and
  * {@code us.anthropic.claude-…} resolve as the model they name.
@@ -67,10 +69,20 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
      * Measured with claude-haiku-4-5 on 2026-10-16: an agent turn with two tools was billed 920 tokens where the
      * corrected count was 380. Anthropic adds its own instructions for tool use to every request that has tools.
      */
-    public static final Map<String, Integer> MEASURED_TOOL_OVERHEADS = Map.of("anthropic", 540);
+    public static final Map<String, Integer> MEASURED_TOOL_OVERHEADS = Map.of("anthropic", 540, "mistral", 28);
+
+    /**
+     * Measured with mistral-medium-latest on 2026-10-24: Tekken counts the text exactly, and Mistral billed 8 tokens
+     * more on each of three plain requests (prose 234/242, Java code 281/289, seven scripts 244/252), whatever the
+     * text. With two tools it billed 460 where the count was 424: those 8, and 28 for the tools
+     * ({@link #MEASURED_TOOL_OVERHEADS}). It applies to the whole family: the SentencePiece models are counted with a
+     * stand-in and marked not exact anyway, and Mistral wraps their requests in its own tokens too.
+     */
+    public static final Map<String, Integer> MEASURED_REQUEST_OVERHEADS = Map.of("mistral", 8);
 
     private final Map<String, Double> corrections;
     private final Map<String, Integer> toolOverheads;
+    private final Map<String, Integer> requestOverheads;
 
     /** The measured defaults. */
     public DefaultTokenizerResolver() {
@@ -88,19 +100,35 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
      *                      counts as 0
      */
     public DefaultTokenizerResolver(Map<String, Double> corrections, Map<String, Integer> toolOverheads) {
-        this(corrections, toolOverheads, MEASURED_CORRECTIONS, MEASURED_TOOL_OVERHEADS);
+        this(corrections, toolOverheads, Map.of());
+    }
+
+    /**
+     * @param corrections      a factor per family, over the measured ones; a non-positive or non-finite one counts as 1.0
+     * @param toolOverheads    tokens per family added to a request with tools, over the measured ones; a negative one
+     *                         counts as 0
+     * @param requestOverheads tokens per family added to every chat request, over the measured ones; a negative one
+     *                         counts as 0
+     */
+    public DefaultTokenizerResolver(Map<String, Double> corrections, Map<String, Integer> toolOverheads,
+                                    Map<String, Integer> requestOverheads) {
+        this(corrections, toolOverheads, requestOverheads, MEASURED_CORRECTIONS, MEASURED_TOOL_OVERHEADS,
+                MEASURED_REQUEST_OVERHEADS);
     }
 
     private DefaultTokenizerResolver(Map<String, Double> corrections, Map<String, Integer> toolOverheads,
+                                     Map<String, Integer> requestOverheads,
                                      Map<String, Double> measuredCorrections,
-                                     Map<String, Integer> measuredToolOverheads) {
+                                     Map<String, Integer> measuredToolOverheads,
+                                     Map<String, Integer> measuredRequestOverheads) {
         this.corrections = merged(measuredCorrections, corrections);
         this.toolOverheads = merged(measuredToolOverheads, toolOverheads);
+        this.requestOverheads = merged(measuredRequestOverheads, requestOverheads);
     }
 
-    /** Each family's raw count: no correction and no tool overhead. What a measurement compares. */
+    /** Each family's raw count: no correction and no overheads. What a measurement compares. */
     public static DefaultTokenizerResolver uncorrected() {
-        return new DefaultTokenizerResolver(Map.of(), Map.of(), Map.of(), Map.of());
+        return new DefaultTokenizerResolver(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
     }
 
     @Override
@@ -127,7 +155,8 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
                 exact = false;
             }
         }
-        return new Resolution(family, encoding, exact, correction(family), toolOverhead(family));
+        return new Resolution(family, encoding, exact, correction(family), toolOverhead(family),
+                requestOverhead(family));
     }
 
     /**
@@ -157,6 +186,11 @@ public class DefaultTokenizerResolver implements TokenizerResolver {
 
     private int toolOverhead(String family) {
         Integer tokens = toolOverheads.get(family);
+        return tokens == null || tokens < 0 ? 0 : tokens;
+    }
+
+    private int requestOverhead(String family) {
+        Integer tokens = requestOverheads.get(family);
         return tokens == null || tokens < 0 ? 0 : tokens;
     }
 
