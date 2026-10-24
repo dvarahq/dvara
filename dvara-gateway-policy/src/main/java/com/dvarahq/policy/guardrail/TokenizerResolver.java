@@ -34,12 +34,21 @@ public interface TokenizerResolver {
      * @param toolOverhead tokens added to the count of a request that carries tools, 0 where nothing was measured.
      *                   Some providers put a fixed block of their own text in front of the tool definitions, which no
      *                   count of the request itself sees
+     * @param requestOverhead tokens added to the count of every chat request, 0 where nothing was measured. Some
+     *                   providers wrap each request in framing tokens of their own beyond the per-message ones the
+     *                   count already includes
      */
-    record Resolution(String family, String encoding, boolean exact, double correction, int toolOverhead) {
+    record Resolution(String family, String encoding, boolean exact, double correction, int toolOverhead,
+                      int requestOverhead) {
 
-        /** No tool overhead. */
+        /** No tool overhead and no request overhead. */
         public Resolution(String family, String encoding, boolean exact, double correction) {
-            this(family, encoding, exact, correction, 0);
+            this(family, encoding, exact, correction, 0, 0);
+        }
+
+        /** No request overhead. */
+        public Resolution(String family, String encoding, boolean exact, double correction, int toolOverhead) {
+            this(family, encoding, exact, correction, toolOverhead, 0);
         }
     }
 

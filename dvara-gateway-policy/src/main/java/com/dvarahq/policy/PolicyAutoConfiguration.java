@@ -344,7 +344,12 @@ public class PolicyAutoConfiguration {
                 .bind("dvara.llm-gateway.token-count.tool-overhead",
                         org.springframework.boot.context.properties.bind.Bindable.mapOf(String.class, Integer.class))
                 .orElse(java.util.Map.of());
-        return new com.dvarahq.policy.guardrail.DefaultTokenizerResolver(corrections, toolOverheads);
+        java.util.Map<String, Integer> requestOverheads = org.springframework.boot.context.properties.bind.Binder
+                .get(environment)
+                .bind("dvara.llm-gateway.token-count.request-overhead",
+                        org.springframework.boot.context.properties.bind.Bindable.mapOf(String.class, Integer.class))
+                .orElse(java.util.Map.of());
+        return new com.dvarahq.policy.guardrail.DefaultTokenizerResolver(corrections, toolOverheads, requestOverheads);
     }
 
     @Bean

@@ -118,7 +118,8 @@ class TiktokenEstimatorTest {
 
     /**
      * A Mistral or DeepSeek request is counted with that vendor's own vocabulary: the same overheads as any request
-     * (4 for the message, 3 for the reply), and the text counted as the vendor's tokenizer counts it.
+     * (4 for the message, 3 for the reply), and the text counted as the vendor's tokenizer counts it. Mistral adds
+     * its measured request overhead, 8, to every model of the family (#3847).
      */
     @Test
     void mistralAndDeepSeekRequestsAreCountedWithTheirOwnVocabularies() {
@@ -134,10 +135,10 @@ class TiktokenEstimatorTest {
         ChatRequest deepseekRequest = withMessages(List.of(user(text))).toBuilder().model("deepseek-chat").build();
         ChatRequest oldMistral = withMessages(List.of(user(text))).toBuilder().model("mistral-large-2411").build();
 
-        assertThat(estimator.estimateTokens(mistral)).isEqualTo(4 + tekken + 3);
+        assertThat(estimator.estimateTokens(mistral)).isEqualTo(4 + tekken + 3 + 8);
         assertThat(estimator.estimateTokens(deepseekRequest)).isEqualTo(4 + deepseek + 3);
         assertThat(estimator.estimateTokens(oldMistral)).as("a SentencePiece Mistral model keeps the stand-in")
-                .isEqualTo(4 + cl100k + 3);
+                .isEqualTo(4 + cl100k + 3 + 8);
         assertThat(estimator.upperBound(mistral)).as("the byte bound still holds").isGreaterThanOrEqualTo(
                 estimator.estimateTokens(mistral));
     }
@@ -263,6 +264,26 @@ class TiktokenEstimatorTest {
                         .build()))
                 .build();
         assertThat(estimator.estimateTokens(request)).isGreaterThan(7);
+    }
+
+    /**
+     * #3847: Tekken counts Mistral's text exactly, and Mistral bills 8 tokens more on every request and 28 more for
+     * tools. The overheads are fixed, so the counts are the raw ones plus 8, and plus 36 with tools.
+     */
+    @Test
+    void aMistralRequestAddsMistralsRequestOverheadAndItsToolOverheadOnlyWithTools() {
+        ToolDefinition tool = ToolDefinition.builder().name("lookup").description("Find a thing")
+                .parameters(Map.of("type", "object")).build();
+        ChatRequest plain = ChatRequest.builder().model("mistral-medium-latest")
+                .messages(List.of(MultimodalMessage.user("Where is my order?"))).build();
+        ChatRequest withTools = plain.toBuilder().tools(List.of(tool)).build();
+        var raw = new TiktokenEstimator(DefaultTokenizerResolver.uncorrected());
+
+        assertThat(estimator.estimateTokens(plain)).isEqualTo(raw.estimateTokens(plain) + 8);
+        assertThat(estimator.estimateTokens(withTools)).isEqualTo(raw.estimateTokens(withTools) + 8 + 28);
+        assertThat(estimator.upperBound(plain)).as("the bound stays above the count")
+                .isGreaterThanOrEqualTo(estimator.estimateTokens(plain));
+        assertThat(estimator.upperBound(withTools)).isGreaterThanOrEqualTo(estimator.estimateTokens(withTools));
     }
 
     @Test
