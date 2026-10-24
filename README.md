@@ -187,7 +187,7 @@ ChatGLM (Zhipu), Cohere, Groq, Qwen and Ollama, plus a mock provider for tests a
 <dependency>
   <groupId>com.dvarahq</groupId>
   <artifactId>dvara-spring-boot-starter</artifactId>
-  <version>1.11.0</version>
+  <version>1.12.0</version>
 </dependency>
 ```
 
