@@ -38,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
@@ -48,6 +49,8 @@ class AnthropicProviderTest {
 
     private MockRestServiceServer server;
     private AnthropicProvider     provider;
+    /** The same mock server, spoken to on 2023-06-01, where the sampling parameters still go upstream. */
+    private AnthropicProvider     provider20230601;
 
     @BeforeEach
     void setUp() {
@@ -55,6 +58,7 @@ class AnthropicProviderTest {
                 .baseUrl("https://api.anthropic.com");
         server   = MockRestServiceServer.bindTo(builder).build();
         provider = new AnthropicProvider(builder.build());
+        provider20230601 = new AnthropicProvider(builder.build(), "2023-06-01");
     }
 
     // -------------------------------------------------------------------------
@@ -113,7 +117,7 @@ class AnthropicProviderTest {
               .andExpect(jsonPath("$.top_p").doesNotExist())
               .andRespond(withSuccess(anthropicSuccessBody("msg-1", "end_turn", "hi", 1, 1), MediaType.APPLICATION_JSON));
 
-        provider.chat(ChatRequest.builder().model("claude-haiku-4-5")
+        provider20230601.chat(ChatRequest.builder().model("claude-haiku-4-5")
                 .messages(List.of(MultimodalMessage.user("Hi"))).temperature(1.0).topP(0.95).build());
         server.verify();
     }
@@ -125,9 +129,70 @@ class AnthropicProviderTest {
               .andExpect(jsonPath("$.temperature").doesNotExist())
               .andRespond(withSuccess(anthropicSuccessBody("msg-1", "end_turn", "hi", 1, 1), MediaType.APPLICATION_JSON));
 
-        provider.chat(ChatRequest.builder().model("claude-haiku-4-5")
+        provider20230601.chat(ChatRequest.builder().model("claude-haiku-4-5")
                 .messages(List.of(MultimodalMessage.user("Hi"))).topP(0.95).build());
         server.verify();
+    }
+
+    // -------------------------------------------------------------------------
+    // API version 2026-10-21 (the default since 1.12.0)
+    // -------------------------------------------------------------------------
+
+    /**
+     * 2026-10-21 refuses temperature, top_p and top_k even at their defaults, so a translation leaves them out and the
+     * response names what was not applied.
+     */
+    @Test
+    void chat_on20261021_leavesSamplingParametersOutAndSaysSo() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(header("anthropic-version", "2026-10-21"))
+              .andExpect(jsonPath("$.temperature").doesNotExist())
+              .andExpect(jsonPath("$.top_p").doesNotExist())
+              .andRespond(withSuccess(anthropicSuccessBody("msg-1", "end_turn", "hi", 1, 1), MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(ChatRequest.builder().model("claude-haiku-4-5")
+                .messages(List.of(MultimodalMessage.user("Hi"))).temperature(0.2).topP(0.9).build());
+        assertThat(response.getGatewayHeaders()).containsEntry("X-Gateway-Params-Not-Applied", "temperature, top_p");
+        server.verify();
+    }
+
+    @Test
+    void chat_on20261021_withNoSamplingParameters_addsNoHeader() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(header("anthropic-version", "2026-10-21"))
+              .andRespond(withSuccess(anthropicSuccessBody("msg-1", "end_turn", "hi", 1, 1), MediaType.APPLICATION_JSON));
+
+        ChatResponse response = provider.chat(ChatRequest.builder().model("claude-haiku-4-5")
+                .messages(List.of(MultimodalMessage.user("Hi"))).build());
+        assertThat(response.getGatewayHeaders()).isNullOrEmpty();
+        server.verify();
+    }
+
+    /** A Messages API caller's own body goes with the caller's own version, whatever the provider's setting. */
+    @Test
+    void chat_aCallersOwnBodyGoesWithTheCallersVersion() {
+        server.expect(requestTo(containsString("/v1/messages")))
+              .andExpect(header("anthropic-version", "2023-06-01"))
+              .andExpect(jsonPath("$.temperature").value(0.2))
+              .andRespond(withSuccess(anthropicSuccessBody("msg-1", "end_turn", "hi", 1, 1), MediaType.APPLICATION_JSON));
+
+        String json = "{\"model\":\"claude-haiku-4-5\",\"max_tokens\":10,\"temperature\":0.2,"
+                + "\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}";
+        com.dvarahq.core.model.AnthropicMessagesBody body = com.dvarahq.core.model.AnthropicMessagesBody.parse(
+                json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        ChatResponse response = provider.chat(ChatRequest.builder().model("claude-haiku-4-5")
+                .messages(body.messages()).temperature(0.2)
+                .anthropic(new com.dvarahq.core.model.AnthropicPassthrough(null, Map.of(), null, body, "2023-06-01"))
+                .build());
+        assertThat(response.getGatewayHeaders()).as("nothing was left out of the caller's own body").isNullOrEmpty();
+        server.verify();
+    }
+
+    @Test
+    void anUnknownApiVersionIsRefusedAtStart() {
+        assertThatThrownBy(() -> new AnthropicProvider(RestClient.builder().build(), "2099-01-01"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("2026-10-21 or 2023-06-01");
     }
 
     /** A refused stream keeps Anthropic's reason, so the caller learns what to change. */

@@ -62,7 +62,16 @@ import java.util.stream.Collectors;
 public class AnthropicProvider extends AbstractLlmProvider {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AnthropicProvider.class);
-    private static final String ANTHROPIC_VERSION = "2023-06-01";
+    /** The API version the provider spoke until 1.12.0; still what a caller on it gets for its own body. */
+    static final String VERSION_2023_06_01 = "2023-06-01";
+    /**
+     * The current API version, and the default for the provider's own translations. It refuses {@code temperature},
+     * {@code top_p} and {@code top_k}, so a translation leaves them out and says so ({@link #NOT_APPLIED_HEADER}).
+     */
+    static final String VERSION_2026_10_21 = "2026-10-21";
+    static final String DEFAULT_API_VERSION = VERSION_2026_10_21;
+    /** Names the caller's sampling parameters Anthropic was not sent, under {@value #VERSION_2026_10_21}. */
+    static final String NOT_APPLIED_HEADER = "X-Gateway-Params-Not-Applied";
     private static final int    DEFAULT_MAX_TOKENS = 1024;
     private static final String JSON_SYSTEM_SUFFIX = "\n\nRespond with valid JSON only. Do not include any text outside the JSON object.";
     private static final String STRUCTURED_OUTPUT_TOOL = "structured_output";
@@ -72,6 +81,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
             List.of("model", "messages", "system", "tools", "tool_choice", "thinking", "mcp_servers");
 
     private final RestClient restClient;
+    private final String apiVersion;
 
     public AnthropicProvider(SecretProvider secretProvider, RestClient.Builder builder) {
         this(secretProvider, DEFAULT_BASE_URL, builder);
@@ -79,10 +89,21 @@ public class AnthropicProvider extends AbstractLlmProvider {
 
     /** @param baseUrl Anthropic's API, or another endpoint that speaks it; null or blank for Anthropic's own. */
     public AnthropicProvider(SecretProvider secretProvider, String baseUrl, RestClient.Builder builder) {
+        this(secretProvider, baseUrl, builder, null);
+    }
+
+    /**
+     * @param apiVersion the {@code anthropic-version} for the provider's own translations: {@value #VERSION_2026_10_21}
+     *                   (null or blank) or {@value #VERSION_2023_06_01}
+     * @throws IllegalArgumentException for another version
+     */
+    public AnthropicProvider(SecretProvider secretProvider, String baseUrl, RestClient.Builder builder,
+                             String apiVersion) {
         super("anthropic");
+        this.apiVersion = apiVersion(apiVersion);
         this.restClient = builder
                 .baseUrl(baseUrl == null || baseUrl.isBlank() ? DEFAULT_BASE_URL : baseUrl)
-                .defaultHeader("anthropic-version", ANTHROPIC_VERSION)
+                .defaultHeader("anthropic-version", this.apiVersion)
                 .requestInterceptor(new CredentialInterceptor(
                         secretProvider, "provider.anthropic.api-key",
                         "x-api-key", java.util.function.Function.identity()))
@@ -95,8 +116,62 @@ public class AnthropicProvider extends AbstractLlmProvider {
 
     /** Package-private constructor for unit tests. Accepts a pre-configured {@link RestClient}. */
     AnthropicProvider(RestClient restClient) {
+        this(restClient, null);
+    }
+
+    /** Package-private constructor for unit tests, with an API version. */
+    AnthropicProvider(RestClient restClient, String apiVersion) {
         super("anthropic");
+        this.apiVersion = apiVersion(apiVersion);
         this.restClient = restClient;
+    }
+
+    private static String apiVersion(String configured) {
+        if (configured == null || configured.isBlank()) {
+            return DEFAULT_API_VERSION;
+        }
+        String version = configured.trim();
+        if (!VERSION_2026_10_21.equals(version) && !VERSION_2023_06_01.equals(version)) {
+            throw new IllegalArgumentException("dvara.llm-gateway.providers.anthropic.api-version must be "
+                    + VERSION_2026_10_21 + " or " + VERSION_2023_06_01 + ", not " + version);
+        }
+        return version;
+    }
+
+    /** The version this provider's own translations are sent with. */
+    String apiVersion() {
+        return apiVersion;
+    }
+
+    /**
+     * The version a request goes upstream with: a Messages API caller's own version with its own body, so what the
+     * body may carry and what Anthropic accepts agree; otherwise the provider's.
+     */
+    private String version(ChatRequest request) {
+        if (passthrough(request) != null && request.getAnthropic().version() != null) {
+            return request.getAnthropic().version();
+        }
+        return apiVersion;
+    }
+
+    /** The headers every call sends on: the version and the caller's {@code anthropic-beta}. */
+    private void headers(HttpHeaders headers, ChatRequest request) {
+        headers.set("anthropic-version", version(request));
+        beta(headers, request);
+    }
+
+    /**
+     * The caller's sampling parameters a translation leaves out under {@value #VERSION_2026_10_21}, which refuses them
+     * even at their defaults; empty under {@value #VERSION_2023_06_01} and for a caller's own body.
+     */
+    List<String> notApplied(ChatRequest request) {
+        if (!VERSION_2026_10_21.equals(apiVersion) || passthrough(request) != null) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        if (request.getTemperature() != null) names.add("temperature");
+        if (request.getTopP() != null) names.add("top_p");
+        return names;
     }
 
     @Override
@@ -110,7 +185,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
         AnthropicResponse ar = restClient.post()
                 .uri("/v1/messages")
                 .contentType(MediaType.APPLICATION_JSON)
-                .headers(h -> beta(h, request))
+                .headers(h -> headers(h, request))
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
@@ -118,7 +193,21 @@ public class AnthropicProvider extends AbstractLlmProvider {
                 })
                 .body(AnthropicResponse.class);
 
-        return mapToInternal(ar, request.getModel(), request.getResponseFormat());
+        return withNotApplied(mapToInternal(ar, request.getModel(), request.getResponseFormat()), request);
+    }
+
+    /** The response with {@link #NOT_APPLIED_HEADER} added when a translation left sampling parameters out. */
+    private ChatResponse withNotApplied(ChatResponse response, ChatRequest request) {
+        List<String> left = notApplied(request);
+        if (response == null || left.isEmpty()) {
+            return response;
+        }
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (response.getGatewayHeaders() != null) {
+            headers.putAll(response.getGatewayHeaders());
+        }
+        headers.put(NOT_APPLIED_HEADER, String.join(", ", left));
+        return response.toBuilder().gatewayHeaders(headers).build();
     }
 
     /** The Messages API body a caller sent, when this request has one to send on as it came; else null. */
@@ -136,7 +225,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
         String answer = restClient.post()
                 .uri("/v1/messages")
                 .contentType(MediaType.APPLICATION_JSON)
-                .headers(h -> beta(h, request))
+                .headers(h -> headers(h, request))
                 .body(sent)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
@@ -183,7 +272,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
         return restClient.post()
                 .uri("/v1/messages")
                 .contentType(MediaType.APPLICATION_JSON)
-                .headers(h -> beta(h, request))
+                .headers(h -> headers(h, request))
                 .body(body)
                 .exchange((req, res) -> {
                     if (res.getStatusCode().isError()) {
@@ -237,7 +326,7 @@ public class AnthropicProvider extends AbstractLlmProvider {
         Map<?, ?> answer = restClient.post()
                 .uri("/v1/messages/count_tokens")
                 .contentType(MediaType.APPLICATION_JSON)
-                .headers(h -> beta(h, request))
+                .headers(h -> headers(h, request))
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
@@ -285,13 +374,22 @@ public class AnthropicProvider extends AbstractLlmProvider {
         body.put("max_tokens", request.getMaxTokens() != null ? request.getMaxTokens() : DEFAULT_MAX_TOKENS);
         if (systemPrompt != null)         body.put("system",      systemPrompt);
         body.put("messages", messages);
-        if (request.getTemperature() != null) body.put("temperature", request.getTemperature());
-        // Anthropic's current models refuse temperature and top_p together. A request translated from
-        // another API (Gemini CLI always sends both) keeps temperature, the setting clients tune.
-        if (request.getTopP() != null && request.getTemperature() == null) {
-            body.put("top_p", request.getTopP());
-        } else if (request.getTopP() != null) {
-            log.debug("Anthropic takes temperature or top_p, not both; top_p {} is left out", request.getTopP());
+        if (VERSION_2026_10_21.equals(apiVersion)) {
+            // 2026-10-21 refuses the sampling parameters, even at their defaults; notApplied() names what was left
+            // out, and the response says so.
+            if (request.getTemperature() != null || request.getTopP() != null) {
+                log.debug("anthropic-version {} takes no sampling parameters; {} left out", apiVersion,
+                        notApplied(request));
+            }
+        } else {
+            if (request.getTemperature() != null) body.put("temperature", request.getTemperature());
+            // Anthropic's current models refuse temperature and top_p together. A request translated from
+            // another API (Gemini CLI always sends both) keeps temperature, the setting clients tune.
+            if (request.getTopP() != null && request.getTemperature() == null) {
+                body.put("top_p", request.getTopP());
+            } else if (request.getTopP() != null) {
+                log.debug("Anthropic takes temperature or top_p, not both; top_p {} is left out", request.getTopP());
+            }
         }
         if (request.getStop()        != null) body.put("stop_sequences", request.getStop());
         // Anthropic's end-user id lives in metadata.user_id.

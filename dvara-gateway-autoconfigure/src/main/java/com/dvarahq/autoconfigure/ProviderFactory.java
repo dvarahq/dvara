@@ -82,7 +82,8 @@ public class ProviderFactory {
         return switch (type) {
             case "openai" -> new OpenAiProvider(secret(), or(url, ProviderAutoConfiguration.OPENAI_BASE_URL),
                     keyed(type, base));
-            case "anthropic" -> new AnthropicProvider(secret(), url, keyed(type, base));
+            case "anthropic" -> new AnthropicProvider(secret(), url, keyed(type, base),
+                    props.getProviders().getAnthropic().getApiVersion());
             case "gemini" -> {
                 GeminiProvider gemini = new GeminiProvider(secret(), or(url, ProviderAutoConfiguration.GEMINI_BASE_URL),
                         keyed(type, base));

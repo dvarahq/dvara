@@ -289,7 +289,8 @@ public class ProviderAutoConfiguration implements org.springframework.context.En
     public AnthropicProvider anthropicProvider(GatewayProperties props, SecretProvider secretProvider,
                                                RestClient.Builder restClientBuilder) {
         RestClient.Builder builder = clientFor("anthropic", restClientBuilder, secretProvider);
-        return new AnthropicProvider(secretProvider, props.getProviders().getAnthropic().getBaseUrl(), builder);
+        return new AnthropicProvider(secretProvider, props.getProviders().getAnthropic().getBaseUrl(), builder,
+                props.getProviders().getAnthropic().getApiVersion());
     }
 
     @Bean

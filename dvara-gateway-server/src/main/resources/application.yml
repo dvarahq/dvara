@@ -83,6 +83,10 @@ dvara:
       anthropic:
         enabled: ${ANTHROPIC_ENABLED:false}
         api-key: ${ANTHROPIC_API_KEY:}
+        # The anthropic-version for the gateway's own translations: 2026-10-21 (default; temperature, top_p and
+        # top_k are left out and named in X-Gateway-Params-Not-Applied) or 2023-06-01. A Messages API caller's own
+        # body always goes with the caller's version.
+        api-version: ${ANTHROPIC_API_VERSION:}
       gemini:
         enabled: ${GEMINI_ENABLED:false}
         api-key: ${GEMINI_API_KEY:}

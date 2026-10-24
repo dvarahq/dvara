@@ -88,6 +88,12 @@ public class GatewayProperties {
         private String baseUrl;
         /** Azure OpenAI only: the {@code api-version} sent with a Responses API call; none when blank. */
         private String responsesApiVersion;
+        /**
+         * Anthropic only: the {@code anthropic-version} the provider calls Anthropic with when it sends its own
+         * translation of a request, {@code 2026-10-21} (the default) or {@code 2023-06-01}. A Messages API caller's
+         * own body is always sent with the caller's own version.
+         */
+        private String apiVersion;
     }
 
     /**
