@@ -69,7 +69,7 @@ public final class InMemoryResponseCache implements ResponseCache {
                         + "restart. Every replica keeps its own, so a fleet of N pods gets N caches and a "
                         + "hit rate that falls as it grows. It serves EXACT matches only — an identical "
                         + "model, messages, sampling settings, response format and tools, for the same "
-                        + "workspace — and no "
+                        + "workspace and end user — and no "
                         + "property in this build makes it serve a similar request instead. A cache shared "
                         + "across a fleet is what a different distribution of this gateway provides.",
                 maxEntries, ttlSeconds);
@@ -127,6 +127,9 @@ public final class InMemoryResponseCache implements ResponseCache {
     private static String key(ChatRequest request) {
         StringBuilder sb = new StringBuilder();
         append(sb, workspaceOf(request));
+        // The end user the caller names, when it names one. An answer built from what one user may see
+        // is not served to another. A caller that names no user shares within its workspace.
+        append(sb, endUserOf(request));
         append(sb, request.getModel());
         if (request.getMessages() != null) {
             for (MultimodalMessage message : request.getMessages()) {
@@ -134,6 +137,8 @@ public final class InMemoryResponseCache implements ResponseCache {
                 append(sb, textOf(message.getContent()));
                 append(sb, message.getName());
                 append(sb, message.getToolCallId());
+                // A tool result marked as an error is a different turn from the same text marked as a success.
+                append(sb, String.valueOf(message.getToolError()));
                 append(sb, toolCallsOf(message.getToolCalls()));
             }
         }
@@ -147,6 +152,8 @@ public final class InMemoryResponseCache implements ResponseCache {
         append(sb, responseFormatOf(request.getResponseFormat()));
         append(sb, toolsOf(request.getTools()));
         append(sb, canonical(request.getToolChoice()));
+        // Whether the model may call several tools in one turn changes the answer.
+        append(sb, String.valueOf(request.getParallelToolCalls()));
         // Both change the answer; the prompt cache key does not.
         append(sb, String.valueOf(request.getReasoningEffort()));
         append(sb, String.valueOf(request.getVerbosity()));
@@ -225,6 +232,26 @@ public final class InMemoryResponseCache implements ResponseCache {
             return sb.append(']').toString();
         }
         return value == null ? "null" : value.getClass().getSimpleName() + ":" + value;
+    }
+
+    /**
+     * The caller's end user: the chat {@code user} field, or for a Responses API body its {@code user} or
+     * {@code safety_identifier}. Blank when none is given.
+     */
+    private static String endUserOf(ChatRequest request) {
+        if (request.getUser() != null && !request.getUser().isBlank()) {
+            return request.getUser();
+        }
+        if (request.getOpenAiResponses() != null && request.getOpenAiResponses().raw() != null) {
+            var raw = request.getOpenAiResponses().raw();
+            for (String field : new String[]{"user", "safety_identifier"}) {
+                var value = raw.get(field);
+                if (value != null && value.isTextual() && !value.asText().isBlank()) {
+                    return value.asText();
+                }
+            }
+        }
+        return "";
     }
 
     private static String workspaceOf(ChatRequest request) {
