@@ -68,6 +68,20 @@ public class ModelPrefixRoutingStrategy implements RoutingStrategy {
         PREFIX_TO_ENV = Map.copyOf(map);
     }
 
+    /**
+     * The strategy for a model-prefix route. A route that names providers sends its models to them,
+     * in the order listed, even when no provider claims the name by prefix. A route that names none
+     * matches by prefix, as the default strategy does.
+     */
+    public static RoutingStrategy forRoute(RouteConfig config) {
+        List<String> names = config.getProviders() == null ? List.of() : config.getProviders().stream()
+                .map(RouteConfig.ProviderWeight::getProvider)
+                .filter(n -> n != null && !n.isBlank())
+                .distinct()
+                .toList();
+        return names.isEmpty() ? new ModelPrefixRoutingStrategy() : new ListedProviderRoutingStrategy(config.getId(), names);
+    }
+
     @Override
     public LlmProvider route(ChatRequest request, List<LlmProvider> providers) {
         return providers.stream()
