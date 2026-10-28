@@ -40,6 +40,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
@@ -611,7 +612,7 @@ class GeminiProviderTest {
 
     @Test
     void listModels_returnsModelsFromApi() {
-        server.expect(requestTo(containsString("/v1beta/models?key=test-key")))
+        server.expect(requestTo("https://generativelanguage.googleapis.com/v1beta/models"))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess("""
                         {
@@ -906,6 +907,76 @@ class GeminiProviderTest {
               .andRespond(withSuccess("{\"totalTokens\": 31}", MediaType.APPLICATION_JSON));
 
         assertThat(provider.countInputTokens(passthroughRequest(false, view -> view))).hasValue(31);
+        server.verify();
+    }
+
+    // -------------------------------------------------------------------------
+    // The key goes to Google in a header, never in the URL
+    // -------------------------------------------------------------------------
+
+    /** URLs land in the access logs of every proxy on the way, so no call may carry the key in one. */
+    private static org.springframework.test.web.client.RequestMatcher keyInHeaderOnly() {
+        return request -> {
+            assertThat(request.getHeaders().get(GeminiProvider.API_KEY_HEADER)).containsExactly("test-key");
+            assertThat(request.getURI().toString()).doesNotContain("key=").doesNotContain("test-key");
+        };
+    }
+
+    @Test
+    void chat_sendsTheKeyInTheHeader_notTheUrl() {
+        server.expect(requestTo(containsString(":generateContent")))
+              .andExpect(keyInHeaderOnly())
+              .andRespond(withSuccess(geminiSuccessBody("STOP", "hi", 1, 1), MediaType.APPLICATION_JSON));
+
+        provider.chat(ChatRequest.builder().model("gemini-2.0-flash")
+                .messages(List.of(MultimodalMessage.user("Hi"))).build());
+        server.verify();
+    }
+
+    @Test
+    void chat_aGenerateContentBodySentOn_sendsTheKeyInTheHeader_notTheUrl() {
+        server.expect(requestTo(containsString(":generateContent")))
+              .andExpect(keyInHeaderOnly())
+              .andRespond(withSuccess(geminiSuccessBody("STOP", "hi", 1, 1), MediaType.APPLICATION_JSON));
+
+        provider.chat(passthroughRequest(false, view -> view));
+        server.verify();
+    }
+
+    @Test
+    void streamChat_sendsTheKeyInTheHeader_notTheUrl() {
+        server.expect(requestTo(containsString(":streamGenerateContent?alt=sse")))
+              .andExpect(keyInHeaderOnly())
+              .andRespond(withSuccess("""
+                      data: {"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP"}]}
+
+                      """, MediaType.TEXT_EVENT_STREAM));
+
+        Iterator<SseChunk> iterator = provider.streamChat(ChatRequest.builder().model("gemini-2.0-flash")
+                .messages(List.of(MultimodalMessage.user("Hi"))).stream(true).build());
+        while (iterator.hasNext()) {
+            iterator.next();
+        }
+        server.verify();
+    }
+
+    @Test
+    void countInputTokens_sendsTheKeyInTheHeader_notTheUrl() {
+        server.expect(requestTo(containsString(":countTokens")))
+              .andExpect(keyInHeaderOnly())
+              .andRespond(withSuccess("{\"totalTokens\": 3}", MediaType.APPLICATION_JSON));
+
+        provider.countInputTokens(passthroughRequest(false, view -> view));
+        server.verify();
+    }
+
+    @Test
+    void listModels_sendsTheKeyInTheHeader_notTheUrl() {
+        server.expect(requestTo(containsString("/v1beta/models")))
+              .andExpect(keyInHeaderOnly())
+              .andRespond(withSuccess("{\"models\": []}", MediaType.APPLICATION_JSON));
+
+        provider.listModels();
         server.verify();
     }
 }
