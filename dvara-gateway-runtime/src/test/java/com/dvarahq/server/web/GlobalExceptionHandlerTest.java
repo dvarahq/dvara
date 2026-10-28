@@ -50,6 +50,15 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void theHandlerMapsNoCodeLeftFromTheRemovedAdminApi() throws Exception {
+        // Nothing raises these any more. A mapping for a code nothing raises reads as a promise to clients.
+        String source = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/com/dvarahq/server/web/GlobalExceptionHandler.java"));
+        assertThat(source).doesNotContain("\"WEBHOOK_NOT_FOUND\"", "\"PROMPT_VERSION_NOT_FOUND\"",
+                "\"INVALID_TEMPLATE_STATUS\"");
+    }
+
+    @Test
     void anOversizedUploadIsRefusedWithALowerCaseCode() {
         ErrorResponse result = handler.handleUploadTooLarge(
                 new org.springframework.web.multipart.MaxUploadSizeExceededException(10), mockResponse("trace-up"));
