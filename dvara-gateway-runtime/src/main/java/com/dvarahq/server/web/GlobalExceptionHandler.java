@@ -149,7 +149,6 @@ public class GlobalExceptionHandler {
                 || "ROUTE_NOT_FOUND".equals(code) || "ROUTE_VERSION_NOT_FOUND".equals(code)
                 || "POLICY_NOT_FOUND".equals(code) || "POLICY_VERSION_NOT_FOUND".equals(code)
                 || "REPORT_NOT_FOUND".equals(code)
-                || "WEBHOOK_NOT_FOUND".equals(code)
                 || "MCP_SERVER_NOT_FOUND".equals(code)
                 || "USER_NOT_FOUND".equals(code)
                 || "PRICING_NOT_FOUND".equals(code)
@@ -159,7 +158,6 @@ public class GlobalExceptionHandler {
                 || "SESSION_NOT_FOUND".equals(code)
                 || "PROMPT_EXPERIMENT_NOT_FOUND".equals(code)
                 || "PROMPT_TEMPLATE_NOT_FOUND".equals(code)
-                || "PROMPT_VERSION_NOT_FOUND".equals(code)
                 || "BATCH_NOT_FOUND".equals(code)
                 || "FILE_NOT_FOUND".equals(code)) {
             status = HttpStatus.NOT_FOUND;
@@ -229,7 +227,6 @@ public class GlobalExceptionHandler {
                 || "PROMPT_EXPERIMENT_NOT_RUNNING".equals(code)
                 || "PROMPT_TEMPLATE_NOT_ACTIVE".equals(code)
                 || "PROMPT_VARIABLE_MISSING".equals(code)
-                || "INVALID_TEMPLATE_STATUS".equals(code)
                 || "CREDENTIAL_NOT_ROTATABLE".equals(code)
                 || "CREDENTIAL_STORAGE_MODE_MISMATCH".equals(code)
                 || "CREDENTIAL_REFERENCE_MISSING".equals(code)
