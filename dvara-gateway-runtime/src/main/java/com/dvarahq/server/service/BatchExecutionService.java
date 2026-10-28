@@ -222,6 +222,12 @@ public class BatchExecutionService {
             JsonNode node = parse(rawBatchJson);
             String status = textOrNull(node, "status");
             String outputFileId = textOrNull(node, "output_file_id");
+            // The error file holds the requests that failed. It is recorded on its own, booked or not,
+            // so a batch whose cost was booked before it was known still gets it.
+            String errorFileId = textOrNull(node, "error_file_id");
+            if (errorFileId != null && !errorFileId.isBlank() && !errorFileId.equals(job.getErrorFileId())) {
+                batchJobRepository.recordErrorFile(job.getId(), job.getWorkspaceId(), errorFileId);
+            }
             if (status != null && TERMINAL.contains(status)) {
                 if (!job.isCostBooked()) {
                     bookCompletion(job, provider, status, outputFileId);
@@ -329,7 +335,8 @@ public class BatchExecutionService {
     // ---- file content -----------------------------------------------------
 
     /**
-     * The raw content of a file this workspace's batches produced or were submitted with.
+     * The raw content of a file this workspace's batches produced or were submitted with: the input,
+     * the output or the error file.
      *
      * <p>A file id is not workspace-scoped on its own; {@code findByFileIdAndWorkspaceId} supplies
      * the scope, so a file is readable only if a batch in this workspace recorded it. A file that

@@ -58,6 +58,27 @@ class GlobalExceptionHandlerTest {
                 "\"INVALID_TEMPLATE_STATUS\"");
     }
 
+    @Test
+    void anOversizedUploadIsRefusedWithALowerCaseCode() {
+        ErrorResponse result = handler.handleUploadTooLarge(
+                new org.springframework.web.multipart.MaxUploadSizeExceededException(10), mockResponse("trace-up"));
+
+        assertThat(result.getError().getCode()).isEqualTo("file_too_large");
+        assertThat(result.getError().getType()).isEqualTo("input_size_error");
+    }
+
+    @Test
+    void everyCodeIsWrittenInLowerCase_whateverCaseItWasRaisedIn() throws Exception {
+        // A client matches codes exactly. Whatever path builds the body, the code on the wire is lower case.
+        ErrorResponse built = ErrorResponse.of("no", "invalid_request_error", "SOME_NEW_CODE", "t");
+        ErrorResponse set = new ErrorResponse(ErrorResponse.ErrorDetail.builder().build());
+        set.getError().setCode("ANOTHER_CODE");
+
+        assertThat(com.dvarahq.core.util.JsonMapper.instance().writeValueAsString(built))
+                .contains("\"code\":\"some_new_code\"").doesNotContain("SOME_NEW_CODE");
+        assertThat(set.getError().getCode()).isEqualTo("another_code");
+    }
+
     // -------------------------------------------------------------------------
     // handleGatewayException — NO_PROVIDER
     // -------------------------------------------------------------------------

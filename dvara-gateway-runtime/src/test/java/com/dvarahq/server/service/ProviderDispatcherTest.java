@@ -204,6 +204,120 @@ class ProviderDispatcherTest {
         verify(collector).record(eq("route-1"), eq("baseline"), anyLong(), anyDouble(), eq(false));
     }
 
+    // --- streamed calls on a canary route are counted -----------------------------------
+
+    private static final class Chunks implements Iterator<SseChunk>, AutoCloseable {
+        private final Iterator<SseChunk> chunks;
+        private final RuntimeException failAfter;
+        boolean closed;
+
+        Chunks(List<SseChunk> chunks, RuntimeException failAfter) {
+            this.chunks = chunks.iterator();
+            this.failAfter = failAfter;
+        }
+
+        @Override public boolean hasNext() {
+            if (!chunks.hasNext() && failAfter != null) throw failAfter;
+            return chunks.hasNext();
+        }
+        @Override public SseChunk next() { return chunks.next(); }
+        @Override public void close() { closed = true; }
+    }
+
+    private static ProviderDispatcher canaryDispatcher(LlmProvider baseline, CanaryMetricsCollector collector,
+                                                       boolean canary) {
+        com.dvarahq.core.routing.RouteConfig.RouteConfigBuilder route =
+                com.dvarahq.core.routing.RouteConfig.builder().id("route-1");
+        if (canary) {
+            route.canaryConfig(com.dvarahq.core.routing.CanaryConfig.builder()
+                    .baselineProvider("openai").candidateProvider("anthropic").splitPct(10).build());
+        }
+        com.dvarahq.core.routing.RouteConfig matched = route.build();
+        RoutingStrategy strategy = new RoutingStrategy() {
+            @Override public LlmProvider route(ChatRequest request, List<LlmProvider> providers) {
+                return baseline;
+            }
+            @Override public LlmProvider route(ChatRequest request, List<LlmProvider> providers,
+                                               com.dvarahq.core.routing.RequestContext ctx) {
+                ctx.setMatchedRoute(matched);
+                return baseline;
+            }
+        };
+        return new ProviderDispatcher(
+                List.of(baseline), strategy, name -> ProviderHealthStatus.HEALTHY, DEFAULT_FALLBACK,
+                TEST_METRICS, ObservationRegistry.NOOP, TEST_LATENCY_TRACKER,
+                collector, TestProviders.of(TEST_COST_ESTIMATOR), TEST_SHADOW_DISPATCHER);
+    }
+
+    private static void drain(Iterator<SseChunk> stream) {
+        while (stream.hasNext()) {
+            stream.next();
+        }
+    }
+
+    @Test
+    void aStreamedCallOnACanaryRoute_isCountedOnceForItsVariant_whenItEnds() throws Exception {
+        LlmProvider baseline = mockProvider("openai", true);
+        Chunks chunks = new Chunks(List.of(SseChunk.builder().delta("hi").build(),
+                SseChunk.builder().done(true).build()), null);
+        when(baseline.streamChat(any())).thenReturn(chunks);
+        CanaryMetricsCollector collector = mock(CanaryMetricsCollector.class);
+
+        Iterator<SseChunk> stream = canaryDispatcher(baseline, collector, true).streamChat(chatRequest("gpt-4o"));
+        verify(collector, never()).record(any(), any(), anyLong(), anyDouble(), anyBoolean());
+        drain(stream);
+        stream.hasNext();
+        ((AutoCloseable) stream).close();
+
+        verify(collector, org.mockito.Mockito.times(1))
+                .record(eq("route-1"), eq("baseline"), anyLong(), anyDouble(), eq(false));
+        verify(collector, never()).record(any(), any(), anyLong(), anyDouble(), eq(true));
+        assertThat(chunks.closed).as("close still reaches the provider stream").isTrue();
+    }
+
+    @Test
+    void aStreamThatFailsAfterItsFirstChunk_isCountedOnceAsAnError() {
+        LlmProvider baseline = mockProvider("openai", true);
+        when(baseline.streamChat(any())).thenReturn(new Chunks(List.of(SseChunk.builder().delta("hi").build()),
+                new GatewayException("PROVIDER_ERROR", "upstream reset")));
+        CanaryMetricsCollector collector = mock(CanaryMetricsCollector.class);
+
+        Iterator<SseChunk> stream = canaryDispatcher(baseline, collector, true).streamChat(chatRequest("gpt-4o"));
+        assertThatThrownBy(() -> drain(stream)).isInstanceOf(GatewayException.class);
+        assertThatThrownBy(stream::hasNext).isInstanceOf(GatewayException.class);
+
+        verify(collector, org.mockito.Mockito.times(1))
+                .record(eq("route-1"), eq("baseline"), anyLong(), anyDouble(), eq(true));
+        verify(collector, never()).record(any(), any(), anyLong(), anyDouble(), eq(false));
+    }
+
+    @Test
+    void aStreamThatFailsToOpen_isCountedOnceAsAnError() {
+        LlmProvider baseline = mockProvider("openai", true);
+        when(baseline.streamChat(any())).thenThrow(new GatewayException("PROVIDER_ERROR", "refused"));
+        CanaryMetricsCollector collector = mock(CanaryMetricsCollector.class);
+
+        assertThatThrownBy(() -> canaryDispatcher(baseline, collector, true).streamChat(chatRequest("gpt-4o")))
+                .isInstanceOf(GatewayException.class);
+
+        verify(collector, org.mockito.Mockito.times(1))
+                .record(eq("route-1"), eq("baseline"), anyLong(), anyDouble(), eq(true));
+    }
+
+    @Test
+    void aStreamOnARouteWithNoCanary_isNotCounted_andIsReturnedAsItCame() {
+        LlmProvider baseline = mockProvider("openai", true);
+        Chunks chunks = new Chunks(List.of(SseChunk.builder().done(true).build()), null);
+        when(baseline.streamChat(any())).thenReturn(chunks);
+        CanaryMetricsCollector collector = mock(CanaryMetricsCollector.class);
+
+        Iterator<SseChunk> stream = canaryDispatcher(baseline, collector, false).streamChat(chatRequest("gpt-4o"));
+        drain(stream);
+
+        assertThat(stream).isSameAs(chunks);
+        verify(collector, never()).record(any(), any(), anyLong(), anyDouble(), anyBoolean());
+    }
+
     private static ChatRequest withWorkspace(ChatRequest request, String workspaceId) {
         return request.toBuilder().metadata(new java.util.HashMap<>(Map.of("workspace_id", workspaceId))).build();
     }

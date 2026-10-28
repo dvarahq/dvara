@@ -110,6 +110,7 @@ class GeminiFromGeminiCliEndToEndTest {
     /** What the stub last received, by method: the body and the query. */
     static final Map<String, String> bodies = new ConcurrentHashMap<>();
     static final Map<String, String> queries = new ConcurrentHashMap<>();
+    static final Map<String, String> keyHeaders = new ConcurrentHashMap<>();
 
     @BeforeAll
     static void startStubAndWriteGatewayYaml() throws IOException {
@@ -186,6 +187,8 @@ class GeminiFromGeminiCliEndToEndTest {
             bodies.put(method, new String(in.readAllBytes(), StandardCharsets.UTF_8));
         }
         queries.put(method, ex.getRequestURI().getRawQuery() == null ? "" : ex.getRequestURI().getRawQuery());
+        String keyHeader = ex.getRequestHeaders().getFirst("x-goog-api-key");
+        keyHeaders.put(method, keyHeader == null ? "" : keyHeader);
         if (path.contains("/gemini-2.5-flash:")) {
             byte[] gone = ("{\"error\":{\"code\":404,\"message\":\"This model models/gemini-2.5-flash is no longer "
                     + "available to new users.\",\"status\":\"NOT_FOUND\"}}").getBytes(StandardCharsets.UTF_8);
@@ -221,6 +224,7 @@ class GeminiFromGeminiCliEndToEndTest {
     void clearStub() {
         bodies.clear();
         queries.clear();
+        keyHeaders.clear();
     }
 
     // ---- on a route to Gemini, the CLI's request and Gemini's answer go through as they were sent ----------
@@ -234,8 +238,10 @@ class GeminiFromGeminiCliEndToEndTest {
 
         assertThat(JSON.readTree(bodies.get("streamGenerateContent"))).as("the body Gemini received")
                 .isEqualTo(capped(body));
-        assertThat(queries.get("streamGenerateContent")).as("the provider's own key, not the caller's")
-                .contains("alt=sse").contains("key=stub-gemini-key").doesNotContain(KEY);
+        assertThat(keyHeaders.get("streamGenerateContent")).as("the provider's own key, not the caller's")
+                .isEqualTo("stub-gemini-key");
+        assertThat(queries.get("streamGenerateContent")).as("no key in the URL, where proxies log it")
+                .isEqualTo("alt=sse");
         assertThat(data(events)).as("the events the CLI received").containsExactlyElementsOf(STREAM_EVENTS);
 
         TokenUsageRecord row = awaitRow("cli", rowsBefore);

@@ -74,6 +74,19 @@ class FileAuditChainTest {
     }
 
     @Test
+    void aFileMixingRecordsWithAndWithoutATraceIdVerifies() throws IOException {
+        // Records written before the response record carried a trace id sit in the same file as records after.
+        Path file = dir.resolve("mixed.log");
+        new FileAuditWriter(file, SECRET).write(event("GATEWAY_RESPONSE", "acme", Map.of("status", 200)));
+        new FileAuditWriter(file, SECRET).write(event("GATEWAY_RESPONSE", "acme",
+                Map.of("trace_id", "4bf92f3577b34da6a3ce929d0e0e4736", "status", 200)));
+
+        FileAuditChainVerifier.Result result = FileAuditChainVerifier.verify(file, SECRET);
+        assertThat(result.valid()).isTrue();
+        assertThat(result.linesChecked()).isEqualTo(2);
+    }
+
+    @Test
     void theChainLinksEachLineToTheOneBefore() throws IOException {
         List<String> lines = Files.readAllLines(writeThree());
         assertThat(FileAuditChainVerifier.extract(lines.get(0), "previousHash"))

@@ -577,6 +577,61 @@ class GatewayYamlLoaderTest {
     }
 
     @Test
+    void validate_canaryRoute_isRefusedAtLoad_namingTheRouteAndWhereCanaryRoutesGo() {
+        // A gateway.yaml route has no fields for a canary's baseline, candidate or split. Accepting
+        // the strategy here used to fail later, at startup, on a missing canary config that named
+        // neither the route nor the cause.
+        GatewayYamlConfig config = new GatewayYamlConfig();
+        GatewayYamlConfig.RouteEntry route = new GatewayYamlConfig.RouteEntry();
+        route.setId("gpt-canary");
+        route.setModel("gpt*");
+        route.setProviders(List.of(provider("openai"), provider("azure-openai")));
+        route.setStrategy("canary");
+        config.setRoutes(List.of(route));
+
+        List<String> errors = GatewayYamlLoader.validate(config);
+
+        assertThat(errors).singleElement().satisfies(e -> assertThat(e)
+                .contains("routes[0].strategy")
+                .contains("'gpt-canary'")
+                .contains("'canary'")
+                .contains("dvara.llm-gateway.routes"));
+    }
+
+    @Test
+    void validate_canaryRouteWithNoId_isNamedByItsModel() {
+        GatewayYamlConfig config = new GatewayYamlConfig();
+        GatewayYamlConfig.RouteEntry route = new GatewayYamlConfig.RouteEntry();
+        route.setModel("claude*");
+        route.setProvider("anthropic");
+        route.setStrategy("Canary");
+        config.setRoutes(List.of(route));
+
+        assertThat(GatewayYamlLoader.validate(config))
+                .singleElement().asString().contains("for model 'claude*'");
+    }
+
+    @Test
+    void validate_theSameRouteWithRoundRobin_loads() {
+        GatewayYamlConfig config = new GatewayYamlConfig();
+        GatewayYamlConfig.RouteEntry route = new GatewayYamlConfig.RouteEntry();
+        route.setId("gpt-canary");
+        route.setModel("gpt*");
+        route.setProviders(List.of(provider("openai"), provider("azure-openai")));
+        route.setStrategy("round-robin");
+        config.setRoutes(List.of(route));
+
+        assertThat(GatewayYamlLoader.validate(config)).isEmpty();
+    }
+
+    private static GatewayYamlConfig.RouteProviderEntry provider(String name) {
+        GatewayYamlConfig.RouteProviderEntry p = new GatewayYamlConfig.RouteProviderEntry();
+        p.setProvider(name);
+        p.setWeight(1);
+        return p;
+    }
+
+    @Test
     void validate_apiKeyWithNoKeyOrGenerate_returnsError() {
         GatewayYamlConfig config = new GatewayYamlConfig();
         GatewayYamlConfig.ApiKeyEntry entry = new GatewayYamlConfig.ApiKeyEntry();

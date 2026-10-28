@@ -98,6 +98,27 @@ class ActuatorAuthAutoConfigurationTest {
     }
 
     @Test
+    void aMetricsKeyEqualToTheOperatorKeyRefusesToStart_namingBothSettings() {
+        runner.withPropertyValues("dvara.actuator.api-key=one-key", "dvara.actuator.metrics-api-key=one-key")
+                .run(context -> assertThat(context).hasFailed()
+                        .getFailure().rootCause()
+                        .hasMessageContaining("dvara.actuator.metrics-api-key")
+                        .hasMessageContaining("dvara.actuator.api-key")
+                        .hasMessageContaining("must differ")
+                        .hasMessageNotContaining("one-key"));
+    }
+
+    @Test
+    void differentKeys_orOnlyOneKey_start() {
+        runner.withPropertyValues("dvara.actuator.api-key=op-key", "dvara.actuator.metrics-api-key=scrape-key")
+                .run(context -> assertThat(context).hasSingleBean(FilterRegistrationBean.class));
+        runner.withPropertyValues("dvara.actuator.api-key=op-key")
+                .run(context -> assertThat(context).hasSingleBean(FilterRegistrationBean.class));
+        runner.withPropertyValues("dvara.actuator.metrics-api-key=scrape-key")
+                .run(context -> assertThat(context).hasSingleBean(FilterRegistrationBean.class));
+    }
+
+    @Test
     void aSeparateManagementPortRefusesToStart() {
         runner.withPropertyValues("management.server.port=9090")
                 .run(context -> assertThat(context).hasFailed()

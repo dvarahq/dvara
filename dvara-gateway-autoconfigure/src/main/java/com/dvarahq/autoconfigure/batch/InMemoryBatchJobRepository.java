@@ -94,7 +94,8 @@ public class InMemoryBatchJobRepository implements BatchJobRepository {
         }
         return byId.values().stream()
                 .filter(j -> sameWorkspace(j, workspaceId))
-                .filter(j -> fileId.equals(j.getOutputFileId()) || fileId.equals(j.getInputFileId()))
+                .filter(j -> fileId.equals(j.getOutputFileId()) || fileId.equals(j.getInputFileId())
+                        || fileId.equals(j.getErrorFileId()))
                 .findFirst();
     }
 
@@ -134,6 +135,14 @@ public class InMemoryBatchJobRepository implements BatchJobRepository {
         if (job == null || !sameWorkspace(job, workspaceId)) return;
         job.setStatus(status);
         if (outputFileId != null) job.setOutputFileId(outputFileId);
+        job.setUpdatedAt(Instant.now());
+    }
+
+    @Override
+    public synchronized void recordErrorFile(String id, String workspaceId, String errorFileId) {
+        BatchJob job = byId.get(id);
+        if (job == null || !sameWorkspace(job, workspaceId) || errorFileId == null) return;
+        job.setErrorFileId(errorFileId);
         job.setUpdatedAt(Instant.now());
     }
 

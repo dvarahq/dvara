@@ -60,6 +60,12 @@ import java.util.stream.Collectors;
 
 public class GeminiProvider extends AbstractLlmProvider {
 
+    /**
+     * The header Google reads the API key from. The key never goes in the URL: URLs end up in the
+     * access logs of every proxy between the gateway and Google.
+     */
+    static final String API_KEY_HEADER = "x-goog-api-key";
+
     private final RestClient restClient;
     private final SecretProvider secretProvider;
     /** Fetches an https image URL to inline it (#55); off unless the operator turned fetching on. */
@@ -104,8 +110,8 @@ public class GeminiProvider extends AbstractLlmProvider {
         String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
         recordFingerprint(apiKey);
         GeminiResponse resp = restClient.post()
-                .uri("/v1beta/models/{model}:generateContent?key={key}",
-                        request.getModel(), apiKey)
+                .uri("/v1beta/models/{model}:generateContent", request.getModel())
+                .header(API_KEY_HEADER, apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body)
                 .retrieve()
@@ -127,7 +133,8 @@ public class GeminiProvider extends AbstractLlmProvider {
         String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
         recordFingerprint(apiKey);
         String answer = restClient.post()
-                .uri("/v1beta/models/{model}:generateContent?key={key}", request.getModel(), apiKey)
+                .uri("/v1beta/models/{model}:generateContent", request.getModel())
+                .header(API_KEY_HEADER, apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(sent)
                 .retrieve()
@@ -173,8 +180,8 @@ public class GeminiProvider extends AbstractLlmProvider {
         String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
         recordFingerprint(apiKey);
         return restClient.post()
-                .uri("/v1beta/models/{model}:streamGenerateContent?alt=sse&key={key}",
-                        request.getModel(), apiKey)
+                .uri("/v1beta/models/{model}:streamGenerateContent?alt=sse", request.getModel())
+                .header(API_KEY_HEADER, apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body)
                 .exchange((req, res) -> {
@@ -212,7 +219,8 @@ public class GeminiProvider extends AbstractLlmProvider {
         String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
         recordFingerprint(apiKey);
         Map<?, ?> answer = restClient.post()
-                .uri("/v1beta/models/{model}:countTokens?key={key}", request.getModel(), apiKey)
+                .uri("/v1beta/models/{model}:countTokens", request.getModel())
+                .header(API_KEY_HEADER, apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(GeminiGenerateContentBody.write(body))
                 .retrieve()
@@ -488,7 +496,8 @@ public class GeminiProvider extends AbstractLlmProvider {
     public java.util.List<com.dvarahq.core.provider.ModelInfo> listModels() {
         String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
         GeminiModelList response = restClient.get()
-                .uri("/v1beta/models?key={key}", apiKey)
+                .uri("/v1beta/models")
+                .header(API_KEY_HEADER, apiKey)
                 .retrieve()
                 .body(GeminiModelList.class);
         if (response == null || response.models == null) return List.of();

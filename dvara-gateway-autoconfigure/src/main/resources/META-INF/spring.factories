@@ -1,7 +1,10 @@
 # OTLP trace export is opt-in by endpoint. Boot gates the exporter on the presence of
 # management.opentelemetry.tracing.export.otlp.endpoint, and that key cannot be conditionally
-# omitted from YAML, so the mapping from OTEL_EXPORTER_OTLP_ENDPOINT happens here instead.
-org.springframework.boot.EnvironmentPostProcessor=\
+# omitted from YAML, so the mapping from OTEL_EXPORTER_OTLP_ENDPOINT (a base URL; /v1/traces is
+# added unless it is already there) and OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (used as written)
+# happens here instead. It is a listener, not an environment post-processor, so that it runs after
+# Boot's own mapping of the same variables, which always adds /v1/traces and would double a full URL.
+org.springframework.context.ApplicationListener=\
   com.dvarahq.gateway.autoconfigure.TracingExporterEnvironmentPostProcessor
 
 # explains the boot failure when spring-jdbc stands the gateway.yaml store down and a

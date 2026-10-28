@@ -35,7 +35,7 @@ import java.util.Map;
 
 /**
  * Servlet filter that writes GATEWAY_RESPONSE audit events after request completion.
- * Only intercepts /v1/* paths (API calls). Captures model, provider, status,
+ * Only intercepts /v1/* paths (API calls). Captures the trace id, model, provider, status,
  * latency, tokens, workspace, and error info from request attributes.
  */
 @Component
@@ -76,6 +76,8 @@ public class AuditResponseFilter extends OncePerRequestFilter {
             long latencyMs = AccessLogFilter.elapsedMillis(request, startNanos);
 
             Map<String, Object> payload = new LinkedHashMap<>();
+            // The id the client saw in X-Trace-ID, so that id finds this record as it finds the access-log line.
+            putIfPresent(payload, "trace_id", traceIdOf(request, response));
             putIfPresent(payload, "model", request.getAttribute(AccessLogFilter.ATTR_MODEL));
             putIfPresent(payload, "provider", request.getAttribute(AccessLogFilter.ATTR_PROVIDER));
             payload.put("status", response.getStatus());
@@ -124,6 +126,16 @@ public class AuditResponseFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
         return !GatewayPlane.LLM.owns(path);
+    }
+
+    /** The trace id the trace filter gave this call: on the request, or else on the response header. */
+    private static String traceIdOf(HttpServletRequest request, HttpServletResponse response) {
+        Object onRequest = request.getAttribute(TraceIdFilter.ATTR);
+        if (onRequest instanceof String id && !id.isBlank()) {
+            return id;
+        }
+        String onResponse = response.getHeader(TraceIdFilter.HEADER);
+        return onResponse == null || onResponse.isBlank() ? null : onResponse;
     }
 
     private void putIfPresent(Map<String, Object> map, String key, Object value) {

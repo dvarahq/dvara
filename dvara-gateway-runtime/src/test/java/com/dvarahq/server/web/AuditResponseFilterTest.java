@@ -69,6 +69,36 @@ class AuditResponseFilterTest {
         verify(auditWriter).write(org.mockito.ArgumentMatchers.any(AuditEvent.class));
     }
 
+    @Test
+    void theRecordCarriesTheTraceIdTheClientSaw() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/chat/completions");
+        request.addHeader(TraceIdFilter.HEADER, "client-trace-42");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        new TraceIdFilter().doFilter(request, response, (req, res) -> filter.doFilter(req, res, (r, s) -> {}));
+
+        ArgumentCaptor<AuditEvent> event = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditWriter).write(event.capture());
+        assertThat(response.getHeader(TraceIdFilter.HEADER)).isEqualTo("client-trace-42");
+        assertThat(event.getValue().payload()).containsEntry("trace_id", "client-trace-42");
+    }
+
+    @Test
+    void aStreamsRecordCarriesTheTraceIdOfItsFirstDispatch() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/chat/completions");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        request.setAttribute(TraceIdFilter.ATTR, "minted-on-the-first-dispatch");
+
+        filter.doFilter(request, response, (req, res) -> request.setAsyncStarted(true));
+        request.setAsyncStarted(false);
+        request.setDispatcherType(jakarta.servlet.DispatcherType.ASYNC);
+        filter.doFilter(request, response, (req, res) -> {});
+
+        ArgumentCaptor<AuditEvent> event = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditWriter).write(event.capture());
+        assertThat(event.getValue().payload()).containsEntry("trace_id", "minted-on-the-first-dispatch");
+    }
+
     /** A cached answer's record says it was a hit and how close the cached request was. */
     @Test
     void aCacheHitRecordsItsStatusAndSimilarity() throws Exception {
