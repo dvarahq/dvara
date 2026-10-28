@@ -208,6 +208,41 @@ class BatchExecutionServiceTest {
     }
 
     @Test
+    void getBatch_recordsTheErrorFile_evenWhenTheCostIsAlreadyBooked() {
+        BatchJob job = job("batch_1", "t1", true);
+        when(batchJobRepository.findByProviderBatchIdAndWorkspaceId("batch_1", "t1")).thenReturn(Optional.of(job));
+        when(provider.getBatch("batch_1")).thenReturn(
+                "{\"id\":\"batch_1\",\"status\":\"completed\",\"output_file_id\":\"file_out\","
+                        + "\"error_file_id\":\"file_err\"}");
+
+        service.getBatch("batch_1", "t1");
+
+        verify(batchJobRepository).recordErrorFile(job.getId(), "t1", "file_err");
+    }
+
+    @Test
+    void getBatch_recordsNoErrorFile_whenThereIsNone() {
+        BatchJob job = job("batch_1", "t1", false);
+        when(batchJobRepository.findByProviderBatchIdAndWorkspaceId("batch_1", "t1")).thenReturn(Optional.of(job));
+        when(provider.getBatch("batch_1")).thenReturn("{\"id\":\"batch_1\",\"status\":\"in_progress\"}");
+
+        service.getBatch("batch_1", "t1");
+
+        verify(batchJobRepository, never()).recordErrorFile(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void getFileContent_servesTheErrorFileOfThisWorkspacesBatch() {
+        BatchJob job = job("batch_1", "t1", true);
+        job.setErrorFileId("file_err");
+        when(batchJobRepository.findByFileIdAndWorkspaceId("file_err", "t1")).thenReturn(Optional.of(job));
+        when(provider.getFileContent("file_err")).thenReturn("{\"error\":1}".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(new String(service.getFileContent("file_err", "t1"), StandardCharsets.UTF_8))
+                .contains("error");
+    }
+
+    @Test
     void getFileContent_servesAFileThisWorkspacesBatchProduced() {
         BatchJob job = job("batch_1", "t1", false);
         job.setOutputFileId("file_out");

@@ -50,6 +50,22 @@ class InMemoryBatchJobRepositoryTest {
     }
 
     @Test
+    void anErrorFileIsFoundLikeTheOutputFile_onlyInItsOwnWorkspace() {
+        InMemoryBatchJobRepository repo = new InMemoryBatchJobRepository();
+        repo.save(job("j1", "acme", "batch_1"));
+        repo.claimBooking("j1", "acme", "completed", "file-out");
+
+        repo.recordErrorFile("j1", "acme", "file-err");
+        repo.recordErrorFile("j1", "globex", "file-stolen");
+
+        assertThat(repo.findByFileIdAndWorkspaceId("file-err", "acme")).isPresent();
+        assertThat(repo.findByFileIdAndWorkspaceId("file-err", "globex")).isEmpty();
+        assertThat(repo.findByFileIdAndWorkspaceId("file-stolen", "acme"))
+                .as("another workspace cannot attach a file to this batch")
+                .isEmpty();
+    }
+
+    @Test
     void theCostIsClaimedExactlyOnce() {
         InMemoryBatchJobRepository repo = new InMemoryBatchJobRepository();
         repo.save(job("j1", "acme", "batch_1"));

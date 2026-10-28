@@ -42,11 +42,11 @@ public interface BatchJobRepository {
      *
      * <p>This is how a file id becomes workspace-scoped. The provider's Files API is keyed by file
      * id alone, and file ids are guessable, so serving file content needs some way to answer "is
-     * this the caller's file". A batch row is the only thing that knows — it recorded both the
-     * input file it was submitted with and the output file it produced.
+     * this the caller's file". A batch row is the only thing that knows — it recorded the input
+     * file it was submitted with and the output and error files it produced.
      *
-     * <p>Matches on <b>either</b> the input or the output file, so a client can read back what it
-     * uploaded as well as what came out.
+     * <p>Matches on the input, the output <b>or</b> the error file, so a client can read back what it
+     * uploaded as well as what came out and what failed.
      *
      * <p>A miss must be reported as <em>not found</em>, never as <em>not yours</em>: the two are the
      * same answer here on purpose, or the endpoint tells a caller which of another workspace's file
@@ -66,4 +66,14 @@ public interface BatchJobRepository {
 
     /** Updates the last-observed status without touching the booking flag (non-terminal polls). */
     void updateStatus(String id, String workspaceId, String status, String outputFileId);
+
+    /**
+     * Records the provider's error file id for a batch, once a poll shows one, so the error file can be
+     * downloaded like the output file. Workspace-scoped like every other write.
+     *
+     * <p>The default keeps nothing: a store that leaves it cannot serve error files, and every error file
+     * download from it is answered as not found.
+     */
+    default void recordErrorFile(String id, String workspaceId, String errorFileId) {
+    }
 }
