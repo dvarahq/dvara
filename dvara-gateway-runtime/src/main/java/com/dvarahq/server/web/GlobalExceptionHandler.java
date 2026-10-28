@@ -130,7 +130,7 @@ public class GlobalExceptionHandler {
                                               HttpServletResponse response) {
         String traceId = response.getHeader(TraceIdFilter.HEADER);
         return ErrorResponse.of("Uploaded file exceeds the configured size limit",
-                "input_size_error", "FILE_TOO_LARGE", traceId);
+                "input_size_error", "file_too_large", traceId);
     }
 
     @ExceptionHandler(GatewayException.class)

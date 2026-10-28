@@ -82,11 +82,16 @@ public final class ErrorEnvelope {
     /**
      * The body of a refusal on {@code uri}.
      *
+     * @param code  the gateway's error code; written in lower case
      * @param type  the OpenAI error type; the Anthropic envelope derives its own from the status
      * @param extra further members of the error object, such as a rate limit's details; may be null
      */
     public static Map<String, Object> body(String uri, int status, String message, String code, String type,
                                            String traceId, Map<String, Object> extra) {
+        // Every code goes out in lower case, on every doorway, whatever case the caller raised it in.
+        if (code != null) {
+            code = code.toLowerCase(java.util.Locale.ROOT);
+        }
         Map<String, Object> error = new LinkedHashMap<>();
         if (anthropic(uri)) {
             error.put("type", anthropicType(status));

@@ -79,6 +79,24 @@ class ErrorEnvelopeTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void aCodeRaisedInUpperCaseGoesOutInLowerCaseOnEveryDoorway() {
+        Map<String, Object> openAi = ErrorEnvelope.body("/v1/chat/completions", 403, "no", "IP_ACCESS_DENIED",
+                "ip_access_error", "t", null);
+        assertThat((Map<String, Object>) openAi.get("error")).containsEntry("code", "ip_access_denied");
+
+        Map<String, Object> anthropic = ErrorEnvelope.body("/v1/messages", 403, "no", "IP_ACCESS_DENIED",
+                "ip_access_error", "t", null);
+        assertThat((Map<String, Object>) anthropic.get("error")).containsEntry("code", "ip_access_denied");
+
+        Map<String, Object> gemini = ErrorEnvelope.body("/v1/gemini/v1beta/models/m:generateContent", 403, "no",
+                "IP_ACCESS_DENIED", "ip_access_error", "t", null);
+        Map<String, Object> info = ((java.util.List<Map<String, Object>>)
+                ((Map<String, Object>) gemini.get("error")).get("details")).get(0);
+        assertThat(info).containsEntry("reason", "ip_access_denied");
+    }
+
+    @Test
     void theAnthropicTypeFollowsTheStatus() {
         assertThat(ErrorEnvelope.anthropicType(401)).isEqualTo("authentication_error");
         assertThat(ErrorEnvelope.anthropicType(403)).isEqualTo("permission_error");
