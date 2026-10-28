@@ -92,6 +92,8 @@ class RefusedRequestsAreRecordedTest {
         assertThat(audited).singleElement().satisfies(e -> {
             assertThat(e.eventType()).isEqualTo("GATEWAY_RESPONSE");
             assertThat(e.payload()).containsEntry("status", 401).containsEntry("error_code", "invalid_api_key");
+            // The id the client saw leads to the record.
+            assertThat(e.payload()).containsEntry("trace_id", response.getHeader(TraceIdFilter.HEADER));
         });
     }
 
