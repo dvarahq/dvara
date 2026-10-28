@@ -18,6 +18,7 @@ package com.dvarahq.gateway.autoconfigure;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.mock.env.MockEnvironment;
 
 import java.util.Map;
@@ -136,5 +137,62 @@ class TracingExporterEnvironmentPostProcessorTest {
 
         assertThat(env.getProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY))
                 .isEqualTo("http://chosen:4318/v1/traces");
+    }
+
+    // Boot maps the same OpenTelemetry variables itself, in a source it puts in front of all the
+    // others, and always adds /v1/traces to the generic one. The cases below put that source in
+    // place the way Boot does, with the value Boot writes.
+
+    private static MockEnvironment withBootMapping(String bootValue, Map<String, Object> env) {
+        MockEnvironment environment = new MockEnvironment();
+        environment.getPropertySources().addLast(new SystemEnvironmentPropertySource("systemEnvironment", env));
+        environment.getPropertySources().addFirst(new MapPropertySource(
+                TracingExporterEnvironmentPostProcessor.BOOT_OTEL_PROPERTY_SOURCE,
+                Map.of(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY, bootValue)));
+        return environment;
+    }
+
+    @Test
+    void aFullUrlInTheBaseVariableIsNotDoubledEvenWhenBootMappedItFirst() {
+        MockEnvironment env = withBootMapping("http://collector:4318/v1/traces/v1/traces",
+                Map.of(TracingExporterEnvironmentPostProcessor.OTEL_ENDPOINT_ENV, "http://collector:4318/v1/traces"));
+
+        processor.postProcessEnvironment(env, null);
+
+        assertThat(env.getProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY))
+                .isEqualTo("http://collector:4318/v1/traces");
+    }
+
+    @Test
+    void theOperatorsOwnVariableBeatsBootsMappingOfTheOtelVariables() {
+        MockEnvironment env = withBootMapping("http://collector:4318/v1/traces", Map.of(
+                TracingExporterEnvironmentPostProcessor.OTEL_ENDPOINT_ENV, "http://collector:4318",
+                "MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT", "http://chosen:4318/own/path"));
+
+        processor.postProcessEnvironment(env, null);
+
+        assertThat(env.getProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY))
+                .isEqualTo("http://chosen:4318/own/path");
+    }
+
+    @Test
+    void runningTwiceGivesTheSameAnswer() {
+        MockEnvironment env = withBootMapping("http://collector:4318/v1/traces/v1/traces",
+                Map.of(TracingExporterEnvironmentPostProcessor.OTEL_ENDPOINT_ENV, "http://collector:4318/v1/traces"));
+
+        processor.postProcessEnvironment(env, null);
+        processor.postProcessEnvironment(env, null);
+
+        assertThat(env.getProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY))
+                .isEqualTo("http://collector:4318/v1/traces");
+        assertThat(env.getPropertySources().stream()
+                .filter(p -> p.getName().equals(TracingExporterEnvironmentPostProcessor.PROPERTY_SOURCE_NAME)))
+                .hasSize(1);
+    }
+
+    @Test
+    void itRunsAfterEveryEnvironmentPostProcessorBootsIncluded() {
+        assertThat(processor.getOrder()).isGreaterThan(
+                org.springframework.boot.support.EnvironmentPostProcessorApplicationListener.DEFAULT_ORDER);
     }
 }

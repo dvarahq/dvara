@@ -32,9 +32,14 @@ import org.springframework.boot.opentelemetry.autoconfigure.OpenTelemetrySdkAuto
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.IntFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -108,6 +113,92 @@ class TracingWiringTest {
                         context.getBean(SdkTracerProvider.class).forceFlush().join(10, TimeUnit.SECONDS);
                         assertThat(paths).isNotEmpty().allMatch("/v1/traces"::equals);
                     });
+        } finally {
+            collector.stop(0);
+        }
+    }
+
+    // The cases below start a real application in its own JVM, with the variables in its real
+    // environment. Spring Boot maps the OpenTelemetry variables itself, from the process
+    // environment, and always adds /v1/traces to the generic one; a runner in this JVM never runs
+    // that mapping, so it cannot see the two disagree. Nothing here turns Boot's mapping off.
+
+    @Test
+    void aFullTracesUrlInTheBaseVariableIsNotDoubledWithBootsOwnMappingActive() throws Exception {
+        // What earlier docs told people to set. Boot alone would post to /v1/traces/v1/traces.
+        assertThat(exportedPaths(port -> Map.of(
+                "OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:" + port + "/v1/traces"), List.of()))
+                .isNotEmpty().allMatch("/v1/traces"::equals);
+    }
+
+    @Test
+    void aBaseUrlInTheBaseVariableGetsTheTracesPathWithBootsOwnMappingActive() throws Exception {
+        assertThat(exportedPaths(port -> Map.of(
+                "OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:" + port), List.of()))
+                .isNotEmpty().allMatch("/v1/traces"::equals);
+    }
+
+    @Test
+    void theTracesVariableIsUsedAsWrittenAndWins() throws Exception {
+        assertThat(exportedPaths(port -> Map.of(
+                "OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:" + port + "/base",
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://127.0.0.1:" + port + "/custom/traces"), List.of()))
+                .isNotEmpty().allMatch("/custom/traces"::equals);
+    }
+
+    @Test
+    void theOperatorsOwnEnvironmentVariableBeatsTheOtelVariables() throws Exception {
+        assertThat(exportedPaths(port -> Map.of(
+                "OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:" + port,
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://127.0.0.1:" + port + "/custom/traces",
+                "MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT", "http://127.0.0.1:" + port + "/operator/env"),
+                List.of()))
+                .isNotEmpty().allMatch("/operator/env"::equals);
+    }
+
+    @Test
+    void theOperatorsOwnPropertyBeatsTheOtelVariables() throws Exception {
+        assertThat(exportedPaths(port -> Map.of(
+                "OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:" + port + "/v1/traces"),
+                List.of("--management.opentelemetry.tracing.export.otlp.endpoint=http://127.0.0.1:%d/operator/arg")))
+                .isNotEmpty().allMatch("/operator/arg"::equals);
+    }
+
+    /**
+     * Runs {@link OtlpExportProbe} in a new JVM with the given environment and arguments ({@code %d}
+     * in an argument is the collector port), and returns the paths the collector was sent spans on.
+     */
+    private static List<String> exportedPaths(IntFunction<Map<String, String>> environment, List<String> args)
+            throws Exception {
+        List<String> paths = new CopyOnWriteArrayList<>();
+        HttpServer collector = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        collector.createContext("/", exchange -> {
+            paths.add(exchange.getRequestURI().getPath());
+            exchange.getRequestBody().readAllBytes();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        collector.start();
+        try {
+            int port = collector.getAddress().getPort();
+            List<String> command = new ArrayList<>(List.of(
+                    Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                    "-Dmanagement.tracing.sampling.probability=1.0",
+                    "-cp", System.getProperty("java.class.path"),
+                    OtlpExportProbe.class.getName()));
+            args.forEach(arg -> command.add(arg.formatted(port)));
+            ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+            // Only the variables this case sets: none inherited from the machine running the build.
+            builder.environment().keySet().removeIf(name -> name.startsWith("OTEL_")
+                    || name.startsWith("MANAGEMENT_OPENTELEMETRY_") || name.startsWith("MANAGEMENT_TRACING_"));
+            builder.environment().putAll(environment.apply(port));
+            Process process = builder.start();
+            byte[] output = process.getInputStream().readAllBytes();
+            assertThat(process.waitFor(2, TimeUnit.MINUTES)).isTrue();
+            assertThat(process.exitValue())
+                    .as("the probe application exits cleanly:%n%s", new String(output, StandardCharsets.UTF_8))
+                    .isZero();
+            return paths;
         } finally {
             collector.stop(0);
         }
