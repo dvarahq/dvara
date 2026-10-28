@@ -272,8 +272,12 @@ public class ProviderDispatcher {
                         (p, r) -> p.streamChat(ProviderShapes.forProvider(p, r)));
             }
             try {
-                return primary.streamChat(ProviderShapes.forProvider(primary, req));
+                Iterator<SseChunk> stream = primary.streamChat(ProviderShapes.forProvider(primary, req));
+                return countedForCanary(stream, primary.name(), req, routingCtx, startNanos);
             } catch (GatewayException e) {
+                // A stream that fails to open is counted as an error, as a failed chat call is.
+                recordCanaryMetrics(primary.name(), req, null, (System.nanoTime() - startNanos) / 1_000_000,
+                        true, routingCtx);
                 // Only while opening the stream (#7 REQ-CPF-08): once an iterator is returned, a failure
                 // reading it is the caller's, and no second provider starts.
                 if (isFallbackEligible(e)) {
@@ -1143,6 +1147,29 @@ public class ProviderDispatcher {
             metrics.recordCanaryRequest(routeConfig.getId(), variant, request.getModel());
 
             setCanaryVariantAttribute(variant);
+        });
+    }
+
+    /**
+     * On a canary route, the stream is counted once for its variant when it ends or fails, with the
+     * time to its end as its latency. Off a canary route it is returned as it came.
+     */
+    private Iterator<SseChunk> countedForCanary(Iterator<SseChunk> stream, String providerName, ChatRequest request,
+                                                RequestContext routingCtx, long startNanos) {
+        RouteConfig route = routingCtx.getMatchedRoute();
+        if (stream == null || route == null || route.getCanaryConfig() == null) {
+            return stream;
+        }
+        return new CanaryCountedStream(stream, (usage, error) -> {
+            long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
+            ChatResponse priced = usage == null ? null
+                    : ChatResponse.builder().model(request.getModel()).usage(usage).build();
+            try {
+                recordCanaryMetrics(providerName, request, priced, latencyMs, error, routingCtx);
+            } catch (RuntimeException e) {
+                // Counting must never break the caller's stream.
+                log.warn("Could not record canary metrics for a streamed call on route {}", route.getId(), e);
+            }
         });
     }
 
