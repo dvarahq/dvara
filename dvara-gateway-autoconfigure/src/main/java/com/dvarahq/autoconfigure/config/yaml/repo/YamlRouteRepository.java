@@ -43,13 +43,13 @@ public class YamlRouteRepository implements RouteRepository {
      *
      * <p>Must stay in step with {@code GatewayYamlLoader.isValidStrategy}, which runs first and
      * fails the boot on anything it does not recognise; a strategy understood here but rejected
-     * there cannot be configured at all.
+     * there cannot be configured at all. {@code canary} is not here: the file has no fields for a
+     * canary's settings, so validation refuses it and points to the startup properties.
      */
     public static RouteConfig.Strategy toStrategy(String strategy) {
         return switch (strategy == null ? "" : strategy.toLowerCase()) {
             case "round-robin" -> RouteConfig.Strategy.ROUND_ROBIN;
             case "weighted" -> RouteConfig.Strategy.WEIGHTED;
-            case "canary" -> RouteConfig.Strategy.CANARY;
             default -> RouteConfig.Strategy.MODEL_PREFIX;
         };
     }
