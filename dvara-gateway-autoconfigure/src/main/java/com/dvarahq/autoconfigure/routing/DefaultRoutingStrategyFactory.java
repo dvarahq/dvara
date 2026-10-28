@@ -44,7 +44,7 @@ public class DefaultRoutingStrategyFactory implements RoutingStrategyFactory {
             case LATENCY_AWARE, COST_AWARE, GEO_AWARE, INTELLIGENT -> throw new IllegalStateException(
                     "route '" + config.getId() + "': strategy " + config.getStrategy()
                             + " is not part of this build. Supported: model-prefix, round-robin, weighted, canary.");
-            case MODEL_PREFIX -> new ModelPrefixRoutingStrategy();
+            case MODEL_PREFIX -> ModelPrefixRoutingStrategy.forRoute(config);
             case CANARY -> new CanaryRoutingStrategy(config.getCanaryConfig());
         };
     }

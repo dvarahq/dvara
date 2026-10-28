@@ -17,6 +17,7 @@ package com.dvarahq.autoconfigure.routing;
 
 import com.dvarahq.core.routing.CanaryConfig;
 import com.dvarahq.core.routing.CanaryRoutingStrategy;
+import com.dvarahq.core.routing.ListedProviderRoutingStrategy;
 import com.dvarahq.core.routing.ModelPrefixRoutingStrategy;
 import com.dvarahq.core.routing.RouteConfig;
 import com.dvarahq.core.routing.RoundRobinRoutingStrategy;
@@ -38,6 +39,17 @@ class DefaultRoutingStrategyFactoryTest {
                 .build();
 
         assertThat(factory.create(config)).isInstanceOf(ModelPrefixRoutingStrategy.class);
+    }
+
+    @Test
+    void modelPrefixWithProviders_sendsToTheListedProviders() {
+        RouteConfig config = RouteConfig.builder()
+                .id("dmr")
+                .strategy(RouteConfig.Strategy.MODEL_PREFIX)
+                .providers(List.of(RouteConfig.ProviderWeight.builder().provider("openai").weight(1).build()))
+                .build();
+
+        assertThat(factory.create(config)).isInstanceOf(ListedProviderRoutingStrategy.class);
     }
 
     @Test
