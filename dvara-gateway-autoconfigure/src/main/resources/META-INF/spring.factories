@@ -1,6 +1,7 @@
 # OTLP trace export is opt-in by endpoint. Boot gates the exporter on the presence of
 # management.opentelemetry.tracing.export.otlp.endpoint, and that key cannot be conditionally
-# omitted from YAML, so the mapping from OTEL_EXPORTER_OTLP_ENDPOINT happens here instead.
+# omitted from YAML, so the mapping from OTEL_EXPORTER_OTLP_ENDPOINT (a base URL; /v1/traces is
+# added) and OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (used as written) happens here instead.
 org.springframework.boot.EnvironmentPostProcessor=\
   com.dvarahq.gateway.autoconfigure.TracingExporterEnvironmentPostProcessor
 

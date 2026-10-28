@@ -57,8 +57,45 @@ class TracingExporterEnvironmentPostProcessorTest {
 
         processor.postProcessEnvironment(env, null);
 
+        // The generic variable is a base URL. Boot's exporter posts to the endpoint as given, so
+        // the traces path must be added or every span goes to the collector root and is lost.
         assertThat(env.getProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY))
-                .isEqualTo("http://collector:4318");
+                .isEqualTo("http://collector:4318/v1/traces");
+    }
+
+    @Test
+    void aBaseUrlThatAlreadyEndsInTheTracesPathIsNotDoubled() {
+        assertThat(TracingExporterEnvironmentPostProcessor.resolveEndpoint(null, "http://collector:4318/v1/traces"))
+                .isEqualTo("http://collector:4318/v1/traces");
+        assertThat(TracingExporterEnvironmentPostProcessor.resolveEndpoint(null, "http://collector:4318/v1/traces/"))
+                .isEqualTo("http://collector:4318/v1/traces");
+    }
+
+    @Test
+    void aTrailingSlashOnTheBaseUrlGivesNoDoubleSlash() {
+        assertThat(TracingExporterEnvironmentPostProcessor.resolveEndpoint(null, " http://collector:4318/ "))
+                .isEqualTo("http://collector:4318/v1/traces");
+        assertThat(TracingExporterEnvironmentPostProcessor.resolveEndpoint(null, "https://otel.example.com/otlp"))
+                .isEqualTo("https://otel.example.com/otlp/v1/traces");
+    }
+
+    @Test
+    void theTracesVariableIsUsedAsWrittenAndWinsOverTheBaseVariable() {
+        MockEnvironment env = new MockEnvironment();
+        env.getPropertySources().addFirst(new MapPropertySource("env", Map.of(
+                TracingExporterEnvironmentPostProcessor.OTEL_ENDPOINT_ENV, "http://base:4318",
+                TracingExporterEnvironmentPostProcessor.OTEL_TRACES_ENDPOINT_ENV, "http://traces:4318/custom")));
+
+        processor.postProcessEnvironment(env, null);
+
+        assertThat(env.getProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY))
+                .isEqualTo("http://traces:4318/custom");
+    }
+
+    @Test
+    void aBlankTracesVariableFallsBackToTheBaseVariable() {
+        assertThat(TracingExporterEnvironmentPostProcessor.resolveEndpoint("  ", "http://base:4318"))
+                .isEqualTo("http://base:4318/v1/traces");
     }
 
     @Test
@@ -86,5 +123,18 @@ class TracingExporterEnvironmentPostProcessorTest {
 
         assertThat(env.getProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY))
                 .isEqualTo("http://chosen:4318");
+    }
+
+    @Test
+    void anExplicitBootPropertyAlsoBeatsTheTracesVariable() {
+        MockEnvironment env = new MockEnvironment();
+        env.setProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY, "http://chosen:4318/v1/traces");
+        env.getPropertySources().addLast(new MapPropertySource("env", Map.of(
+                TracingExporterEnvironmentPostProcessor.OTEL_TRACES_ENDPOINT_ENV, "http://ignored:4318/v1/traces")));
+
+        processor.postProcessEnvironment(env, null);
+
+        assertThat(env.getProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY))
+                .isEqualTo("http://chosen:4318/v1/traces");
     }
 }

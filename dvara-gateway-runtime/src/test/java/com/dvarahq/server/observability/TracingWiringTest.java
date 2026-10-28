@@ -16,6 +16,9 @@
 package com.dvarahq.server.observability;
 
 import com.dvarahq.autoconfigure.ObservabilityAutoConfiguration;
+import com.dvarahq.gateway.autoconfigure.TracingExporterEnvironmentPostProcessor;
+import com.sun.net.httpserver.HttpServer;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
@@ -27,6 +30,11 @@ import org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.O
 import org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.otlp.OtlpTracingAutoConfiguration;
 import org.springframework.boot.opentelemetry.autoconfigure.OpenTelemetrySdkAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+
+import java.net.InetSocketAddress;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,9 +48,10 @@ class TracingWiringTest {
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withPropertyValues(
                     "management.tracing.sampling.probability=1.0",
-                    // Base URL (the OTel SDK appends /v1/traces). Presence of this property is what
-                    // creates the OtlpTracingConnectionDetails → OTLP span exporter.
-                    "management.opentelemetry.tracing.export.otlp.endpoint=http://localhost:4318")
+                    // The full traces URL: Boot's exporter posts to this property exactly as given and
+                    // adds no path. Presence of this property is what creates the
+                    // OtlpTracingConnectionDetails → OTLP span exporter.
+                    "management.opentelemetry.tracing.export.otlp.endpoint=http://localhost:4318/v1/traces")
             .withConfiguration(AutoConfigurations.of(
                     ObservationAutoConfiguration.class,
                     MicrometerTracingAutoConfiguration.class,
@@ -65,5 +74,42 @@ class TracingWiringTest {
                     .as("real ObservationRegistry, not the NOOP fallback")
                     .isNotSameAs(ObservationRegistry.NOOP);
         });
+    }
+
+    @Test
+    void theStandardBaseUrlVariableExportsToTheTracesPath() throws Exception {
+        // OTEL_EXPORTER_OTLP_ENDPOINT is a base URL by the OpenTelemetry convention. This checks the
+        // path the exporter really posts to, not only that an exporter bean exists.
+        List<String> paths = new CopyOnWriteArrayList<>();
+        HttpServer collector = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        collector.createContext("/", exchange -> {
+            paths.add(exchange.getRequestURI().getPath());
+            exchange.getRequestBody().readAllBytes();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        collector.start();
+        try {
+            new ApplicationContextRunner()
+                    .withPropertyValues(
+                            "management.tracing.sampling.probability=1.0",
+                            "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:" + collector.getAddress().getPort())
+                    .withInitializer(context -> new TracingExporterEnvironmentPostProcessor()
+                            .postProcessEnvironment(context.getEnvironment(), null))
+                    .withConfiguration(AutoConfigurations.of(
+                            ObservationAutoConfiguration.class,
+                            MicrometerTracingAutoConfiguration.class,
+                            OpenTelemetrySdkAutoConfiguration.class,
+                            OpenTelemetryTracingAutoConfiguration.class,
+                            OtlpTracingAutoConfiguration.class,
+                            ObservabilityAutoConfiguration.class))
+                    .run(context -> {
+                        context.getBean(Tracer.class).nextSpan().name("probe").start().end();
+                        context.getBean(SdkTracerProvider.class).forceFlush().join(10, TimeUnit.SECONDS);
+                        assertThat(paths).isNotEmpty().allMatch("/v1/traces"::equals);
+                    });
+        } finally {
+            collector.stop(0);
+        }
     }
 }
