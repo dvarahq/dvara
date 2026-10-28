@@ -128,9 +128,18 @@ public final class GatewayYamlLoader {
                         || r.getPinnedModelVersion().chars().anyMatch(Character::isWhitespace))) {
                     errors.add(prefix + ".pinned_model_version: a model id, with no spaces");
                 }
-                if (r.getStrategy() != null && !isValidStrategy(r.getStrategy())) {
+                if (r.getStrategy() != null && "canary".equalsIgnoreCase(r.getStrategy().strip())) {
+                    // A route entry here has no fields for the baseline, the candidate or the
+                    // split, so a canary route could only fail later, at startup, on a missing
+                    // config that names neither the route nor the cause. Refused here instead.
+                    errors.add(prefix + ".strategy: route " + routeName(r) + " uses 'canary', which "
+                            + "gateway.yaml cannot carry: it has no fields for the baseline, the candidate "
+                            + "or the split. Set this "
+                            + "route in the dvara.llm-gateway.routes startup properties, with a "
+                            + "canary-config block, and remove it from gateway.yaml");
+                } else if (r.getStrategy() != null && !isValidStrategy(r.getStrategy())) {
                     errors.add(prefix + ".strategy: unsupported strategy '" + r.getStrategy()
-                            + "' (valid in this build: model-prefix, round-robin, weighted, canary)");
+                            + "' (valid in gateway.yaml: model-prefix, round-robin, weighted)");
                 }
             }
         }
@@ -457,6 +466,12 @@ public final class GatewayYamlLoader {
         };
     }
 
+    /** Names a route for a message: by its id, or by its model when it has no id. */
+    private static String routeName(GatewayYamlConfig.RouteEntry r) {
+        return r.getId() == null || r.getId().isBlank()
+                ? "for model '" + r.getModel() + "'" : "'" + r.getId() + "'";
+    }
+
     /**
      * The strategies a route may name in this build.
      *
@@ -466,7 +481,7 @@ public final class GatewayYamlLoader {
      */
     private static boolean isValidStrategy(String strategy) {
         return switch (strategy.toLowerCase()) {
-            case "model-prefix", "round-robin", "weighted", "canary" -> true;
+            case "model-prefix", "round-robin", "weighted" -> true;
             default -> false;
         };
     }
