@@ -62,6 +62,12 @@ public class BatchJob {
     /** The provider's output file id, discovered when the job reaches a terminal state (nullable until then). */
     private String outputFileId;
 
+    /**
+     * The provider's error file id: the requests of the batch that failed, one line each. Discovered with the
+     * output file (nullable until then, and null for a batch with no failed request).
+     */
+    private String errorFileId;
+
     /** Last observed provider status (e.g. {@code validating}, {@code in_progress}, {@code completed}). */
     private String status;
 
