@@ -280,6 +280,80 @@ class InMemoryResponseCacheTest {
                 .isEmpty();
     }
 
+    @Test
+    void oneEndUsersAnswerIsNotServedToAnother() {
+        // The messages may carry what only the first user may see: a tool result, retrieved context.
+        var cache = new InMemoryResponseCache(10, 300);
+        ChatRequest base = request("acme", "gpt-4o", "hello");
+        cache.put(base.toBuilder().user("alice").build(), response("for-alice"));
+
+        assertThat(cache.get(base.toBuilder().user("bob").build()))
+                .as("another end user of the same workspace")
+                .isEmpty();
+        assertThat(cache.get(base))
+                .as("a caller that names no end user")
+                .isEmpty();
+        assertThat(cache.get(base.toBuilder().user("alice").build()))
+                .map(ChatResponse::getId).contains("for-alice");
+    }
+
+    @Test
+    void callersThatNameNoEndUserShareWithinTheirWorkspace() {
+        var cache = new InMemoryResponseCache(10, 300);
+        cache.put(request("acme", "gpt-4o", "hello"), response("shared"));
+
+        assertThat(cache.get(request("acme", "gpt-4o", "hello").toBuilder().user(" ").build()))
+                .as("a blank user names no one")
+                .map(ChatResponse::getId).contains("shared");
+    }
+
+    @Test
+    void aResponsesBodysSafetyIdentifierIsTheEndUser() {
+        var cache = new InMemoryResponseCache(10, 300);
+        cache.put(withResponsesBody("{\"model\":\"gpt-4o\",\"input\":\"hi\",\"safety_identifier\":\"alice\"}"),
+                response("for-alice"));
+
+        assertThat(cache.get(withResponsesBody(
+                "{\"model\":\"gpt-4o\",\"input\":\"hi\",\"safety_identifier\":\"bob\"}")))
+                .isEmpty();
+        assertThat(cache.get(withResponsesBody(
+                "{\"model\":\"gpt-4o\",\"input\":\"hi\",\"safety_identifier\":\"alice\"}")))
+                .isPresent();
+    }
+
+    @Test
+    void parallelToolCallsIsPartOfTheIdentity() {
+        var cache = new InMemoryResponseCache(10, 300);
+        ChatRequest base = request("acme", "gpt-4o", "hello");
+        cache.put(base.toBuilder().parallelToolCalls(true).build(), response("parallel"));
+
+        assertThat(cache.get(base.toBuilder().parallelToolCalls(false).build())).isEmpty();
+        assertThat(cache.get(base)).isEmpty();
+        assertThat(cache.get(base.toBuilder().parallelToolCalls(true).build())).isPresent();
+    }
+
+    @Test
+    void aToolErrorIsADifferentTurnFromTheSameTextAsASuccess() {
+        var cache = new InMemoryResponseCache(10, 300);
+        ChatRequest ok = conversation("call_1", "call_1", "{}");
+        cache.put(ok, response("ok"));
+
+        List<MultimodalMessage> messages = new java.util.ArrayList<>(ok.getMessages());
+        messages.set(2, messages.get(2).toBuilder().toolError(true).build());
+        ChatRequest failed = ok.toBuilder().messages(messages).build();
+
+        assertThat(cache.get(failed)).isEmpty();
+        assertThat(cache.get(ok)).isPresent();
+    }
+
+    private static ChatRequest withResponsesBody(String json) {
+        var raw = com.dvarahq.core.model.OpenAiResponsesBody.parse(
+                json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return request("acme", "gpt-4o", "hi").toBuilder()
+                .openAiResponses(new com.dvarahq.core.model.OpenAiResponsesBody(raw, List.of(), List.of()))
+                .build();
+    }
+
     private static ChatRequest withImage(String data, String detail) {
         return ChatRequest.builder().model("gpt-4o")
                 .messages(List.of(MultimodalMessage.builder().role("user")
