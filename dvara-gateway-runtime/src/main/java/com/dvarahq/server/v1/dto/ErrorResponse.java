@@ -51,13 +51,21 @@ public class ErrorResponse {
         private String message;
         @Schema(description = "Error type category", example = "invalid_request_error")
         private String type;
-        @Schema(description = "Machine-readable error code", example = "NO_PROVIDER")
+        @Schema(description = "Machine-readable error code", example = "no_provider")
         private String code;
         @Schema(description = "Parameter that caused the error")
         private String param;
         @JsonProperty("trace_id")
         @Schema(description = "Request trace ID for debugging", example = "a1b2c3d4e5f6789012345678abcdef01")
         private String traceId;
+
+        /**
+         * The code as it goes on the wire: always lower case, whatever case the code was raised in. A client
+         * matches codes exactly, so one written in upper case by any path would be missed.
+         */
+        public String getCode() {
+            return code == null ? null : code.toLowerCase(java.util.Locale.ROOT);
+        }
 
         // ---- structured details ----
         // Extra fields an error carries beside the fixed ones, written into the object under their
