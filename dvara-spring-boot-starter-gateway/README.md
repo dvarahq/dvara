@@ -56,7 +56,8 @@ gateway's `--generate-key` and put their hashes in a `gateway.yaml` your applica
 with `DVARA_CONFIG_FILE`. It brings Spring MVC, Bean Validation, springdoc, the actuator, the
 Prometheus registry and OpenTelemetry tracing, because the endpoints need them. The health probes are open; `/actuator/prometheus` answers only
 to the key in `DVARA_ACTUATOR_METRICS_API_KEY`, and the other actuator endpoints only to
-`DVARA_ACTUATOR_API_KEY`.
+`DVARA_ACTUATOR_API_KEY`. The two keys must differ: the application does not start if they are
+the same.
 
 ## Ending a stream that is already running
 

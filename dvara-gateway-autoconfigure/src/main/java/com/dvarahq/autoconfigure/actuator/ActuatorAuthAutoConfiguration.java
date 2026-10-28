@@ -58,6 +58,7 @@ public class ActuatorAuthAutoConfiguration {
             @Value("${server.port:8080}") String serverPort) {
 
         refuseASeparateManagementPort(managementPort, serverPort);
+        refuseTheSameKeyForBoth(apiKey, metricsApiKey);
         warnAboutUnsetKeys(apiKey, metricsApiKey);
 
         FilterRegistrationBean<Filter> registration =
@@ -84,6 +85,25 @@ public class ActuatorAuthAutoConfiguration {
                 + " serves the actuator endpoints from a separate context, which this build's actuator"
                 + " authentication cannot protect. Remove it, set it to the application port, or set -1"
                 + " to turn the management endpoints off.");
+    }
+
+    /**
+     * The metrics key is handed to every Prometheus scraper. If it equals the operator key, each
+     * scraper can also read {@code /actuator/gateway-status} and every other operator path. The two
+     * are separate settings for exactly that reason, so the same value for both refuses the start.
+     * When either is blank there is nothing to compare.
+     */
+    static void refuseTheSameKeyForBoth(String apiKey, String metricsApiKey) {
+        if (apiKey == null || apiKey.isBlank() || metricsApiKey == null || metricsApiKey.isBlank()) {
+            return;
+        }
+        if (apiKey.equals(metricsApiKey)) {
+            throw new IllegalStateException("dvara.actuator.metrics-api-key (DVARA_ACTUATOR_METRICS_API_KEY)"
+                    + " must differ from dvara.actuator.api-key (DVARA_ACTUATOR_API_KEY), but both have the"
+                    + " same value. The metrics key goes to every Prometheus scraper, and with the same value"
+                    + " each scraper could also read /actuator/gateway-status. Generate a second key, for"
+                    + " example with `openssl rand -base64 32`.");
+        }
     }
 
     /**
@@ -114,11 +134,6 @@ public class ActuatorAuthAutoConfiguration {
         if (metricsUnset) {
             log.warn("dvara.actuator.metrics-api-key is not set — /actuator/prometheus will answer"
                     + " 401 on every scrape.");
-        }
-        if (!apiKeyUnset && !metricsUnset && apiKey.equals(metricsApiKey)) {
-            log.warn("dvara.actuator.api-key and dvara.actuator.metrics-api-key are the SAME value."
-                    + " They are separate so that the credential handed to every Prometheus scraper"
-                    + " does not also read /actuator/gateway-status; sharing one gives that away.");
         }
     }
 }
