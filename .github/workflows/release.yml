@@ -5,13 +5,14 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+*'
       - 'v[0-9]+.[0-9]+.[0-9]+*'
-  # For a tag already on Maven Central whose image or GitHub Release did not get published. It
-  # publishes nothing to Central: the image is built from the jar Central holds for that tag, with
-  # the Dockerfile of the branch it is run from, and the GitHub Release is created on the tag.
+  # For an existing tag whose image or GitHub Release did not get published. It publishes nothing
+  # to Central. The image is built, with the Dockerfile of the branch it is run from, from the
+  # tag's runnable jar: the GitHub Release's copy, else Central's (releases up to 1.12.0 put it
+  # there), else one built from the tag. The GitHub Release is created on the tag.
   workflow_dispatch:
     inputs:
       tag:
-        description: An existing release tag, such as 1.10.0, whose jar is already on Maven Central
+        description: An existing release tag, such as 1.10.0
         required: true
         type: string
 
@@ -87,8 +88,12 @@ jobs:
       # a GitHub Release and a pushed image for a version that has no Maven artifact, announced as
       # shipped. Nothing here is recoverable by re-running once the tag has been advertised, so the
       # cheap failure is the one that happens first.
+      # A release candidate (a tag such as 1.8.5-rc1) is not published to Maven Central. Central
+      # counts every release against a monthly limit and keeps it forever, and a candidate is for
+      # testing: it gets the image and a GitHub prerelease with the runnable jar. Test a candidate
+      # of a dependent build against the snapshot instead.
       - name: The Central credentials are present
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.version.outputs.prerelease == 'false'
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
@@ -123,8 +128,25 @@ jobs:
       # in the release profile to restore the manual gate.
       #
       # Tests are skipped because the step above already ran them on this exact tree.
+      # Central's limits for the organization are 7 releases, 1,000 files and 80 MB a month, and a
+      # release over them is refused once the grace period is used up. The bundle is built and
+      # measured first, with nothing uploaded; scripts/central-budget.py says what the budget is
+      # and how to pass it for a release that cannot wait (the CENTRAL_BUDGET_OVERRIDE variable).
+      - name: The release fits Maven Central's monthly limits
+        if: github.event_name == 'push' && steps.version.outputs.prerelease == 'false'
+        env:
+          MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+          CENTRAL_BUDGET_OVERRIDE: ${{ vars.CENTRAL_BUDGET_OVERRIDE }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./mvnw -B -ntp -Prelease -DskipTests deploy -Ddvara.central.skipUpload=true
+          python3 scripts/central-budget.py check-bundle target/central-publishing/central-bundle.zip --version "$VERSION"
+
       - name: Publish to Maven Central
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.version.outputs.prerelease == 'false'
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
@@ -144,12 +166,15 @@ jobs:
           (cd dvara-gateway-server/target && sha256sum "$(basename "$JAR")" > "$(basename "$JAR").sha256")
           echo "path=$JAR" >> "$GITHUB_OUTPUT"
 
-      # The run for an existing tag takes the jar Central holds, checked against Central's own
-      # SHA-256, so the image carries exactly what was released.
-      - name: The released jar from Maven Central
+      # The run for an existing tag takes the tag's runnable jar from, in order: the GitHub Release,
+      # checked against the .sha256 published beside it; Maven Central, checked against Central's
+      # own SHA-256 (releases up to 1.12.0 put it there); or a build of the tag. The first two
+      # give the image exactly the jar that was released.
+      - name: The released runnable jar
         if: github.event_name == 'workflow_dispatch'
         id: central-jar
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -157,14 +182,26 @@ jobs:
           git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null \
             || { echo "::error::there is no tag $TAG"; exit 1; }
           NAME=dvara-gateway-server-$VERSION-app.jar
+          OUT=dvara-gateway-server/target
+          mkdir -p "$OUT/image"
           URL=https://repo1.maven.org/maven2/com/dvarahq/dvara-gateway-server/$VERSION/$NAME
-          mkdir -p dvara-gateway-server/target/image
-          curl -fsSL -o "dvara-gateway-server/target/$NAME" "$URL" \
-            || { echo "::error::$NAME is not on Maven Central (yet)"; exit 1; }
-          EXPECTED=$(curl -fsSL "$URL.sha256" | cut -d' ' -f1)
-          (cd dvara-gateway-server/target && echo "$EXPECTED  $NAME" | sha256sum -c - && sha256sum "$NAME" > "$NAME.sha256")
-          cp "dvara-gateway-server/target/$NAME" dvara-gateway-server/target/image/app.jar
-          echo "path=dvara-gateway-server/target/$NAME" >> "$GITHUB_OUTPUT"
+          if gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$NAME" -p "$NAME.sha256" -D "$OUT" --clobber 2>/dev/null; then
+            (cd "$OUT" && sha256sum -c "$NAME.sha256")
+            echo "the jar attached to the GitHub Release $TAG"
+          elif curl -fsSL -o "$OUT/$NAME" "$URL"; then
+            EXPECTED=$(curl -fsSL "$URL.sha256" | cut -d' ' -f1)
+            (cd "$OUT" && echo "$EXPECTED  $NAME" | sha256sum -c - && sha256sum "$NAME" > "$NAME.sha256")
+            echo "the jar on Maven Central"
+          else
+            echo "::notice::$NAME is neither on the GitHub Release nor on Maven Central; building it from $TAG"
+            git fetch -q --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG"
+            git worktree add -q --detach "$RUNNER_TEMP/tag" "$TAG"
+            (cd "$RUNNER_TEMP/tag" && ./mvnw -B -ntp -DskipTests -pl dvara-gateway-server -am package)
+            cp "$RUNNER_TEMP/tag/$OUT/$NAME" "$OUT/$NAME"
+            (cd "$OUT" && sha256sum "$NAME" > "$NAME.sha256")
+          fi
+          cp "$OUT/$NAME" "$OUT/image/app.jar"
+          echo "path=$OUT/$NAME" >> "$GITHUB_OUTPUT"
           echo "revision=$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3

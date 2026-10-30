@@ -87,6 +87,9 @@
                         </goals>
                         <configuration>
                             <classifier>app</classifier>
+                            <!-- Built always; deployed only when dvara.app-jar.attach is true
+                                 (snapshots). A release attaches it to the GitHub Release. -->
+                            <attach>${dvara.app-jar.attach}</attach>
                             <mainClass>com.dvarahq.server.GatewayServerApplication</mainClass>
                         </configuration>
                     </execution>
