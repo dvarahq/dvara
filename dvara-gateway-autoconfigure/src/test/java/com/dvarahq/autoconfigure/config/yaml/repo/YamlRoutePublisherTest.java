@@ -19,6 +19,8 @@ import com.dvarahq.autoconfigure.GatewayProperties;
 import com.dvarahq.autoconfigure.RoutingAutoConfiguration;
 import com.dvarahq.autoconfigure.config.yaml.GatewayYamlConfig;
 import com.dvarahq.autoconfigure.routing.DefaultRoutingStrategyFactory;
+import com.dvarahq.core.model.ChatRequest;
+import com.dvarahq.core.provider.LlmProvider;
 import com.dvarahq.core.routing.CanaryRoutingStrategy;
 import com.dvarahq.core.routing.ModelPrefixRoutingStrategy;
 import com.dvarahq.core.routing.RoutingEngine;
@@ -91,6 +93,27 @@ class YamlRoutePublisherTest {
         assertThat(YamlRoutePublisher.alwaysMatchesFirst("gpt-4o", "gpt*")).isFalse();
         assertThat(YamlRoutePublisher.alwaysMatchesFirst("gpt-4*", "gpt*")).isFalse();
         assertThat(YamlRoutePublisher.alwaysMatchesFirst("claude*", "gpt-4o")).isFalse();
+    }
+
+    @Test
+    void aFileRouteWithNoStrategy_sendsNamesNoProviderClaims_toItsProvider() {
+        // The Docker Model Runner recipe: ai/* names, served by an OpenAI-compatible endpoint.
+        RoutingEngine engine = engineWith();
+        new YamlRoutePublisher(storeWith(fileRoute("dmr", "ai/*")), engine, factory).run(null);
+
+        LlmProvider openai = namedProvider("openai", "gpt");
+        LlmProvider chosen = engine.route(ChatRequest.builder().model("ai/llama3.2").build(),
+                List.of(namedProvider("anthropic", "claude"), openai));
+
+        assertThat(chosen).isSameAs(openai);
+    }
+
+    private static LlmProvider namedProvider(String name, String prefix) {
+        LlmProvider p = org.mockito.Mockito.mock(LlmProvider.class);
+        org.mockito.Mockito.when(p.name()).thenReturn(name);
+        org.mockito.Mockito.when(p.supports(org.mockito.ArgumentMatchers.any())).thenAnswer(inv ->
+                ((ChatRequest) inv.getArgument(0)).getModel().startsWith(prefix));
+        return p;
     }
 
     private RoutingEngine engineWith(GatewayProperties.RouteDefinition... defs) {
