@@ -102,11 +102,13 @@ HOOK
   echo "$d"
 }
 
-# cut <dir> <args...>: runs the script in the clone with the stand-in gh.
+# cut <dir> <args...>: runs the script in the clone with the stand-in gh. The month's Maven Central
+# release count is 0 unless the case sets CENTRAL_RELEASES_THIS_MONTH, so no case asks Central.
 cut() {
   local d="$1"; shift
   (cd "$d/cut" && PATH="$WORK/bin:$PATH" STUB_DIR="$d/stub" STUB_ORIGIN="$d/origin.git" \
-     CUT_RELEASE_POLL=0 scripts/cut-release.sh "$@") > "$d/out.log" 2>&1
+     CUT_RELEASE_POLL=0 CENTRAL_RELEASES_THIS_MONTH="${CENTRAL_RELEASES_THIS_MONTH:-0}" \
+     scripts/cut-release.sh "$@") > "$d/out.log" 2>&1
 }
 unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 refs() { git --git-dir="$1/origin.git" for-each-ref --format='%(refname) %(objectname)'; }
@@ -175,6 +177,16 @@ check "exits non-zero" '[ "$rc" != 0 ]'
 check "nothing is tagged" '! git --git-dir="$d/origin.git" show-ref -q --tags "$X-rc1"'
 check "says main moved" 'grep -q "main moved" "$d/out.log"'
 check "no second pull request" '[ ! -f "$d/stub/pr-102.head" ]'
+
+echo "case: a month whose Maven Central budget is used up"
+d="$(fresh budget)"; before="$(refs "$d")"
+CENTRAL_RELEASES_THIS_MONTH=4 cut "$d" "$X"; rc=$?
+check "plan says it would refuse" '[ "$rc" = 0 ] && grep -q "WOULD REFUSE: this month already has 4 releases on Maven Central" "$d/out.log"'
+CENTRAL_RELEASES_THIS_MONTH=4 cut "$d" "$X" --execute; rc=$?
+check "--execute refuses" '[ "$rc" != 0 ] && grep -q "refused: this month already has 4 releases" "$d/out.log"'
+check "nothing reached origin" '[ "$(refs "$d")" = "$before" ]'
+CENTRAL_RELEASES_THIS_MONTH=4 cut "$d" "$X" --rc 1; rc=$?
+check "a candidate is not counted: it is not published to Central" '[ "$rc" = 0 ] && grep -q "not published to Maven Central" "$d/out.log" && ! grep -q "WOULD REFUSE: this month" "$d/out.log"'
 
 echo "case: the script never pushes to main"
 check "no push to main was attempted in any case" '! grep -rq "push declined" "$WORK"/*/out.log'

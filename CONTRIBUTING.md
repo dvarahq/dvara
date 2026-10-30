@@ -77,9 +77,22 @@ Requires **JDK 25** and Maven 3.9+ (or the bundled `./mvnw`).
 
 For maintainers.
 
-A pushed version tag builds, tests, publishes the artifacts to Maven Central, attaches the jar to a
-GitHub Release and publishes the image. The Central upload stops at a staged bundle and is released
-by hand, because a version on Central can never be deleted or replaced.
+A pushed version tag builds, tests, publishes the artifacts to Maven Central, attaches the runnable
+jar to a GitHub Release and publishes the image. The upload is released at once, and a version on
+Central can never be deleted or replaced, so the tag is the point of no return.
+
+Maven Central limits each organization's releases per calendar month (UTC): 7 releases, 1,000 files
+and 80 MB, shared with every other project the organization publishes. So:
+
+- A release candidate (`--rc`) is not published to Central. It gets the image and a GitHub
+  prerelease with the runnable jar.
+- The runnable jar (`-app.jar`, about 53 MB) is attached to the GitHub Release, not uploaded to
+  Central. Snapshots still carry it.
+- The budget is 4 releases a month. `scripts/cut-release.sh` shows how many this month has used,
+  and release.yml measures the bundle and refuses the upload when a release would go over
+  (`scripts/central-budget.py`). For a release that cannot wait, such as a security fix, tell
+  central-support@sonatype.com first, then set the repository variable `CENTRAL_BUDGET_OVERRIDE`
+  to the reason and re-run the release. Delete the variable afterwards.
 
 `scripts/cut-release.sh` makes the tag. It opens a pull request that sets the version, waits for
 the `build` and `gate` checks, squash-merges it and tags the merge commit. A second pull request

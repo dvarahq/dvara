@@ -250,3 +250,6 @@ jobs:
 
       - name: The README names the current release
         run: python3 scripts/check-readme-versions.py
+
+      - name: The Maven Central budget check refuses what it should
+        run: python3 -B scripts/test_central_budget.py

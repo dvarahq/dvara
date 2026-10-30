@@ -6,7 +6,10 @@
 # nothing here pushes to main.
 #
 # A tag publishes: release.yml builds the tagged commit, releases it on Maven Central, pushes the
-# image and creates the GitHub Release. A version on Central can never be replaced, so this prints
+# image and creates the GitHub Release. A release candidate is not published to Central, which
+# counts every release against a monthly limit; it gets the image and a GitHub prerelease. Central
+# allows the organization 7 releases a month and the budget here is 4 (scripts/central-budget.py);
+# the plan says how many this month has used. A version on Central can never be replaced, so this prints
 # its whole plan and changes nothing unless --execute is given, and every check that can refuse
 # runs before anything is pushed.
 #
@@ -226,6 +229,23 @@ if [ "$CURRENT" != "$VERSION-SNAPSHOT" ]; then
   echo "   NOTE: main works towards ${CURRENT%-SNAPSHOT}, and this cuts $TAG"
 fi
 
+# Maven Central counts the organization's releases per calendar month. release.yml measures the
+# bundle and refuses the upload when the budget is used up; this says so before anything is tagged.
+if [ -n "$RC" ]; then
+  echo "   $TAG is a release candidate: not published to Maven Central"
+else
+  # -B: no __pycache__, which would leave the working tree unclean for the checks below.
+  MAX_RELEASES="$(python3 -B scripts/central-budget.py budget)"
+  if USED="$(python3 -B scripts/central-budget.py releases-this-month 2>/dev/null)"; then
+    echo "   Maven Central releases this month: $USED of a budget of $MAX_RELEASES"
+    if [ "$USED" -ge "$MAX_RELEASES" ]; then
+      guard "this month already has $USED releases on Maven Central (budget $MAX_RELEASES); release.yml would refuse the upload. Wait for next month, or set the repository variable CENTRAL_BUDGET_OVERRIDE to the reason"
+    fi
+  else
+    echo "   NOTE: could not read this month's Maven Central releases; release.yml checks again before uploading"
+  fi
+fi
+
 # Both commits are made here, before anything is pushed, so that every check on their content can
 # still refuse. They are made on a detached HEAD: no local branch is created or moved.
 run git checkout -q --detach "$MAIN_SHA"
@@ -359,8 +379,13 @@ else
 fi
 
 step "After"
-echo "   release.yml publishes $TAG to Maven Central, pushes the image and creates the GitHub"
-echo "   Release. Watch it with:"
+if [ -n "$RC" ]; then
+  echo "   release.yml pushes the $TAG image and creates the GitHub prerelease; a candidate is not"
+  echo "   published to Maven Central. Watch it with:"
+else
+  echo "   release.yml publishes $TAG to Maven Central, pushes the image and creates the GitHub"
+  echo "   Release. Watch it with:"
+fi
 echo "     gh run list -R $REPO --workflow release.yml --branch $TAG --limit 1"
 
 echo

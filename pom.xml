@@ -60,6 +60,14 @@
 
     <properties>
         <java.version>25</java.version>
+        <!-- Whether the runnable gateway jar (classifier app, about 53 MB) is deployed with the
+             other artifacts. Snapshots carry it; the release profile turns it off, because Maven
+             Central counts every released megabyte against a monthly limit and that one jar was
+             most of each release. Releases attach it to the GitHub Release instead. -->
+        <dvara.app-jar.attach>true</dvara.app-jar.attach>
+        <!-- true builds the Central bundle without uploading it: the release workflow measures the
+             bundle against the monthly limits before the real upload. -->
+        <dvara.central.skipUpload>false</dvara.central.skipUpload>
         <jacoco.argLine/>
         <jacoco.version>0.8.13</jacoco.version>
         <resilience4j.version>2.2.0</resilience4j.version>
@@ -223,6 +231,9 @@
     <profiles>
         <profile>
             <id>release</id>
+            <properties>
+                <dvara.app-jar.attach>false</dvara.app-jar.attach>
+            </properties>
             <build>
                 <plugins>
                     <plugin>
@@ -267,8 +278,10 @@
                              Sonatype's API grew a "warnings" field that the 0.7.0 client refuses as
                              an unknown property. The artifacts were never in question — the bundle
                              reached VALIDATED — but the build failed after the upload and every
-                             later step was skipped, so no image and no release were produced. -->
-                        <version>0.11.0</version>
+                             later step was skipped, so no image and no release were produced.
+                             0.12.0 adds skipUpload, which the release workflow uses to measure the
+                             bundle against Central's monthly limits before uploading it. -->
+                        <version>0.12.0</version>
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
@@ -284,6 +297,11 @@
                                  Chosen deliberately, reversing the earlier recommendation to keep
                                  this false. Set it back to false to restore the manual gate. -->
                             <autoPublish>true</autoPublish>
+                            <!-- md5 and sha1 only, which is what Central requires. The default adds
+                                 sha256 and sha512 for every file, a third more files per release
+                                 against Central's monthly file-count limit. -->
+                            <checksums>required</checksums>
+                            <skipUpload>${dvara.central.skipUpload}</skipUpload>
                         </configuration>
                     </plugin>
                 </plugins>
