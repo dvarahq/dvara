@@ -25,12 +25,15 @@ RUN groupadd -r dvara && useradd -r -g dvara -d /app dvara
 # and logs that it could not use it.
 ENV JAVA_TOOL_OPTIONS="-XX:+UseG1GC -XX:MaxRAMPercentage=75 -XX:+AlwaysPreTouch -XX:+ExitOnOutOfMemoryError"
 
-COPY --from=extract /app/extracted/dependencies/ ./
-COPY --from=extract /app/extracted/spring-boot-loader/ ./
-COPY --from=extract /app/extracted/snapshot-dependencies/ ./
-COPY --from=extract /app/extracted/application/ ./
+# The files are owned by dvara as they are copied. A separate `chown -R` afterwards would store
+# every jar a second time in a new layer, about 54 MB.
+COPY --from=extract --chown=dvara:dvara /app/extracted/dependencies/ ./
+COPY --from=extract --chown=dvara:dvara /app/extracted/spring-boot-loader/ ./
+COPY --from=extract --chown=dvara:dvara /app/extracted/snapshot-dependencies/ ./
+COPY --from=extract --chown=dvara:dvara /app/extracted/application/ ./
 
-RUN mkdir -p /var/lib/dvara && chown -R dvara:dvara /app /var/lib/dvara
+# Not recursive: /app itself must be writable for the AOT cache below.
+RUN mkdir -p /var/lib/dvara && chown dvara:dvara /app /var/lib/dvara
 
 USER dvara
 
