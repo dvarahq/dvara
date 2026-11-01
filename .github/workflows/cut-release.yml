@@ -24,6 +24,10 @@ on:
         description: 'Type "execute" to cut the release; anything else prints the plan and stops'
         required: true
         default: 'plan'
+      next:
+        description: 'Optional: the version main opens at afterwards, X.Y.Z-SNAPSHOT. Blank means the next patch'
+        required: false
+        default: ''
 
 # Every write goes through RELEASE_TOKEN. The job's own token only reads.
 permissions:
@@ -77,8 +81,10 @@ jobs:
           VERSION: ${{ inputs.version }}
           RC: ${{ inputs.rc }}
           CONFIRM: ${{ inputs.confirm }}
+          NEXT: ${{ inputs.next }}
         run: |
           args=("$VERSION")
           [ -n "$RC" ] && args+=(--rc "$RC")
+          [ -n "$NEXT" ] && args+=(--next "$NEXT")
           [ "$CONFIRM" = "execute" ] && args+=(--execute)
           scripts/cut-release.sh "${args[@]}"
