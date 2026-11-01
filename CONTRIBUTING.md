@@ -100,9 +100,10 @@ then names the release in the README and opens the next `-SNAPSHOT`. It only pri
 unless given `--execute`.
 
 The same script runs from the Actions tab: **cut-release** → Run workflow, with the version, the
-release-candidate number (blank for a final release) and `confirm`. It plans unless `confirm` is
-`execute`. The workflow needs a repository secret, `RELEASE_TOKEN`, and stops at its first step
-without it. The job's own token cannot be used: a pull request or tag it pushes starts no other
+release-candidate number (blank for a final release), `next` (the version main opens at
+afterwards, such as `1.14.0-SNAPSHOT`; blank means the next patch) and `confirm`. It plans
+unless `confirm` is `execute`. The workflow needs a repository secret, `RELEASE_TOKEN`, and stops
+at its first step without it. The job's own token cannot be used: a pull request or tag it pushes starts no other
 workflow, so the checks would never run and nothing would be published. To create the token:
 
 1. Signed in as grabdoc: Settings → Developer settings → Personal access tokens → Fine-grained
