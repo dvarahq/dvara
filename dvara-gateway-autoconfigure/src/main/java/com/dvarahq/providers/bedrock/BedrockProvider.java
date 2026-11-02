@@ -66,9 +66,21 @@ public class BedrockProvider extends AbstractLlmProvider {
     /** Fetches an https image URL to inline it (#55); off unless the operator turned fetching on. */
     private ImageFetcher imageFetcher = ImageFetcher.DISABLED;
 
+    /** Whether every body this provider builds marks its stable prefix for Bedrock's prompt cache. */
+    private boolean promptCacheMarker;
+
     /** Lets an https image URL be fetched and inlined (#55), with the fetcher's own address and size checks. */
     public void setImageFetcher(ImageFetcher imageFetcher) {
         this.imageFetcher = imageFetcher != null ? imageFetcher : ImageFetcher.DISABLED;
+    }
+
+    /**
+     * Adds a {@code cachePoint} after the stable start of every Converse body (system prompt, or tools), from
+     * {@code dvara.llm-gateway.providers.bedrock.prompt-cache-marker}. A request can also ask for it
+     * ({@link ChatRequest#getPromptCacheMarker()}), which only the gateway sets.
+     */
+    public void setPromptCacheMarker(boolean promptCacheMarker) {
+        this.promptCacheMarker = promptCacheMarker;
     }
 
     public BedrockProvider(SecretProvider secretProvider, String region, RestClient.Builder builder) {
@@ -172,7 +184,7 @@ public class BedrockProvider extends AbstractLlmProvider {
 
     private Map<String, Object> buildBody(ChatRequest request) {
         List<Map<String, Object>> messages = new ArrayList<>();
-        List<Map<String, String>> systemMessages = new ArrayList<>();
+        List<Map<String, Object>> systemMessages = new ArrayList<>();
 
         for (MultimodalMessage msg : request.getMessages()) {
             if ("system".equals(msg.getRole())) {
@@ -230,6 +242,16 @@ public class BedrockProvider extends AbstractLlmProvider {
             toolChoice = Map.of("tool", Map.of("name", STRUCTURED_OUTPUT_TOOL));
         } else if (request.getToolChoice() != null) {
             toolChoice = mapToolChoice(request.getToolChoice());
+        }
+
+        // The cache marker: Converse caches what comes before a cachePoint. One after the system blocks covers the
+        // tools too (Bedrock reads tools, then system); with no system prompt it goes after the tools. The same text
+        // in the same order either way.
+        boolean mark = promptCacheMarker || Boolean.TRUE.equals(request.getPromptCacheMarker());
+        if (mark && !systemMessages.isEmpty()) {
+            systemMessages.add(Map.of("cachePoint", Map.of("type", "default")));
+        } else if (mark && !tools.isEmpty()) {
+            tools.add(Map.of("cachePoint", Map.of("type", "default")));
         }
 
         if (!tools.isEmpty()) {

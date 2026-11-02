@@ -87,6 +87,10 @@ dvara:
         # top_k are left out and named in X-Gateway-Params-Not-Applied) or 2023-06-01. A Messages API caller's own
         # body always goes with the caller's version.
         api-version: ${ANTHROPIC_API_VERSION:}
+        # Mark the system prompt and tools of every body the gateway builds with cache_control, so Anthropic caches
+        # them. Off by default: a cache write costs more than a plain read. A caller's own Messages API body is
+        # never changed.
+        prompt-cache-marker: ${ANTHROPIC_PROMPT_CACHE_MARKER:false}
       gemini:
         enabled: ${GEMINI_ENABLED:false}
         api-key: ${GEMINI_API_KEY:}
@@ -127,6 +131,9 @@ dvara:
         access-key: ${AWS_ACCESS_KEY_ID:}
         secret-key: ${AWS_SECRET_ACCESS_KEY:}
         region: ${AWS_REGION:us-east-1}
+        # Add a cachePoint after the system prompt (or tools) of every Converse body, so Bedrock caches it. Off by
+        # default, for the same reason.
+        prompt-cache-marker: ${BEDROCK_PROMPT_CACHE_MARKER:false}
       mock:
         enabled: ${MOCK_PROVIDER_ENABLED:false}
     # The HTTP client every provider is called through. Empty falls back to spring.http.clients.*.

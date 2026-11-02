@@ -94,6 +94,13 @@ public class GatewayProperties {
          * own body is always sent with the caller's own version.
          */
         private String apiVersion;
+        /**
+         * Anthropic only: mark the stable start of every body the gateway builds (system prompt and tools) with
+         * {@code cache_control}, so Anthropic caches it. Off by default: a cache write costs more than a plain read,
+         * so it pays off only when the same prefix comes back within the cache's lifetime. A caller's own Messages
+         * API body is never changed.
+         */
+        private boolean promptCacheMarker;
     }
 
     /**
@@ -171,6 +178,11 @@ public class GatewayProperties {
         private String  accessKey;
         private String  secretKey;
         private String  region    = "us-east-1";
+        /**
+         * Add a {@code cachePoint} after the stable start of every Converse body (system prompt, or tools), so
+         * Bedrock caches it. Off by default, for the same reason as Anthropic's.
+         */
+        private boolean promptCacheMarker;
     }
 
     @Data
