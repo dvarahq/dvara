@@ -82,6 +82,17 @@ public class AnthropicProvider extends AbstractLlmProvider {
 
     private final RestClient restClient;
     private final String apiVersion;
+    /** Whether every body this provider builds marks its stable prefix for Anthropic's prompt cache. */
+    private boolean promptCacheMarker;
+
+    /**
+     * Marks the stable start of every body this provider builds (system prompt and tools) with
+     * {@code cache_control}, from {@code dvara.llm-gateway.providers.anthropic.prompt-cache-marker}. A request can
+     * also ask for it ({@link ChatRequest#getPromptCacheMarker()}), which only the gateway sets.
+     */
+    public void setPromptCacheMarker(boolean promptCacheMarker) {
+        this.promptCacheMarker = promptCacheMarker;
+    }
 
     public AnthropicProvider(SecretProvider secretProvider, RestClient.Builder builder) {
         this(secretProvider, DEFAULT_BASE_URL, builder);
@@ -436,6 +447,9 @@ public class AnthropicProvider extends AbstractLlmProvider {
         }
 
         if (!tools.isEmpty()) body.put("tools", tools);
+        if (promptCacheMarker || Boolean.TRUE.equals(request.getPromptCacheMarker())) {
+            markCachePrefix(body, systemPrompt, tools);
+        }
 
         thinkFor(request, body);
 
@@ -449,6 +463,26 @@ public class AnthropicProvider extends AbstractLlmProvider {
         }
 
         return body;
+    }
+
+    /**
+     * Marks the end of the stable prefix for Anthropic's prompt cache. Anthropic caches tools, then system, in that
+     * order, so one breakpoint on the system prompt covers both; with no system prompt it goes on the last tool. The
+     * system prompt is sent as one text block instead of a string, which Anthropic reads as the same text. Nothing
+     * else changes: the same text in the same order.
+     */
+    private static void markCachePrefix(Map<String, Object> body, String systemPrompt,
+                                        List<Map<String, Object>> tools) {
+        Map<String, Object> ephemeral = Map.of("type", "ephemeral");
+        if (systemPrompt != null) {
+            Map<String, Object> block = new LinkedHashMap<>();
+            block.put("type", "text");
+            block.put("text", systemPrompt);
+            block.put("cache_control", ephemeral);
+            body.put("system", List.of(block));
+        } else if (!tools.isEmpty()) {
+            tools.get(tools.size() - 1).put("cache_control", ephemeral);
+        }
     }
 
     /**

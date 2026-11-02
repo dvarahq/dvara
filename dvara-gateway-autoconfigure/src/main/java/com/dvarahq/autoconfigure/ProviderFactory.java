@@ -82,8 +82,12 @@ public class ProviderFactory {
         return switch (type) {
             case "openai" -> new OpenAiProvider(secret(), or(url, ProviderAutoConfiguration.OPENAI_BASE_URL),
                     keyed(type, base));
-            case "anthropic" -> new AnthropicProvider(secret(), url, keyed(type, base),
-                    props.getProviders().getAnthropic().getApiVersion());
+            case "anthropic" -> {
+                AnthropicProvider anthropic = new AnthropicProvider(secret(), url, keyed(type, base),
+                        props.getProviders().getAnthropic().getApiVersion());
+                anthropic.setPromptCacheMarker(props.getProviders().getAnthropic().isPromptCacheMarker());
+                yield anthropic;
+            }
             case "gemini" -> {
                 GeminiProvider gemini = new GeminiProvider(secret(), or(url, ProviderAutoConfiguration.GEMINI_BASE_URL),
                         keyed(type, base));
@@ -124,6 +128,7 @@ public class ProviderFactory {
                 String region = blank(spec.region()) ? props.getProviders().getBedrock().getRegion() : spec.region().trim();
                 BedrockProvider bedrock = new BedrockProvider(secret(), region, wiring.tlsOnly(type, base));
                 bedrock.setImageFetcher(ProviderAutoConfiguration.imageFetcher(props));
+                bedrock.setPromptCacheMarker(props.getProviders().getBedrock().isPromptCacheMarker());
                 yield bedrock;
             }
             default -> throw new IllegalArgumentException("Unknown provider type '" + spec.type() + "'. Known: "

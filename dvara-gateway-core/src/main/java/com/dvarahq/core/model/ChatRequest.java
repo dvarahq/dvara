@@ -77,6 +77,15 @@ public class ChatRequest {
      */
     private String promptCacheKey;
     /**
+     * Whether to mark the stable start of the prompt (system prompt and tools) for the provider's prompt cache, on a
+     * body the gateway builds itself: Anthropic's {@code cache_control}, Bedrock's {@code cachePoint}. It changes no
+     * text and no order, only what the provider caches and bills. Set by the gateway, never by a caller: no request
+     * body maps it, and it is never written to JSON. Null or false means no marker unless the provider's own
+     * {@code prompt-cache-marker} setting is on. A caller's own Anthropic body is never changed.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Boolean promptCacheMarker;
+    /**
      * OpenAI's {@code parallel_tool_calls}: false asks for at most one tool call per turn. Sent to a provider that
      * can honour it (OpenAI's field, Anthropic's {@code disable_parallel_tool_use}); left out elsewhere. Null when
      * the client did not say.

@@ -289,8 +289,11 @@ public class ProviderAutoConfiguration implements org.springframework.context.En
     public AnthropicProvider anthropicProvider(GatewayProperties props, SecretProvider secretProvider,
                                                RestClient.Builder restClientBuilder) {
         RestClient.Builder builder = clientFor("anthropic", restClientBuilder, secretProvider);
-        return new AnthropicProvider(secretProvider, props.getProviders().getAnthropic().getBaseUrl(), builder,
+        AnthropicProvider provider = new AnthropicProvider(secretProvider,
+                props.getProviders().getAnthropic().getBaseUrl(), builder,
                 props.getProviders().getAnthropic().getApiVersion());
+        provider.setPromptCacheMarker(props.getProviders().getAnthropic().isPromptCacheMarker());
+        return provider;
     }
 
     @Bean
@@ -344,6 +347,7 @@ public class ProviderAutoConfiguration implements org.springframework.context.En
         RestClient.Builder builder = tlsOnly("bedrock", restClientBuilder);
         BedrockProvider provider = new BedrockProvider(secretProvider, cfg.getRegion(), builder);
         provider.setImageFetcher(imageFetcher(props));
+        provider.setPromptCacheMarker(cfg.isPromptCacheMarker());
         return provider;
     }
 
