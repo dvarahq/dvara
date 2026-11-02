@@ -25,7 +25,7 @@ There is no component scan to add and no configuration class to import. A plain
 | `GuardrailDetector` | prompt-injection and content checks |
 | `RateLimiter` | per key, per minute, in process. Off until `dvara.llm-gateway.rate-limit.enabled` is `true` |
 | `AuditWriter` | an HMAC-chained log on local disk once `dvara.audit.file.path` is set; check it with `FileAuditChainVerifier` |
-| `LlmProvider`, one per configured key | OpenAI, Anthropic, Gemini, Bedrock, Ollama and nine more |
+| `LlmProvider`, one per configured key | OpenAI, Anthropic, Gemini, Vertex AI, Bedrock, Ollama and nine more |
 | `RoutingStrategy`, `RoutingEngine` | model-prefix, round-robin, weighted and canary routing |
 
 Configure it the way you configure anything in Spring Boot: `application.yml` or environment

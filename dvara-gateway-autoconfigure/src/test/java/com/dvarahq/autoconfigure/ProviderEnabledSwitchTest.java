@@ -71,4 +71,23 @@ class ProviderEnabledSwitchTest {
                         "dvara.llm-gateway.providers.azure-openai.base-url=https://example.openai.azure.com")
                 .run(ctx -> assertThat(ctx).hasSingleBean(AzureOpenAiProvider.class));
     }
+
+    /** Vertex AI registers on enabled, has no API key, and will not start without a project. */
+    @Test
+    void vertexAiRegistersOnEnabled_inItsLocation_andRefusesToStartWithoutAProject() {
+        runner.withPropertyValues("dvara.llm-gateway.providers.vertex-ai.enabled=true",
+                        "dvara.llm-gateway.providers.vertex-ai.project=my-project",
+                        "dvara.llm-gateway.providers.vertex-ai.location=europe-west4")
+                .run(ctx -> {
+                    assertThat(ctx).hasSingleBean(com.dvarahq.providers.vertexai.VertexAiProvider.class);
+                    var vertex = ctx.getBean(com.dvarahq.providers.vertexai.VertexAiProvider.class);
+                    assertThat(vertex.project()).isEqualTo("my-project");
+                    assertThat(vertex.location()).isEqualTo("europe-west4");
+                });
+        runner.withPropertyValues("dvara.llm-gateway.providers.vertex-ai.project=my-project")
+                .run(ctx -> assertThat(ctx).doesNotHaveBean(com.dvarahq.providers.vertexai.VertexAiProvider.class));
+        runner.withPropertyValues("dvara.llm-gateway.providers.vertex-ai.enabled=true")
+                .run(ctx -> assertThat(ctx).getFailure().rootCause()
+                        .hasMessageContaining("Vertex AI is enabled but has no project"));
+    }
 }

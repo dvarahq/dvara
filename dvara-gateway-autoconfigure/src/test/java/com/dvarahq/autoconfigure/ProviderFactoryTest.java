@@ -38,7 +38,7 @@ class ProviderFactoryTest {
 
     @Test
     void everyTypeIsBuilt_underItsOwnName() {
-        runner.run(ctx -> {
+        runner.withPropertyValues("dvara.llm-gateway.providers.vertex-ai.project=my-project").run(ctx -> {
             ProviderFactory factory = ctx.getBean(ProviderFactory.class);
             for (String type : ProviderFactory.TYPES) {
                 String url = type.equals("azure-openai") ? "https://example.openai.azure.com" : null;
@@ -59,6 +59,31 @@ class ProviderFactoryTest {
                     .isThrownBy(() -> factory.create(new ProviderFactory.Spec("acme", null, null, null)))
                     .withMessageContaining("Unknown provider type 'acme'");
         });
+    }
+
+    /** Vertex AI reads the spec's region as its location and its project, each falling back to configuration. */
+    @Test
+    void vertexAiTakesItsLocationFromTheSpec_andNeedsAProject() {
+        runner.withPropertyValues("dvara.llm-gateway.providers.vertex-ai.project=my-project",
+                "dvara.llm-gateway.providers.vertex-ai.location=us-central1").run(ctx -> {
+            ProviderFactory factory = ctx.getBean(ProviderFactory.class);
+            var inEurope = (com.dvarahq.providers.vertexai.VertexAiProvider) factory.create(
+                    new ProviderFactory.Spec("vertex-ai", null, "europe-west4", null));
+            assertThat(inEurope.project()).isEqualTo("my-project");
+            assertThat(inEurope.location()).isEqualTo("europe-west4");
+            var configured = (com.dvarahq.providers.vertexai.VertexAiProvider) factory.create(
+                    new ProviderFactory.Spec("vertex-ai", null, null, null));
+            assertThat(configured.location()).isEqualTo("us-central1");
+            var ownProject = (com.dvarahq.providers.vertexai.VertexAiProvider) factory.create(
+                    new ProviderFactory.Spec("vertex-ai", null, "global", null, "other-project"));
+            assertThat(ownProject.project()).isEqualTo("other-project");
+        });
+        runner.run(ctx -> assertThat(((com.dvarahq.providers.vertexai.VertexAiProvider) ctx.getBean(ProviderFactory.class)
+                .create(new ProviderFactory.Spec("vertex-ai", null, null, null, "spec-project"))).project())
+                .as("a project in the spec needs none configured").isEqualTo("spec-project"));
+        runner.run(ctx -> assertThatIllegalArgumentException()
+                .isThrownBy(() -> ctx.getBean(ProviderFactory.class).create(new ProviderFactory.Spec("vertex-ai", null, null, null)))
+                .withMessageContaining("needs a Google Cloud project"));
     }
 
     @Test

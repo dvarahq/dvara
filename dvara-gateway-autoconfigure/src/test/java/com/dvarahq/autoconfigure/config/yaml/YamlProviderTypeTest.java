@@ -88,7 +88,7 @@ class YamlProviderTypeTest {
         for (YamlProviderType t : YamlProviderType.values()) table.put(t.type(), t.switchedOn());
         assertThat(table).as("the file accepts exactly the providers the auto-configuration registers, switched the way each condition reads")
                 .isEqualTo(registered);
-        assertThat(registered).hasSize(15);
+        assertThat(registered).hasSize(16);
     }
 
     /** Two providers have a fixed endpoint; the table must say so, or a file base_url maps into nothing. */
@@ -182,6 +182,28 @@ class YamlProviderTypeTest {
         props.clear();
         YamlProviderType.MOCK.mapTo(new GatewayYamlConfig.ProviderEntry(), props);
         assertThat(props).containsOnly(Map.entry("dvara.llm-gateway.providers.mock.enabled", "true"));
+    }
+
+    /** Vertex AI is switched on by enabled, takes its location from region, and needs a project. */
+    @Test
+    void vertexAiMapsItsProjectLocationAndCredentialsFile_andNeedsAProject() {
+        GatewayYamlConfig.ProviderEntry v = new GatewayYamlConfig.ProviderEntry();
+        v.setType("vertex-ai");
+        assertThat(YamlProviderType.VERTEX_AI.problems(v))
+                .containsExactly("project: required for vertex-ai, the Google Cloud project to call");
+        v.setProject("my-project");
+        v.setRegion("europe-west4");
+        v.setCredentialsFile("/etc/dvara/vertex-key.json");
+        v.setBaseUrl("https://psc.example");
+        assertThat(YamlProviderType.VERTEX_AI.problems(v)).isEmpty();
+        Map<String, Object> props = new HashMap<>();
+        YamlProviderType.VERTEX_AI.mapTo(v, props);
+        assertThat(props).containsOnly(
+                Map.entry("dvara.llm-gateway.providers.vertex-ai.enabled", "true"),
+                Map.entry("dvara.llm-gateway.providers.vertex-ai.project", "my-project"),
+                Map.entry("dvara.llm-gateway.providers.vertex-ai.location", "europe-west4"),
+                Map.entry("dvara.llm-gateway.providers.vertex-ai.credentials-file", "/etc/dvara/vertex-key.json"),
+                Map.entry("dvara.llm-gateway.providers.vertex-ai.base-url", "https://psc.example"));
     }
 
     @Test

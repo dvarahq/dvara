@@ -71,6 +71,15 @@ class PropertySecretProviderTest {
     }
 
     @Test
+    void getSecret_vertexAiCredentials_returnsTheJson() {
+        properties.getProviders().getVertexAi().setCredentials("{\"type\":\"service_account\"}");
+
+        PropertySecretProvider provider = new PropertySecretProvider(properties, new com.dvarahq.autoconfigure.GatewayEncryptionProperties());
+
+        assertThat(provider.getSecret("provider.vertex-ai.credentials")).hasValue("{\"type\":\"service_account\"}");
+    }
+
+    @Test
     void everyKeyedProviderResolvesItsOwnApiKey() {
         // Every provider whose bean registers on its api-key property must resolve here, or the
         // first request fails asking for a secret nothing can answer.

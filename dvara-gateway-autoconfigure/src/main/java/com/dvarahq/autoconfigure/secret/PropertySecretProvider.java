@@ -32,6 +32,7 @@ import java.util.Optional;
  *   <li>{@code provider.gemini.api-key} → {@code dvara.llm-gateway.providers.gemini.api-key}</li>
  *   <li>{@code provider.bedrock.access-key} → {@code dvara.llm-gateway.providers.bedrock.access-key}</li>
  *   <li>{@code provider.bedrock.secret-key} → {@code dvara.llm-gateway.providers.bedrock.secret-key}</li>
+ *   <li>{@code provider.vertex-ai.credentials} → {@code dvara.llm-gateway.providers.vertex-ai.credentials}</li>
  * </ul>
  * <p>
  * Values prefixed with {@code ENC:} are transparently decrypted using
@@ -124,6 +125,7 @@ public class PropertySecretProvider implements SecretProvider {
             case "provider.grok.api-key" -> properties.getProviders().getGrok().getApiKey();
             case "provider.bedrock.access-key" -> properties.getProviders().getBedrock().getAccessKey();
             case "provider.bedrock.secret-key" -> properties.getProviders().getBedrock().getSecretKey();
+            case "provider.vertex-ai.credentials" -> properties.getProviders().getVertexAi().getCredentials();
             default -> null;
         };
     }

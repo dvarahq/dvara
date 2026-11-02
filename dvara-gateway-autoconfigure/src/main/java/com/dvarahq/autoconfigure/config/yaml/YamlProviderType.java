@@ -29,7 +29,8 @@ import java.util.stream.Collectors;
  *
  * <p>Each type is switched on the way its bean condition reads it: most register when their
  * {@code api-key} property is set; Ollama, Bedrock and Mock have no key and register on
- * {@code enabled}. Whether a type reads a {@code base-url} is recorded too, because Bedrock and
+ * {@code enabled}, and so does Vertex AI, whose credential is a Google one. Whether a type reads a
+ * {@code base-url} is recorded too, because Bedrock and
  * Mock do not, and a {@code base_url} for one of those would map to a property nothing
  * reads, so it is refused instead. Azure OpenAI also needs a {@code base-url} to register, since no
  * default can name the resource; the post-processor checks that against the effective environment
@@ -52,6 +53,7 @@ public enum YamlProviderType {
     GROK("grok", Switch.API_KEY, true, false),
     OLLAMA("ollama", Switch.ENABLED, true, false),
     BEDROCK("bedrock", Switch.ENABLED, false, false),
+    VERTEX_AI("vertex-ai", Switch.ENABLED, true, false),
     MOCK("mock", Switch.ENABLED, false, false);
 
     /** What the bean condition reads. */
@@ -120,6 +122,9 @@ public enum YamlProviderType {
         if (!readsBaseUrl && !isBlank(entry.getBaseUrl())) {
             return List.of("base_url: not read by " + type + ", whose endpoint is fixed");
         }
+        if (this == VERTEX_AI && isBlank(entry.getProject())) {
+            return List.of("project: required for vertex-ai, the Google Cloud project to call");
+        }
         return List.of();
     }
 
@@ -135,6 +140,11 @@ public enum YamlProviderType {
                 props.put(p + "enabled", "true");
                 if (readsBaseUrl) {
                     putIfNotBlank(props, p + "base-url", entry.getBaseUrl());
+                }
+                if (this == VERTEX_AI) {
+                    putIfNotBlank(props, p + "project", entry.getProject());
+                    putIfNotBlank(props, p + "location", entry.getRegion());
+                    putIfNotBlank(props, p + "credentials-file", entry.getCredentialsFile());
                 } else if (this == BEDROCK) {
                     putIfNotBlank(props, p + "access-key", entry.getAccessKey());
                     putIfNotBlank(props, p + "secret-key", entry.getSecretKey());

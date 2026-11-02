@@ -513,7 +513,10 @@ class GatewayYamlLoaderTest {
                 && e.contains("(valid: " + YamlProviderType.namesForMessage() + ")"));
     }
 
-    /** Every provider type in the table is accepted, in either case, with a base_url where the provider reads one. */
+    /**
+     * Every provider type in the table is accepted, in either case, with a base_url where the provider reads one
+     * and a project for Vertex AI, which needs one.
+     */
     @Test
     void validate_everyShippedProviderType_isAccepted() {
         for (YamlProviderType type : YamlProviderType.values()) {
@@ -522,9 +525,20 @@ class GatewayYamlLoaderTest {
             entry.setType(type.type().toUpperCase());
             entry.setApiKey("k");
             if (type.readsBaseUrl()) entry.setBaseUrl("https://example.invalid/v1");
+            if (type == YamlProviderType.VERTEX_AI) entry.setProject("my-project");
             config.setProviders(List.of(entry));
             assertThat(GatewayYamlLoader.validate(config)).as(type.type()).isEmpty();
         }
+    }
+
+    @Test
+    void validate_vertexAiWithoutAProject_isRefused() {
+        GatewayYamlConfig config = new GatewayYamlConfig();
+        GatewayYamlConfig.ProviderEntry entry = new GatewayYamlConfig.ProviderEntry();
+        entry.setType("vertex-ai");
+        config.setProviders(List.of(entry));
+        assertThat(GatewayYamlLoader.validate(config))
+                .anyMatch(e -> e.contains("project: required for vertex-ai"));
     }
 
     /** A base_url on a provider whose endpoint is fixed would map into a property nothing reads; refused instead. */

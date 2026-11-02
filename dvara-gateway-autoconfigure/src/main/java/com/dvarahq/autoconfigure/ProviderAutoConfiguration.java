@@ -37,6 +37,7 @@ import com.dvarahq.providers.mock.MockScenarioLoader;
 import com.dvarahq.providers.mock.MockScenarioWatcher;
 import com.dvarahq.providers.ollama.OllamaProvider;
 import com.dvarahq.providers.openai.OpenAiProvider;
+import com.dvarahq.providers.vertexai.VertexAiProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -202,7 +203,8 @@ public class ProviderAutoConfiguration implements org.springframework.context.En
     }
 
     /**
-     * TLS only, with no upstream quota tracking: Ollama, which has no credential, and Bedrock. Bedrock's
+     * TLS only, with no upstream quota tracking: Ollama, which has no credential, Vertex AI, whose credential is a
+     * Google one rather than an API key, and Bedrock. Bedrock's
      * quota is per AWS key and region, but its credential is a key pair signed per request rather than one
      * {@code provider.<name>.api-key}, so the tracker, which keys on that single secret, is not applied.
      */
@@ -348,6 +350,28 @@ public class ProviderAutoConfiguration implements org.springframework.context.En
         BedrockProvider provider = new BedrockProvider(secretProvider, cfg.getRegion(), builder);
         provider.setImageFetcher(imageFetcher(props));
         provider.setPromptCacheMarker(cfg.isPromptCacheMarker());
+        return provider;
+    }
+
+    /**
+     * Gemini on Vertex AI. Registers on {@code enabled}: its credential is a Google one, found per call (see
+     * {@link VertexAiProvider}), not an API key. Like Bedrock it is TLS only, with no upstream quota tracking keyed
+     * on an API key. A project is required, and its absence stops startup rather than leave the provider out quietly.
+     */
+    @Bean
+    @ConditionalOnMissingBean(VertexAiProvider.class)
+    @ConditionalOnProperty(name = "dvara.llm-gateway.providers.vertex-ai.enabled", havingValue = "true")
+    public VertexAiProvider vertexAiProvider(GatewayProperties props, SecretProvider secretProvider,
+                                             RestClient.Builder restClientBuilder) {
+        GatewayProperties.VertexAiConfig cfg = props.getProviders().getVertexAi();
+        if (cfg.getProject() == null || cfg.getProject().isBlank()) {
+            throw new IllegalStateException("Vertex AI is enabled but has no project: set VERTEX_AI_PROJECT "
+                    + "(dvara.llm-gateway.providers.vertex-ai.project)");
+        }
+        VertexAiProvider provider = new VertexAiProvider(secretProvider, new VertexAiProvider.Settings(cfg.getProject(),
+                cfg.getLocation(), cfg.getBaseUrl(), cfg.getCredentialsFile(), cfg.getTokenUrl()),
+                tlsOnly(VertexAiProvider.NAME, restClientBuilder));
+        provider.setImageFetcher(imageFetcher(props));
         return provider;
     }
 

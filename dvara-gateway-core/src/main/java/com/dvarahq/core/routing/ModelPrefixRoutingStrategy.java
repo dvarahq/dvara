@@ -39,6 +39,7 @@ public class ModelPrefixRoutingStrategy implements RoutingStrategy {
         map.put("azure/", "AZURE_OPENAI_API_KEY and AZURE_OPENAI_BASE_URL");
         map.put("groq/", "GROQ_API_KEY");
         map.put("bedrock/", "BEDROCK_ENABLED=true");
+        map.put("vertex/", "VERTEX_AI_ENABLED=true and VERTEX_AI_PROJECT");
         map.put("gpt", "OPENAI_API_KEY");
         // Reasoning models (o1, o3, o4) and the chatgpt-* alias family route
         // through the same OpenAI provider but don't share the gpt prefix —
