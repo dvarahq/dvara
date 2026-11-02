@@ -557,6 +557,8 @@ public class ChatCompletionController {
                 .parallelToolCalls(req.getParallelToolCalls())
                 .reasoningEffort(req.getReasoningEffort() == null || req.getReasoningEffort().isBlank()
                         ? null : req.getReasoningEffort())
+                .promptCacheKey(req.getPromptCacheKey() == null || req.getPromptCacheKey().isBlank()
+                        ? null : req.getPromptCacheKey())
                 .metadata(req.getMetadata())
                 .build();
     }

@@ -63,6 +63,7 @@ public final class ProviderShapes {
                 left.add("reasoning effort " + out.getReasoningEffort());
             }
             if (!provider.takesOpenAiTuning() && out.getVerbosity() != null) left.add("verbosity " + out.getVerbosity());
+            if (!provider.takesOpenAiTuning() && out.getPromptCacheKey() != null) left.add("prompt_cache_key");
             if (!provider.takesOpenAiTuning() && out.getTools() != null && out.getTools().stream().anyMatch(t -> Boolean.TRUE.equals(t.getStrict()))) {
                 left.add("strict function tools");
             }
