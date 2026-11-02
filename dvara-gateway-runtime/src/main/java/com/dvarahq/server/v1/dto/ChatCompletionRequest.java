@@ -61,6 +61,13 @@ public class ChatCompletionRequest {
     @JsonProperty("reasoning_effort")
     private String reasoningEffort;
 
+    /**
+     * OpenAI's prompt-cache hint: calls that share a long prompt start and the same key go to the same cache. It
+     * changes no answer. Sent to OpenAI; other providers are not sent it, which is logged.
+     */
+    @JsonProperty("prompt_cache_key")
+    private String promptCacheKey;
+
     @JsonProperty("top_p")
     private Double topP;
 

@@ -29,6 +29,8 @@ import com.dvarahq.core.model.ChatResponse;
 import com.dvarahq.core.model.ContentBlock;
 import com.dvarahq.core.model.MultimodalMessage;
 import com.dvarahq.core.model.SseChunk;
+import com.dvarahq.core.util.JsonMapper;
+import com.dvarahq.server.v1.dto.ChatCompletionRequest;
 import com.dvarahq.core.model.ToolCallDelta;
 import com.dvarahq.core.model.ToolDefinition;
 import org.mockito.ArgumentCaptor;
@@ -2105,5 +2107,60 @@ class ChatCompletionControllerTest {
                 .andExpect(status().isOk());
 
         verify(dispatcher).chat(argThat(r -> "medium".equals(r.getReasoningEffort())));
+    }
+
+    /** OpenAI's prompt-cache hint reaches the dispatcher, which sends it where it is taken. */
+    @Test
+    void promptCacheKey_reachesTheProvider() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("c", "gpt-5.4-mini", "ok"));
+
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"model": "gpt-5.4-mini", "prompt_cache_key": "thread-42",
+                         "messages": [{"role": "user", "content": "hi"}]}
+                        """))
+                .andExpect(status().isOk());
+
+        verify(dispatcher).chat(argThat(r -> "thread-42".equals(r.getPromptCacheKey())));
+    }
+
+    @Test
+    void promptCacheKey_reachesTheProvider_onAStream() throws Exception {
+        when(dispatcher.streamChat(any())).thenReturn(List.of(
+                SseChunk.builder().id("s").model("gpt-5.4-mini").delta("ok").finishReason("stop").done(true).build())
+                .iterator());
+
+        MvcResult started = mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model": "gpt-5.4-mini", "stream": true, "prompt_cache_key": "thread-42",
+                                 "messages": [{"role": "user", "content": "hi"}]}
+                                """))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        mockMvc.perform(asyncDispatch(started)).andExpect(status().isOk());
+
+        verify(dispatcher).streamChat(argThat(r -> "thread-42".equals(r.getPromptCacheKey())));
+    }
+
+    /** A blank key is no key, as on /v1/responses: OpenAI is not sent an empty one. */
+    @Test
+    void aBlankPromptCacheKey_isNoKey() throws Exception {
+        when(dispatcher.chat(any())).thenReturn(chatResponse("c", "gpt-5.4-mini", "ok"));
+
+        mockMvc.perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"model": "gpt-5.4-mini", "prompt_cache_key": "  ",
+                         "messages": [{"role": "user", "content": "hi"}]}
+                        """))
+                .andExpect(status().isOk());
+
+        verify(dispatcher).chat(argThat(r -> r.getPromptCacheKey() == null));
+    }
+
+    @Test
+    void noPromptCacheKey_isNull() throws Exception {
+        ChatCompletionRequest req = JsonMapper.instance().readValue("""
+                {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}]}
+                """, ChatCompletionRequest.class);
+
+        assertThat(ChatCompletionController.toInternal(req).getPromptCacheKey()).isNull();
     }
 }

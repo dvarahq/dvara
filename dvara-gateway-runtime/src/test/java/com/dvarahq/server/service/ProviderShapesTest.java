@@ -167,4 +167,54 @@ class ProviderShapesTest {
             logger.setLevel(before);
         }
     }
+
+    /** The key is named in the log, not shown: it can identify a caller's user or thread. */
+    @Test
+    void aPromptCacheKeyLeftOutForAnotherProvider_isLoggedByName_notByValue() {
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProviderShapes.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        ch.qos.logback.classic.Level before = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            LlmProvider deepseek = mock(LlmProvider.class);
+            when(deepseek.name()).thenReturn("deepseek");
+            ChatRequest request = ChatRequest.builder().model("m").messages(List.of(MultimodalMessage.user("hi")))
+                    .promptCacheKey("user-4711-thread").build();
+
+            assertThat(ProviderShapes.forProvider(deepseek, request)).isSameAs(request);
+            assertThat(appender.list).singleElement().satisfies(e -> assertThat(e.getFormattedMessage())
+                    .contains("deepseek").contains("prompt_cache_key").doesNotContain("user-4711-thread"));
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(before);
+        }
+    }
+
+    @Test
+    void aPromptCacheKeyForAProviderThatTakesIt_isNotLogged() {
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProviderShapes.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        ch.qos.logback.classic.Level before = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            LlmProvider openai = mock(LlmProvider.class);
+            when(openai.name()).thenReturn("openai");
+            when(openai.takesOpenAiTuning()).thenReturn(true);
+            ProviderShapes.forProvider(openai, ChatRequest.builder().model("m")
+                    .messages(List.of(MultimodalMessage.user("hi"))).promptCacheKey("t-1").build());
+
+            assertThat(appender.list).isEmpty();
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(before);
+        }
+    }
 }
