@@ -26,6 +26,7 @@ import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.PropertySource;
 
+import java.io.IOException;
 import java.util.Map;
 
 /**
@@ -62,6 +63,11 @@ import java.util.Map;
  * looks for the operator's value, and puts its own answer in front of Boot's. It still implements
  * {@link EnvironmentPostProcessor} so code can call it directly; it is registered only as a listener.
  *
+ * <p><b>gRPC is refused.</b> Traces are sent with Java's own HTTP client, which speaks OTLP over HTTP
+ * only. When the transport is gRPC (Boot's property, or {@code OTEL_EXPORTER_OTLP_PROTOCOL=grpc},
+ * which Boot maps to it), an endpoint is set and no gRPC sender is on the classpath, the start stops
+ * with a message that says what to set instead.
+ *
  * <p>{@code TRACING_SAMPLING_PROBABILITY} is left alone: with no exporter registered the sampler
  * costs nothing.
  */
@@ -72,6 +78,12 @@ public class TracingExporterEnvironmentPostProcessor
     static final String OTEL_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT";
     static final String OTEL_TRACES_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
     static final String TRACES_PATH = "/v1/traces";
+    static final String BOOT_TRANSPORT_PROPERTY = "management.opentelemetry.tracing.export.otlp.transport";
+    static final String EXPORT_ENABLED_PROPERTY = "management.tracing.export.enabled";
+    static final String OTLP_EXPORT_ENABLED_PROPERTY = "management.tracing.export.otlp.enabled";
+    /** Present only when a library that can send OTLP over gRPC is on the classpath. */
+    static final String GRPC_SENDER_SERVICE =
+            "META-INF/services/io.opentelemetry.sdk.common.export.GrpcSenderProvider";
     /** The name Boot gives the property source its OpenTelemetry variable mapping writes. */
     static final String BOOT_OTEL_PROPERTY_SOURCE = "openTelemetryEnvironmentVariables";
     static final String PROPERTY_SOURCE_NAME = "dvaraTracingExporter";
@@ -91,6 +103,12 @@ public class TracingExporterEnvironmentPostProcessor
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        mapEndpoint(environment);
+        refuseGrpcWithoutSender(environment, application != null ? application.getClassLoader()
+                : Thread.currentThread().getContextClassLoader());
+    }
+
+    private void mapEndpoint(ConfigurableEnvironment environment) {
         var sources = environment.getPropertySources();
         sources.remove(PROPERTY_SOURCE_NAME);
         boolean bootMapped = sources.contains(BOOT_OTEL_PROPERTY_SOURCE)
@@ -118,6 +136,47 @@ public class TracingExporterEnvironmentPostProcessor
         // First, so it beats Boot's own mapping of the same variables. The operator's own value
         // was handled above.
         sources.addFirst(new MapPropertySource(PROPERTY_SOURCE_NAME, Map.of(BOOT_ENDPOINT_PROPERTY, endpoint)));
+    }
+
+    /**
+     * Stops the start when traces would be exported over gRPC and nothing on the classpath can send
+     * gRPC. The gateway sends OTLP with Java's own HTTP client, which speaks HTTP only. Without this
+     * the start still fails, but deep in a bean error that asks for a library an image cannot add.
+     * A host application that brings its own gRPC sender is left alone.
+     */
+    static void refuseGrpcWithoutSender(ConfigurableEnvironment environment, ClassLoader classLoader) {
+        if (!"grpc".equalsIgnoreCase(trim(environment.getProperty(BOOT_TRANSPORT_PROPERTY)))
+                || !hasText(environment.getProperty(BOOT_ENDPOINT_PROPERTY))
+                || !otlpExportEnabled(environment)
+                || hasGrpcSender(classLoader)) {
+            return;
+        }
+        throw new IllegalStateException("OTLP export over gRPC is not supported. DVARA sends traces"
+                + " over HTTP only. Set OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf (or"
+                + " management.opentelemetry.tracing.export.otlp.transport=http) and point the endpoint at"
+                + " the collector's OTLP/HTTP port, usually 4318.");
+    }
+
+    /** Mirrors Boot's own switch: the OTLP flag if set, otherwise the global flag, on by default. */
+    private static boolean otlpExportEnabled(ConfigurableEnvironment environment) {
+        String own = environment.getProperty(OTLP_EXPORT_ENABLED_PROPERTY);
+        String value = own != null ? own : environment.getProperty(EXPORT_ENABLED_PROPERTY);
+        return value == null || !"false".equalsIgnoreCase(value.trim());
+    }
+
+    private static boolean hasGrpcSender(ClassLoader classLoader) {
+        ClassLoader loader = classLoader != null ? classLoader
+                : TracingExporterEnvironmentPostProcessor.class.getClassLoader();
+        try {
+            return loader.getResources(GRPC_SENDER_SERVICE).hasMoreElements();
+        } catch (IOException e) {
+            // Unknown: let the exporter decide, as it did before.
+            return true;
+        }
+    }
+
+    private static String trim(String value) {
+        return value == null ? null : value.trim();
     }
 
     /**

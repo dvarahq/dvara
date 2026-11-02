@@ -16,14 +16,21 @@
 package com.dvarahq.gateway.autoconfigure;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.mock.env.MockEnvironment;
 
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * OTLP trace export is opt-in by endpoint.
@@ -194,5 +201,82 @@ class TracingExporterEnvironmentPostProcessorTest {
     void itRunsAfterEveryEnvironmentPostProcessorBootsIncluded() {
         assertThat(processor.getOrder()).isGreaterThan(
                 org.springframework.boot.support.EnvironmentPostProcessorApplicationListener.DEFAULT_ORDER);
+    }
+
+    // ---- gRPC is refused when nothing can send it --------------------------------------------------
+
+    private static final ClassLoader NO_GRPC_SENDER = new URLClassLoader(new URL[0], null);
+
+    private static MockEnvironment grpcEnvironment() {
+        return new MockEnvironment()
+                .withProperty(TracingExporterEnvironmentPostProcessor.BOOT_ENDPOINT_PROPERTY, "http://collector:4317")
+                .withProperty(TracingExporterEnvironmentPostProcessor.BOOT_TRANSPORT_PROPERTY, "GRPC");
+    }
+
+    @Test
+    void grpcWithAnEndpointAndNoSenderStopsTheStartAndSaysWhatToSet() {
+        assertThatThrownBy(() -> TracingExporterEnvironmentPostProcessor
+                .refuseGrpcWithoutSender(grpcEnvironment(), NO_GRPC_SENDER))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("OTLP export over gRPC is not supported")
+                .hasMessageContaining("OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf")
+                .hasMessageContaining("4318");
+    }
+
+    @Test
+    void grpcIsRefusedThroughTheFullPostProcessorToo() {
+        // This module has no OpenTelemetry sender on its classpath, like the gateway's image.
+        assertThatThrownBy(() -> processor.postProcessEnvironment(grpcEnvironment(), null))
+                .hasMessageContaining("OTLP export over gRPC is not supported");
+    }
+
+    @Test
+    void grpcIsAllowedWhenAHostApplicationBringsAGrpcSender(@TempDir Path dir) throws Exception {
+        Path service = dir.resolve(TracingExporterEnvironmentPostProcessor.GRPC_SENDER_SERVICE);
+        Files.createDirectories(service.getParent());
+        Files.writeString(service, "example.GrpcSenderProvider\n");
+        try (URLClassLoader withSender = new URLClassLoader(new URL[] {dir.toUri().toURL()}, null)) {
+            assertThatCode(() -> TracingExporterEnvironmentPostProcessor
+                    .refuseGrpcWithoutSender(grpcEnvironment(), withSender)).doesNotThrowAnyException();
+        }
+    }
+
+    @Test
+    void grpcWithNoEndpointIsLeftAlone() {
+        MockEnvironment env = new MockEnvironment()
+                .withProperty(TracingExporterEnvironmentPostProcessor.BOOT_TRANSPORT_PROPERTY, "grpc");
+        assertThatCode(() -> TracingExporterEnvironmentPostProcessor.refuseGrpcWithoutSender(env, NO_GRPC_SENDER))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void grpcWithExportTurnedOffIsLeftAlone() {
+        MockEnvironment global = grpcEnvironment()
+                .withProperty(TracingExporterEnvironmentPostProcessor.EXPORT_ENABLED_PROPERTY, "false");
+        MockEnvironment otlpOnly = grpcEnvironment()
+                .withProperty(TracingExporterEnvironmentPostProcessor.OTLP_EXPORT_ENABLED_PROPERTY, "false");
+        assertThatCode(() -> TracingExporterEnvironmentPostProcessor.refuseGrpcWithoutSender(global, NO_GRPC_SENDER))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> TracingExporterEnvironmentPostProcessor.refuseGrpcWithoutSender(otlpOnly, NO_GRPC_SENDER))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void theOtlpSwitchBeatsTheGlobalOneLikeBootsOwnCondition() {
+        // Boot exports when the OTLP flag is true even if the global flag is false, so the refusal
+        // must still fire.
+        MockEnvironment env = grpcEnvironment()
+                .withProperty(TracingExporterEnvironmentPostProcessor.EXPORT_ENABLED_PROPERTY, "false")
+                .withProperty(TracingExporterEnvironmentPostProcessor.OTLP_EXPORT_ENABLED_PROPERTY, "true");
+        assertThatThrownBy(() -> TracingExporterEnvironmentPostProcessor.refuseGrpcWithoutSender(env, NO_GRPC_SENDER))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void httpIsLeftAlone() {
+        MockEnvironment env = grpcEnvironment()
+                .withProperty(TracingExporterEnvironmentPostProcessor.BOOT_TRANSPORT_PROPERTY, "http");
+        assertThatCode(() -> TracingExporterEnvironmentPostProcessor.refuseGrpcWithoutSender(env, NO_GRPC_SENDER))
+                .doesNotThrowAnyException();
     }
 }

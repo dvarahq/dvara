@@ -181,6 +181,20 @@
                                     </includes>
                                     <message>Modules in this repository may depend only on the com.dvarahq artifacts listed in the root pom.</message>
                                 </bannedDependencies>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>com.squareup.okhttp3</exclude>
+                                        <exclude>com.squareup.okio</exclude>
+                                        <exclude>org.jetbrains.kotlin</exclude>
+                                        <exclude>io.opentelemetry:opentelemetry-exporter-sender-okhttp</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>com.squareup.okhttp3:*:*:*:test</include>
+                                        <include>com.squareup.okio:*:*:*:test</include>
+                                        <include>org.jetbrains.kotlin:*:*:*:test</include>
+                                    </includes>
+                                    <message>OkHttp, Okio and the Kotlin standard library are not shipped: traces are sent with Java's own HTTP client. Exclude them from whatever brings them, or keep them in test scope.</message>
+                                </bannedDependencies>
                             </rules>
                             <fail>true</fail>
                         </configuration>
