@@ -40,6 +40,10 @@ import java.util.UUID;
  * MDC so every log line emitted during request processing automatically includes the
  * trace ID.
  *
+ * <p>This filter runs first, before Spring's server observation filter opens the request's span, so
+ * on its own it finds no span. {@link SpanTraceIdFilter} runs inside that span and replaces a random id
+ * with the span's trace id, which continues the caller's W3C {@code traceparent}.
+ *
  * <p>Also extracts the optional {@code X-Session-Id} header and stores it as a request
  * attribute and MDC entry for agent session correlation.</p>
  */
@@ -114,6 +118,12 @@ public class TraceIdFilter extends OncePerRequestFilter {
             MDC.remove(MDC_TRACE_ID);
             MDC.remove(MDC_SESSION_ID);
         }
+    }
+
+    /** Whether the caller sent an {@code X-Trace-ID} this filter kept, rather than one it replaced. */
+    static boolean callerNamedTraceId(HttpServletRequest request) {
+        String header = request.getHeader(HEADER);
+        return header != null && SAFE_ID.matcher(header).matches();
     }
 
     private String resolveTraceId() {
