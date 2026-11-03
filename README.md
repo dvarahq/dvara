@@ -6,7 +6,7 @@
 
 <p align="center">
   An open-source, OpenAI-compatible gateway that governs every model call.<br>
-  14 providers. Policy, PII redaction, guardrails, rate limits and a tamper-evident audit log.
+  15 providers. Policy, PII redaction, guardrails, rate limits and a tamper-evident audit log.
 </p>
 
 <p align="center">
@@ -149,7 +149,7 @@ gateway key.
 - **OWASP LLM Top 10**: 5 risks covered, 2 partly. See [the table](https://dvarahq.com/docs/open-source/features#owasp-top-10-for-llm-applications).
 
 **APIs and routing**
-- **One API, 14 providers**, with routing by model prefix, round-robin, weighted split or canary.
+- **One API, 15 providers**, with routing by model prefix, round-robin, weighted split or canary.
 - **Retries, circuit breakers, timeouts and failover** to backup providers, on by default.
 - **Streaming**, including streamed tool calls.
 - **Anthropic Messages, OpenAI Responses and Gemini `generateContent` APIs**, so Claude Code, Codex CLI and Gemini CLI can point at the gateway.
@@ -163,15 +163,28 @@ gateway key.
 
 ## Supported providers
 
-OpenAI, Azure OpenAI, Anthropic, Google Gemini, AWS Bedrock, xAI Grok, Mistral, DeepSeek, Moonshot,
-ChatGLM (Zhipu), Cohere, Groq, Qwen and Ollama, plus a mock provider for tests and demos.
+OpenAI, Azure OpenAI, Anthropic, Google Gemini, Gemini on Google Cloud Vertex AI, AWS Bedrock, xAI Grok,
+Mistral, DeepSeek, Moonshot, ChatGLM (Zhipu), Cohere, Groq, Qwen and Ollama, plus a mock provider for tests and demos.
 [Details per provider](https://dvarahq.com/docs/open-source/apis#supported-providers) ·
 [provider docs](https://dvarahq.com/docs/providers).
+
+Vertex AI serves Gemini from your own Google Cloud project, in the region you name, so data stays there. Ask for a
+model as `vertex/<model>`, such as `vertex/gemini-2.5-flash` or `vertex/text-embedding-005`. It signs in with a
+Google credential rather than an API key: a service account key, or application default credentials (gcloud's login,
+or the attached service account on GKE with workload identity, Cloud Run or Compute Engine):
+
+```yaml
+providers:
+  - type: vertex-ai
+    project: my-project
+    region: europe-west4        # or global
+    credentials_file: /etc/dvara/vertex-key.json   # leave out to use application default credentials
+```
 
 | Provider | Streaming | Vision | Tool calls | Structured outputs | Batch |
 |---|:-:|:-:|:-:|:-:|:-:|
 | OpenAI, Azure OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Anthropic, Gemini, Bedrock, Grok, Mistral, Ollama | ✅ | ✅ | ✅ | ✅ | — |
+| Anthropic, Gemini, Vertex AI, Bedrock, Grok, Mistral, Ollama | ✅ | ✅ | ✅ | ✅ | — |
 | Cohere, Groq | ✅ | ✅ | ✅ | — | — |
 | DeepSeek, Moonshot, ChatGLM | ✅ | — | ✅ | — | — |
 | Qwen | ✅ | — | — | — | — |

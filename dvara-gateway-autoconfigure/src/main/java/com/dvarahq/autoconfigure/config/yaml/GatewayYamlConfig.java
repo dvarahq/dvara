@@ -87,7 +87,14 @@ public class GatewayYamlConfig {
         @JsonProperty("secret_key")
         private String secretKey;
 
+        /** Bedrock's AWS region, or Vertex AI's location. */
         private String region;
+
+        // Vertex AI-specific
+        private String project;
+
+        @JsonProperty("credentials_file")
+        private String credentialsFile;
     }
 
     @Data

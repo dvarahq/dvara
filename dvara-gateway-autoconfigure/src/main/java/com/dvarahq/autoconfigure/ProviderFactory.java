@@ -31,6 +31,7 @@ import com.dvarahq.providers.moonshot.MoonshotProvider;
 import com.dvarahq.providers.ollama.OllamaProvider;
 import com.dvarahq.providers.openai.OpenAiProvider;
 import com.dvarahq.providers.qwen.QwenProvider;
+import com.dvarahq.providers.vertexai.VertexAiProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.client.RestClient;
 
@@ -48,13 +49,20 @@ public class ProviderFactory {
 
     /** The types this factory builds: the built-in adapters, without the test provider. */
     public static final List<String> TYPES = List.of("openai", "anthropic", "gemini", "azure-openai", "mistral",
-            "cohere", "groq", "qwen", "deepseek", "moonshot", "chatglm", "grok", "ollama", "bedrock");
+            "cohere", "groq", "qwen", "deepseek", "moonshot", "chatglm", "grok", "ollama", "bedrock", "vertex-ai");
 
     /**
      * What to build. {@code baseUrl} is read by every type but Bedrock, which reads {@code region}; a blank one means
-     * the type's usual endpoint. {@code apiVersion} is Azure OpenAI's Responses API version, or blank.
+     * the type's usual endpoint. Vertex AI reads both, {@code region} as its location, and {@code project}; a blank
+     * one of either means the configured value. Its credential is found per call, as for a provider configured at
+     * startup. {@code apiVersion} is Azure OpenAI's Responses API version, or blank.
      */
-    public record Spec(String type, String baseUrl, String region, String apiVersion) {
+    public record Spec(String type, String baseUrl, String region, String apiVersion, String project) {
+
+        /** A spec with no project, which only Vertex AI reads. */
+        public Spec(String type, String baseUrl, String region, String apiVersion) {
+            this(type, baseUrl, region, apiVersion, null);
+        }
     }
 
     private final ProviderAutoConfiguration wiring;
@@ -73,7 +81,8 @@ public class ProviderFactory {
     /**
      * A new provider for this spec.
      *
-     * @throws IllegalArgumentException for an unknown type, or Azure OpenAI with no base URL
+     * @throws IllegalArgumentException for an unknown type, Azure OpenAI with no base URL, or Vertex AI with no
+     *                                  project or a location that is not one
      */
     public LlmProvider create(Spec spec) {
         String type = spec.type() == null ? "" : spec.type().trim().toLowerCase(java.util.Locale.ROOT);
@@ -130,6 +139,19 @@ public class ProviderFactory {
                 bedrock.setImageFetcher(ProviderAutoConfiguration.imageFetcher(props));
                 bedrock.setPromptCacheMarker(props.getProviders().getBedrock().isPromptCacheMarker());
                 yield bedrock;
+            }
+            case "vertex-ai" -> {
+                GatewayProperties.VertexAiConfig cfg = props.getProviders().getVertexAi();
+                String project = blank(spec.project()) ? cfg.getProject() : spec.project().trim();
+                if (blank(project)) {
+                    throw new IllegalArgumentException("Vertex AI needs a Google Cloud project.");
+                }
+                String location = blank(spec.region()) ? cfg.getLocation() : spec.region().trim();
+                VertexAiProvider vertex = new VertexAiProvider(secret(), new VertexAiProvider.Settings(project,
+                        location, or(url, cfg.getBaseUrl()), cfg.getCredentialsFile(), cfg.getTokenUrl()),
+                        wiring.tlsOnly(type, base));
+                vertex.setImageFetcher(ProviderAutoConfiguration.imageFetcher(props));
+                yield vertex;
             }
             default -> throw new IllegalArgumentException("Unknown provider type '" + spec.type() + "'. Known: "
                     + String.join(", ", TYPES) + ".");

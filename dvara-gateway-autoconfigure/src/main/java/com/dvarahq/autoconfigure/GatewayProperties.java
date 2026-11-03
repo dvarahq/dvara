@@ -58,6 +58,7 @@ public class GatewayProperties {
         private ProviderConfig grok         = new ProviderConfig();
         private OllamaConfig   ollama       = new OllamaConfig();
         private BedrockConfig  bedrock      = new BedrockConfig();
+        private VertexAiConfig vertexAi     = new VertexAiConfig();
         private MockConfig     mock         = new MockConfig();
     }
 
@@ -183,6 +184,31 @@ public class GatewayProperties {
          * Bedrock caches it. Off by default, for the same reason as Anthropic's.
          */
         private boolean promptCacheMarker;
+    }
+
+    /**
+     * {@code dvara.llm-gateway.providers.vertex-ai}: Gemini on Google Cloud's Vertex AI, called with an OAuth2 token
+     * from a Google credential rather than an API key.
+     */
+    @Data
+    public static class VertexAiConfig {
+        private boolean enabled = false;
+        /** The Google Cloud project id or number. Required when enabled. */
+        private String  project;
+        /** A region such as {@code us-central1} or {@code europe-west4}, or {@code global}. */
+        private String  location = "global";
+        /**
+         * A Google credential's JSON content (a service account key, or gcloud's application default credentials).
+         * Read through the secret provider as {@code provider.vertex-ai.credentials}, so it may be {@code ENC:} and a
+         * workspace may bring its own. Blank: {@code credentials-file}, then application default credentials.
+         */
+        private String  credentials;
+        /** A Google credential file. Blank: application default credentials. */
+        private String  credentialsFile;
+        /** An endpoint in place of the location's own, such as a Private Service Connect address. */
+        private String  baseUrl;
+        /** Google's OAuth2 token endpoint. Blank: {@code https://oauth2.googleapis.com/token}. */
+        private String  tokenUrl;
     }
 
     @Data

@@ -95,6 +95,57 @@ public class GeminiProvider extends AbstractLlmProvider {
         this.restClient = restClient;
     }
 
+    /**
+     * A provider under another name for a service that serves Gemini's {@code generateContent} API at other
+     * URLs and with other credentials, such as Vertex AI. It overrides {@link #modelPath}, {@link #modelPathVariables}
+     * and {@link #authorize}; the request and response translation stays this class's.
+     */
+    protected GeminiProvider(String name, SecretProvider secretProvider, RestClient restClient) {
+        super(name);
+        this.secretProvider = secretProvider;
+        this.restClient = restClient;
+    }
+
+    // -------------------------------------------------------------------------
+    // Where and how a call goes
+    // -------------------------------------------------------------------------
+
+    /**
+     * The URI template of one of a model's methods ({@code generateContent}, {@code streamGenerateContent?alt=sse},
+     * {@code countTokens}), relative to the base URL. Its variables come from {@link #modelPathVariables}.
+     */
+    protected String modelPath(String method) {
+        return "/v1beta/models/{model}:" + method;
+    }
+
+    /** The values for {@link #modelPath}'s variables, in order, for the model the caller asked for. */
+    protected Object[] modelPathVariables(String model) {
+        return new Object[] {model};
+    }
+
+    /** Adds the call's credential. Gemini's API takes an API key in a header. */
+    protected void authorize(org.springframework.http.HttpHeaders headers) {
+        String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
+        recordFingerprint(apiKey);
+        headers.set(API_KEY_HEADER, apiKey);
+    }
+
+    /** The service's name in errors and logs. */
+    protected String label() {
+        return "Gemini";
+    }
+
+    /**
+     * The body of a {@code countTokens} call for the request's input. Gemini's API wraps it as a
+     * {@code generateContentRequest} that names the model.
+     */
+    protected ObjectNode countTokensBody(ObjectNode generate, String model) {
+        generate.put("model", "models/" + model);
+        ObjectNode body = JsonMapper.instance().createObjectNode();
+        body.set("generateContentRequest", generate);
+        return body;
+    }
+
     // -------------------------------------------------------------------------
     // Chat
     // -------------------------------------------------------------------------
@@ -107,16 +158,14 @@ public class GeminiProvider extends AbstractLlmProvider {
         }
         Map<String, Object> body = buildBody(request);
 
-        String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
-        recordFingerprint(apiKey);
         GeminiResponse resp = restClient.post()
-                .uri("/v1beta/models/{model}:generateContent", request.getModel())
-                .header(API_KEY_HEADER, apiKey)
+                .uri(modelPath("generateContent"), modelPathVariables(request.getModel()))
+                .headers(this::authorize)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    throw ProviderErrors.refusal("Gemini", res, "Gemini API error");
+                    throw ProviderErrors.refusal(label(), res, label() + " API error");
                 })
                 .body(GeminiResponse.class);
 
@@ -130,16 +179,14 @@ public class GeminiProvider extends AbstractLlmProvider {
      */
     private ChatResponse chatAsSent(ChatRequest request, GeminiGenerateContentBody passthrough) {
         String sent = passthrough.governedJson(request);
-        String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
-        recordFingerprint(apiKey);
         String answer = restClient.post()
-                .uri("/v1beta/models/{model}:generateContent", request.getModel())
-                .header(API_KEY_HEADER, apiKey)
+                .uri(modelPath("generateContent"), modelPathVariables(request.getModel()))
+                .headers(this::authorize)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(sent)
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    throw ProviderErrors.refusal("Gemini", res, "Gemini API error");
+                    throw ProviderErrors.refusal(label(), res, label() + " API error");
                 })
                 .body(String.class);
         ObjectNode response = GeminiGenerateContentBody.parseResponse(answer);
@@ -177,16 +224,14 @@ public class GeminiProvider extends AbstractLlmProvider {
         GeminiGenerateContentBody passthrough = request.getGemini();
         Object body = passthrough != null ? passthrough.governedJson(request) : buildBody(request);
 
-        String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
-        recordFingerprint(apiKey);
         return restClient.post()
-                .uri("/v1beta/models/{model}:streamGenerateContent?alt=sse", request.getModel())
-                .header(API_KEY_HEADER, apiKey)
+                .uri(modelPath("streamGenerateContent?alt=sse"), modelPathVariables(request.getModel()))
+                .headers(this::authorize)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body)
                 .exchange((req, res) -> {
                     if (res.getStatusCode().isError()) {
-                        throw ProviderErrors.refusal("Gemini", res, "Gemini streaming error");
+                        throw ProviderErrors.refusal(label(), res, label() + " streaming error");
                     }
                     // The body stream is the transport handle, released through StreamTransport:
                     // ClientHttpResponse.close() drains the body first and would wait for a stalled server, and
@@ -213,19 +258,15 @@ public class GeminiProvider extends AbstractLlmProvider {
             generate = JsonMapper.instance().valueToTree(buildBody(request));
             generate.retain(COUNT_FIELDS);
         }
-        generate.put("model", "models/" + request.getModel());
-        ObjectNode body = JsonMapper.instance().createObjectNode();
-        body.set("generateContentRequest", generate);
-        String apiKey = secretProvider.requireSecret("provider.gemini.api-key", resolveWorkspaceId());
-        recordFingerprint(apiKey);
+        ObjectNode body = countTokensBody(generate, request.getModel());
         Map<?, ?> answer = restClient.post()
-                .uri("/v1beta/models/{model}:countTokens", request.getModel())
-                .header(API_KEY_HEADER, apiKey)
+                .uri(modelPath("countTokens"), modelPathVariables(request.getModel()))
+                .headers(this::authorize)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(GeminiGenerateContentBody.write(body))
                 .retrieve()
                 .onStatus(status -> status.isError(), (req, res) -> {
-                    throw ProviderErrors.refusal("Gemini", res, "Gemini token count error");
+                    throw ProviderErrors.refusal(label(), res, label() + " token count error");
                 })
                 .body(Map.class);
         if (answer == null || !(answer.get("totalTokens") instanceof Number tokens)) {

@@ -80,6 +80,7 @@ public class ProviderDispatcher {
             Map.entry("bedrock", "aws.bedrock"),
             Map.entry("azure-openai", "az.ai.openai"),
             Map.entry("gemini", "gcp.gemini"),
+            Map.entry("vertex-ai", "gcp.vertex_ai"),
             Map.entry("cohere", "cohere"),
             Map.entry("mistral", "mistral_ai"),
             Map.entry("deepseek", "deepseek"),

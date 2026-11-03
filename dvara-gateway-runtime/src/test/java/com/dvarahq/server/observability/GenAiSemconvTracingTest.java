@@ -171,6 +171,8 @@ class GenAiSemconvTracingTest {
         assertSystem("DeepSeek", "deepseek");
         // Grok -> xai (enum)
         assertSystem("Grok", "xai");
+        // vertex-ai -> gcp.vertex_ai (enum), not the gcp.gemini of the Gemini API
+        assertSystem("vertex-ai", "gcp.vertex_ai");
         // Qwen -> qwen (no enum; lower-cased brand-slug fallback)
         assertSystem("Qwen", "qwen");
     }

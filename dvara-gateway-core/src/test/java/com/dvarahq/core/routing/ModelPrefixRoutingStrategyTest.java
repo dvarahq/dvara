@@ -152,6 +152,17 @@ class ModelPrefixRoutingStrategyTest {
                 .hasMessageContaining("OPENAI_API_KEY");
     }
 
+    /** A Vertex AI model names Vertex AI's switch and project, not the Gemini API's key. */
+    @Test
+    void throwsGatewayException_withVertexHint_forVertexModel() {
+        ChatRequest request = ChatRequest.builder().model("vertex/gemini-2.5-flash").build();
+
+        assertThatThrownBy(() -> strategy.route(request, List.of()))
+                .isInstanceOf(GatewayException.class)
+                .hasMessageContaining("VERTEX_AI_ENABLED=true and VERTEX_AI_PROJECT")
+                .hasMessageNotContaining("GEMINI_API_KEY");
+    }
+
     private static LlmProvider stubProvider(String name, String prefix) {
         return new LlmProvider() {
             @Override public String name() { return name; }
