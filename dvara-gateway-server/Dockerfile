@@ -1,4 +1,5 @@
-FROM eclipse-temurin:25-jre-jammy AS extract
+# The build stages run on the JDK, which has jdeps and jlink. The image gets only the Java runtime linked below.
+FROM eclipse-temurin:25-jdk-jammy AS extract
 WORKDIR /app
 ARG JAR_FILE=app.jar
 COPY ${JAR_FILE} app.jar
@@ -6,11 +7,136 @@ COPY ${JAR_FILE} app.jar
 # used only when the class path is made of jar files.
 RUN java -Djarmode=tools -jar app.jar extract --layers --destination extracted
 
-FROM eclipse-temurin:25-jre-jammy
+# ---- A Java runtime with only the modules the gateway uses ----
+# The JRE image's runtime has 48 modules, among them the Graal compiler, and takes 191 MB. jlink links only the
+# modules listed below. Two checks keep the list complete:
+#
+# 1. jdeps reads every jar the image ships and names the modules they use. The build stops on one that is not
+#    listed and names it. jdeps reads copies of the jars with their module-info taken out: given a jar with one, it
+#    treats the jar as a module and stops at the first module that jar names and the image lacks.
+# 2. jdeps cannot see the modules the JDK loads by name, as a service or for a JVM option. The probe below uses
+#    each of them on the image's own runtime, so a missing one fails the build in the final stage.
+#
+# --strip-debug drops the JDK classes' debug attributes; the JRE image had none either. Temurin 25 ships no jmods,
+# so jlink links from the JDK's own runtime image. No default CDS archive: the gateway starts from its AOT cache.
+FROM extract AS jre
+COPY <<'EOF' jre-modules.txt
+# One module per line; text after # is a comment.
+
+# Found by jdeps on the application's jars.
+java.base
+java.compiler
+java.desktop            # java.beans
+java.instrument
+java.naming
+java.net.http           # OTLP trace export, and the HTTP client
+java.prefs
+java.scripting
+java.security.jgss
+java.sql
+jdk.jfr
+jdk.management          # process and OS metrics (Micrometer)
+jdk.unsupported         # sun.misc.Unsafe
+
+# Loaded at run time only.
+jdk.charsets            # character sets beyond the common ones
+jdk.crypto.cryptoki     # the SunPKCS11 provider java.security lists, for keys in an HSM
+jdk.jdwp.agent          # -agentlib:jdwp, to attach a debugger
+jdk.management.agent    # -Dcom.sun.management.jmxremote, remote JMX
+jdk.management.jfr      # JFR over JMX
+jdk.naming.dns          # DNS lookups through JNDI
+jdk.security.auth       # Kerberos and other JAAS login modules
+jdk.security.jgss       # SASL GSSAPI
+jdk.zipfs               # jar: and zip: file systems
+EOF
+RUN set -eu; \
+    apt-get update && apt-get install -y --no-install-recommends zip >/dev/null && rm -rf /var/lib/apt/lists/*; \
+    sed 's/#.*//' jre-modules.txt | tr -s ' \t' '\n' | grep . | LC_ALL=C sort -u > /tmp/listed; \
+    mkdir /tmp/jdeps; n=0; \
+    for j in $(find extracted -name '*.jar'); do n=$((n+1)); cp "$j" "/tmp/jdeps/$n-$(basename "$j")"; done; \
+    for j in /tmp/jdeps/*.jar; do \
+      zip -q -d "$j" 'module-info.class' 'META-INF/versions/*/module-info.class' >/dev/null 2>&1 || true; done; \
+    jdeps --ignore-missing-deps -q --multi-release 25 --print-module-deps /tmp/jdeps/*.jar > /tmp/jdeps.out; \
+    tr ',' '\n' < /tmp/jdeps.out | grep . | LC_ALL=C sort -u > /tmp/found; \
+    grep -qx java.base /tmp/found || { echo "FATAL: jdeps named no modules:"; cat /tmp/jdeps.out; exit 1; }; \
+    missing=$(LC_ALL=C comm -23 /tmp/found /tmp/listed | tr '\n' ' '); \
+    [ -z "$missing" ] || { echo "FATAL: the application uses Java modules the list does not have: $missing"; exit 1; }; \
+    echo "jdeps found: $(paste -sd' ' /tmp/found)"; \
+    jlink --add-modules "$(paste -sd, /tmp/listed)" --strip-debug --no-man-pages --no-header-files --output /jre; \
+    rm -rf /tmp/jdeps
+
+# Check 2. One line for each module in the second group of the list. jdk.jdwp.agent and jdk.management.agent have
+# no line: without them the JVM options the probe runs with stop the JVM at start.
+COPY <<'EOF' /probe/RuntimeProbe.java
+import java.lang.management.ManagementFactory;
+import java.nio.charset.Charset;
+import java.nio.file.spi.FileSystemProvider;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.Security;
+import java.util.List;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
+
+public class RuntimeProbe {
+    public static void main(String[] args) throws Exception {
+        // TLS with the JDK's own providers, and the CA certificates the JVM trusts.
+        SSLContext tls = SSLContext.getInstance("TLSv1.3");
+        tls.init(null, null, null);
+        check(List.of(tls.createSSLEngine().getEnabledProtocols()).contains("TLSv1.3"), "TLS 1.3");
+        for (String algorithm : List.of("RSA", "EC", "X25519", "Ed25519")) {
+            KeyPairGenerator.getInstance(algorithm);
+        }
+        TrustManagerFactory trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        trust.init((KeyStore) null);
+        int cas = ((X509TrustManager) trust.getTrustManagers()[0]).getAcceptedIssuers().length;
+        check(cas > 100, "its CA certificates (it trusts " + cas + ")");
+
+        check(Charset.isSupported("IBM037"), "jdk.charsets");
+        check(Security.getProvider("SunPKCS11") != null, "jdk.crypto.cryptoki");
+        ManagementFactory.getPlatformMXBean(jdk.management.jfr.FlightRecorderMXBean.class).getRecordings();
+        Class.forName("com.sun.jndi.dns.DnsContextFactory");
+        Class.forName("com.sun.security.auth.module.Krb5LoginModule");
+        check(Security.getProvider("JdkSASL") != null, "jdk.security.jgss");
+        check(FileSystemProvider.installedProviders().stream().anyMatch(p -> p.getScheme().equals("jar")), "jdk.zipfs");
+        System.out.println("RuntimeProbe: the runtime has every module the image loads at run time");
+        System.exit(0);
+    }
+
+    private static void check(boolean ok, String what) {
+        if (!ok) {
+            System.out.println("FATAL: the image's Java runtime lacks " + what + "; add it to the module list");
+            System.exit(1);
+        }
+    }
+}
+EOF
+RUN javac -d /probe /probe/RuntimeProbe.java
+
+FROM ubuntu:jammy
 WORKDIR /app
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends curl \
+# What the JRE image installed (fonts, CA certificates, time zones, the en_US.UTF-8 locale), plus curl for the
+# health check. The JVM trusts the CA certificates in its own lib/security/cacerts, the same file the JRE image has.
+RUN apt-get update && apt-get upgrade -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+         curl ca-certificates fontconfig locales tzdata \
+    && echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
+
+# The Java runtime linked above, where and as the JRE image had it.
+ENV JAVA_HOME=/opt/java/openjdk LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+COPY --from=jre /jre ${JAVA_HOME}
+
+# Check 2 from the jre stage, on this image's runtime and OS. Mounted rather than copied, so none of it stays in
+# the image. The two agent options load jdk.jdwp.agent and jdk.management.agent; ports 0 bind nothing fixed.
+RUN --mount=type=bind,from=jre,source=/probe,target=/probe \
+    java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:0 \
+         -Dcom.sun.management.jmxremote.port=0 -Dcom.sun.management.jmxremote.rmi.port=0 \
+         -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false \
+         -cp /probe RuntimeProbe
 
 RUN groupadd -r dvara && useradd -r -g dvara -d /app dvara
 
