@@ -26,6 +26,10 @@ import java.util.Optional;
  * detector takes the hook optionally and checks {@link #isAvailable()}, so without one it detects
  * injection by its regex patterns alone. It sits in core rather than in the policy module so that
  * an implementation needs nothing but core.</p>
+ *
+ * <p>How a failure inside {@code classify} is treated: a {@code GatewayException} refuses the request
+ * with that error, which is how a hook that must fail closed says so. Any other exception is a fault
+ * in the hook; the request is scanned with the regex patterns alone and the failure is logged.</p>
  */
 public interface MlClassifierHook {
 

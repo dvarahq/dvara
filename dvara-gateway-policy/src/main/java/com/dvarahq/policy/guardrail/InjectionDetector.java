@@ -15,6 +15,7 @@
  */
 package com.dvarahq.policy.guardrail;
 
+import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.guardrail.MlClassifierHook;
 import com.dvarahq.core.guardrail.GuardrailDetection;
 import com.dvarahq.core.guardrail.GuardrailDetector;
@@ -233,7 +234,12 @@ public class InjectionDetector implements GuardrailDetector {
                 mlClassifierHook.classify(text, workspaceId)
                         .map(GuardrailDetection::asClassifierDetection)
                         .ifPresent(detections::add);
+            } catch (GatewayException refusal) {
+                // A hook throws this on purpose, to refuse the request when it cannot give an answer and is set to
+                // fail closed. Catching it below would serve the request unscanned.
+                throw refusal;
             } catch (Exception e) {
+                // Any other failure is a fault in the hook: the scan goes on with the patterns alone.
                 log.warn("ML classifier failed: {}", e.getMessage());
             }
         }
