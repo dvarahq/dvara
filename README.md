@@ -200,7 +200,7 @@ providers:
 <dependency>
   <groupId>com.dvarahq</groupId>
   <artifactId>dvara-spring-boot-starter</artifactId>
-  <version>1.13.0</version>
+  <version>1.14.0</version>
 </dependency>
 ```
 
