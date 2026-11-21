@@ -23,6 +23,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -108,9 +109,12 @@ class GatewayStarterServesTheApiTest {
 
     private final MockMvc mockMvc;
     private final PolicyEngine policyEngine;
+    private final ConfigurableListableBeanFactory beanFactory;
 
-    GatewayStarterServesTheApiTest(MockMvc mockMvc, PolicyEngine policyEngine) {
+    GatewayStarterServesTheApiTest(MockMvc mockMvc, PolicyEngine policyEngine,
+                                   ConfigurableListableBeanFactory beanFactory) {
         this.mockMvc = mockMvc;
+        this.beanFactory = beanFactory;
         this.policyEngine = policyEngine;
     }
 
@@ -158,5 +162,14 @@ class GatewayStarterServesTheApiTest {
         var denied = policyEngine.evaluateDsl(dsl, PolicyContext.empty(),
                 ChatRequest.builder().model("gpt-3.5-turbo").build());
         assertThat(denied.allowed()).as("a denylisted model must be denied").isFalse();
+    }
+
+    /**
+     * Every bean this host starts, compared with {@code beans/gateway-starter.txt}. A module split must give a host
+     * application the same beans as before.
+     */
+    @Test
+    void theHostStartsExactlyTheBeansInTheBaseline() throws java.io.IOException {
+        BeanBaseline.assertMatches(beanFactory, "gateway-starter");
     }
 }
