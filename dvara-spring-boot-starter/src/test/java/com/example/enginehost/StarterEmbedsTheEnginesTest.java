@@ -25,6 +25,7 @@ import com.dvarahq.core.policy.PolicyDecision;
 import com.dvarahq.core.policy.PolicyEngine;
 import com.dvarahq.core.ratelimit.RateLimiter;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestConstructor;
@@ -63,11 +64,13 @@ class StarterEmbedsTheEnginesTest {
     private final GuardrailDetector guardrailDetector;
     private final RateLimiter rateLimiter;
     private final AuditWriter auditWriter;
+    private final ConfigurableListableBeanFactory beanFactory;
 
     StarterEmbedsTheEnginesTest(PolicyEngine policyEngine, PiiDetector piiDetector,
                                 GuardrailDetector guardrailDetector, RateLimiter rateLimiter,
-                                AuditWriter auditWriter) {
+                                AuditWriter auditWriter, ConfigurableListableBeanFactory beanFactory) {
         this.policyEngine = policyEngine;
+        this.beanFactory = beanFactory;
         this.piiDetector = piiDetector;
         this.guardrailDetector = guardrailDetector;
         this.rateLimiter = rateLimiter;
@@ -144,5 +147,14 @@ class StarterEmbedsTheEnginesTest {
     void anAuditWriterIsPresent() {
         assertThat(auditWriter).isNotNull();
         auditWriter.write(com.dvarahq.core.audit.AuditEvent.of("STARTER_SMOKE_TEST", java.util.Map.of()));
+    }
+
+    /**
+     * Every bean this host starts, compared with {@code beans/engine-starter.txt}. A module split must give a host
+     * application the same beans as before.
+     */
+    @Test
+    void theHostStartsExactlyTheBeansInTheBaseline() throws java.io.IOException {
+        BeanBaseline.assertMatches(beanFactory, "engine-starter");
     }
 }

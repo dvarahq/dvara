@@ -35,6 +35,7 @@ import com.dvarahq.core.security.SecurityContext;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 
@@ -63,6 +64,9 @@ class GovernedSeamBeanCountTest {
 
     @Autowired
     ApplicationContext context;
+
+    @Autowired
+    ConfigurableListableBeanFactory beanFactory;
 
     /**
      * Interface to the beans the assembled gateway registers for it, in registration order.
@@ -179,5 +183,14 @@ class GovernedSeamBeanCountTest {
                 .describedAs("governed interfaces holding more than one implementation; only "
                         + "GuardrailDetector does, a composite beside its own layer")
                 .isEqualTo(1);
+    }
+
+    /**
+     * Every bean the gateway application starts, compared with {@code beans/gateway-server.txt}. A module split
+     * must leave the assembled gateway with the same beans as before.
+     */
+    @Test
+    void theGatewayStartsExactlyTheBeansInTheBaseline() throws java.io.IOException {
+        BeanBaseline.assertMatches(beanFactory, "gateway-server");
     }
 }
