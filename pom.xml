@@ -48,6 +48,7 @@
 
     <modules>
         <module>dvara-providers</module>
+        <module>dvara-gateway-config</module>
         <module>dvara-gateway-autoconfigure</module>
         <module>dvara-gateway-core</module>
         <module>dvara-gateway-policy</module>
@@ -177,6 +178,7 @@
                                         <include>com.dvarahq:dvara-gateway-policy-autoconfigure</include>
                                         <include>com.dvarahq:dvara-rate-limiting</include>
                                         <include>com.dvarahq:dvara-providers</include>
+                                        <include>com.dvarahq:dvara-gateway-config</include>
                                         <include>com.dvarahq:dvara-gateway-autoconfigure</include>
                                         <include>com.dvarahq:dvara-gateway-runtime</include>
                                         <include>com.dvarahq:dvara-gateway-server</include>

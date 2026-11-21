@@ -51,7 +51,7 @@ import java.util.stream.Collectors;
  * Seeds workspaces, API keys, and routes from a {@code bootstrap.yaml} file into repositories that
  * accept writes. It runs on every start while the file is set, so each entry that already exists
  * is skipped: a workspace or route by id, a static API key by its hash, and a generated API key by
- * its workspace and name. {@link BootstrapLoaderAutoConfiguration} registers it, and leaves it out
+ * its workspace and name. {@code BootstrapLoaderAutoConfiguration} registers it, and leaves it out
  * of a deployment configured from {@code gateway.yaml}, where every repository is read-only.
  * <p>
  * Enabled by setting the {@code DVARA_BOOTSTRAP_FILE} env var to the file path. The legacy

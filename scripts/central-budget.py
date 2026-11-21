@@ -9,7 +9,7 @@ releases until the next month.
 The budget here is tighter than the limits, so an urgent security release still fits:
 
   releases a month    4     (limit 7)
-  files per release   160   (a release is about 132 since the runnable jar left Central)
+  files per release   180   (a release is about 168)
   MB per release      15    (about 11)
 
 Three commands:
@@ -45,7 +45,8 @@ import urllib.request
 import zipfile
 
 MAX_RELEASES_PER_MONTH = 4
-MAX_FILES_PER_RELEASE = 160
+# 4 releases a month x 180 files = 720, under Central's 1,000 files a month, with room for one urgent release.
+MAX_FILES_PER_RELEASE = 180
 MAX_MB_PER_RELEASE = 15
 
 REPO = "https://repo1.maven.org/maven2"

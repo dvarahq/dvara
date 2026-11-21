@@ -289,7 +289,7 @@ public class GatewayProperties {
          * {@link #strategy} is {@code canary}. Without this block, a
          * {@code canary} strategy has no baseline / candidate split
          * defined and falls back to the first provider in the pool —
-         * see {@link RoutingAutoConfiguration#toRouteConfig} for the
+         * see {@code RoutingAutoConfiguration.toRouteConfig} for the
          * binding into {@link com.dvarahq.core.routing.RouteConfig}.
          */
         private CanaryConfigDefinition canaryConfig;
@@ -297,7 +297,7 @@ public class GatewayProperties {
         /**
          * Shadow traffic configuration for this route. This build does not dispatch shadow
          * traffic, so a route that sets this block is refused at startup; see
-         * {@link RoutingAutoConfiguration#toRouteConfig}.
+         * {@code RoutingAutoConfiguration.toRouteConfig}.
          */
         private ShadowConfigDefinition shadowConfig;
 
