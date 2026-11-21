@@ -10,7 +10,7 @@
 
     <artifactId>dvara-gateway-policy</artifactId>
     <name>dvara-gateway-policy</name>
-    <description>DVARA Policy – policy engine, guardrails and PII detection</description>
+    <description>DVARA Policy – policy engine, guardrails and PII detection, as a library with no auto-configuration</description>
 
     <dependencies>
         <dependency>
@@ -23,9 +23,12 @@
             <artifactId>dvara-pii-detection</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- @ConfigurationProperties on GuardrailProperties. This module is a library: it registers no
+             auto-configuration, so it needs Spring Boot itself and not spring-boot-autoconfigure. The beans are
+             registered by dvara-gateway-policy-autoconfigure. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-autoconfigure</artifactId>
+            <artifactId>spring-boot</artifactId>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

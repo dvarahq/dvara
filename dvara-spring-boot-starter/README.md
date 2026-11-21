@@ -48,17 +48,26 @@ application to put it in, run the gateway as its own process: one jar and one YA
 ## The policy module
 
 An application that serves the API cannot start without the policy module, because the request
-pipeline needs `PolicyEngine`, `PiiEnforcer`, `GuardrailEnforcer` and the other policy services. An
-application that only wants the provider clients can leave it out:
+pipeline needs `PolicyEngine`, `PiiEnforcer`, `GuardrailEnforcer` and the other policy services.
+The module comes in two jars: `dvara-gateway-policy` holds the engines as a library, and
+`dvara-gateway-policy-autoconfigure` registers them as beans. An application that only wants the
+provider clients can leave both out:
 
 ```xml
 <exclusions>
+    <exclusion>
+        <groupId>com.dvarahq</groupId>
+        <artifactId>dvara-gateway-policy-autoconfigure</artifactId>
+    </exclusion>
     <exclusion>
         <groupId>com.dvarahq</groupId>
         <artifactId>dvara-gateway-policy</artifactId>
     </exclusion>
 </exclusions>
 ```
+
+An application that wants the policy compilers and engines as classes, and builds its own beans
+from them, excludes only `dvara-gateway-policy-autoconfigure`.
 
 ## Licence
 

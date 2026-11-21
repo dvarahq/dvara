@@ -50,6 +50,7 @@
         <module>dvara-gateway-autoconfigure</module>
         <module>dvara-gateway-core</module>
         <module>dvara-gateway-policy</module>
+        <module>dvara-gateway-policy-autoconfigure</module>
         <module>dvara-gateway-runtime</module>
         <module>dvara-gateway-server</module>
         <module>dvara-pii-detection</module>
@@ -172,6 +173,7 @@
                                         <include>com.dvarahq:dvara-gateway-core</include>
                                         <include>com.dvarahq:dvara-pii-detection</include>
                                         <include>com.dvarahq:dvara-gateway-policy</include>
+                                        <include>com.dvarahq:dvara-gateway-policy-autoconfigure</include>
                                         <include>com.dvarahq:dvara-rate-limiting</include>
                                         <include>com.dvarahq:dvara-gateway-autoconfigure</include>
                                         <include>com.dvarahq:dvara-gateway-runtime</include>

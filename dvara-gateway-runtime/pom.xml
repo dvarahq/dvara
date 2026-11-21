@@ -24,6 +24,13 @@
             <version>${project.version}</version>
             <scope>runtime</scope>
         </dependency>
+        <!-- The policy library's beans: an application that takes the runtime gets them as before. -->
+        <dependency>
+            <groupId>com.dvarahq</groupId>
+            <artifactId>dvara-gateway-policy-autoconfigure</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-tx</artifactId>
