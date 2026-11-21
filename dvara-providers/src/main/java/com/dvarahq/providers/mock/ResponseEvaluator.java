@@ -24,7 +24,7 @@ import groovy.lang.Script;
 /**
  * Evaluates mock response configuration — either a static string or a Groovy
  * script prefixed with {@code groovy:}. Groovy is a hard runtime dependency
- * of dvara-gateway-autoconfigure, so the engine is always available.
+ * of dvara-providers, so the engine is always available.
  *
  * <p>{@link #compile(String)} parses a script once, the way {@link MatcherEvaluator}
  * parses a predicate, and each {@link #evaluate(ChatRequest)} runs a fresh instance
