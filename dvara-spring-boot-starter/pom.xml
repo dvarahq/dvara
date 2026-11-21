@@ -30,6 +30,12 @@
             <artifactId>dvara-gateway-policy</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Registers the policy library's engines as beans. -->
+        <dependency>
+            <groupId>com.dvarahq</groupId>
+            <artifactId>dvara-gateway-policy-autoconfigure</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

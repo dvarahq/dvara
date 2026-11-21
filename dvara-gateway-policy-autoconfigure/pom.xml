@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.dvarahq</groupId>
+        <artifactId>dvara-platform</artifactId>
+        <version>1.16.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>dvara-gateway-policy-autoconfigure</artifactId>
+    <name>dvara-gateway-policy-autoconfigure</name>
+    <description>DVARA Policy auto-configuration – registers the policy engine, guardrails and PII detection from dvara-gateway-policy as Spring Boot beans</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.dvarahq</groupId>
+            <artifactId>dvara-gateway-policy</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>
