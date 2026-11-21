@@ -17,6 +17,7 @@ package com.dvarahq.autoconfigure;
 
 import com.dvarahq.core.provider.LlmProvider;
 import com.dvarahq.core.secret.SecretProvider;
+import com.dvarahq.providers.ProviderTypes;
 import com.dvarahq.providers.anthropic.AnthropicProvider;
 import com.dvarahq.providers.azureopenai.AzureOpenAiProvider;
 import com.dvarahq.providers.bedrock.BedrockProvider;
@@ -47,9 +48,8 @@ import java.util.List;
  */
 public class ProviderFactory {
 
-    /** The types this factory builds: the built-in adapters, without the test provider. */
-    public static final List<String> TYPES = List.of("openai", "anthropic", "gemini", "azure-openai", "mistral",
-            "cohere", "groq", "qwen", "deepseek", "moonshot", "chatglm", "grok", "ollama", "bedrock", "vertex-ai");
+    /** The types this factory builds: the built-in adapters, without the test provider ({@link ProviderTypes#ALL}). */
+    public static final List<String> TYPES = ProviderTypes.ALL;
 
     /**
      * What to build. {@code baseUrl} is read by every type but Bedrock, which reads {@code region}; a blank one means

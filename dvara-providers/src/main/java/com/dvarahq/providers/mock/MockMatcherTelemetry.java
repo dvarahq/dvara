@@ -25,7 +25,7 @@ import com.dvarahq.core.model.ChatRequest;
  * a null check.
  *
  * <p>The real implementation (in the gateway application) wires this to Micrometer
- * counters and the audit writer. Keeping the interface in dvara-gateway-autoconfigure
+ * counters and the audit writer. Keeping the interface in dvara-providers
  * avoids a Micrometer dependency in the mock-scenario code path and lets unit tests use
  * plain in-memory implementations.
  *

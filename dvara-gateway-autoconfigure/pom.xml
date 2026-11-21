@@ -18,10 +18,12 @@
             <artifactId>dvara-gateway-core</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- The provider adapters, the mock provider and the provider TLS hook. ProviderFactory and
+             ProviderAutoConfiguration build them; an application that takes this module gets them as before. -->
         <dependency>
-            <groupId>org.apache.groovy</groupId>
-            <artifactId>groovy</artifactId>
-            <version>${groovy.version}</version>
+            <groupId>com.dvarahq</groupId>
+            <artifactId>dvara-providers</artifactId>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework</groupId>

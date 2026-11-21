@@ -26,8 +26,10 @@ import org.springframework.web.client.RestClient;
  * This build does not include an implementation; another module or the application may register
  * one.</p>
  *
- * <p>Placed in {@code dvara-gateway-autoconfigure} rather than {@code dvara-gateway-core} because
- * core has no Spring dependencies and {@code RestClient.Builder} is from Spring Web.</p>
+ * <p>Placed in {@code dvara-providers}, beside the adapters it customizes, rather than in
+ * {@code dvara-gateway-core}, because core has no Spring dependencies and {@code RestClient.Builder}
+ * is from Spring Web. Its package is the auto-configuration's, which code that implements it
+ * already imports.</p>
  */
 @FunctionalInterface
 public interface ProviderTlsCustomizer {
