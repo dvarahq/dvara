@@ -25,6 +25,13 @@
             <artifactId>dvara-providers</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- The gateway.yaml format and loader, bootstrap seeding and the settings classes. The auto-configurations
+             here register them; an application that takes this module gets them as before. -->
+        <dependency>
+            <groupId>com.dvarahq</groupId>
+            <artifactId>dvara-gateway-config</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-web</artifactId>

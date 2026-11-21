@@ -88,8 +88,9 @@ and 80 MB, shared with every other project the organization publishes. So:
   prerelease with the runnable jar.
 - The runnable jar (`-app.jar`, about 53 MB) is attached to the GitHub Release, not uploaded to
   Central. Snapshots still carry it.
-- The budget is 4 releases a month. `scripts/cut-release.sh` shows how many this month has used,
-  and release.yml measures the bundle and refuses the upload when a release would go over
+- The budget is 4 releases a month, each at most 180 files and 15 MB. `scripts/cut-release.sh`
+  shows how many releases this month has used, and release.yml measures the bundle and refuses the
+  upload when a release would go over
   (`scripts/central-budget.py`). For a release that cannot wait, such as a security fix, tell
   central-support@sonatype.com first, then set the repository variable `CENTRAL_BUDGET_OVERRIDE`
   to the reason and re-run the release. Delete the variable afterwards.
