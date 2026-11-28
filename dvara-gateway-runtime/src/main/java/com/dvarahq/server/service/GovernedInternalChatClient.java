@@ -19,6 +19,7 @@ import com.dvarahq.core.audit.AuditEvent;
 import com.dvarahq.core.audit.AuditWriter;
 import com.dvarahq.core.call.InternalCall;
 import com.dvarahq.core.call.InternalChatClient;
+import com.dvarahq.core.call.InternalChatResult;
 import com.dvarahq.core.exception.GatewayException;
 import com.dvarahq.core.id.Ids;
 import com.dvarahq.core.model.ChatRequest;
@@ -58,6 +59,16 @@ public class GovernedInternalChatClient implements InternalChatClient {
 
     @Override
     public ChatResponse chat(ChatRequest request, InternalCall call) {
+        return call(request, call).response();
+    }
+
+    /**
+     * Runs the call and names the provider and model that served it. Both are read from the call's own request,
+     * where the dispatcher records the provider that answered (after a fallback, the one that answered) and the
+     * model it was sent to, before that request is unbound.
+     */
+    @Override
+    public InternalChatResult call(ChatRequest request, InternalCall call) {
         InternalCall running = InternalCall.current();
         if (running != null) {
             throw new IllegalStateException("An internal call of kind '" + call.kind()
@@ -73,7 +84,9 @@ public class GovernedInternalChatClient implements InternalChatClient {
              WorkspaceScope.Scope alsoIgnored = WorkspaceScope.open(call.workspaceId())) {
             ChatExecutionService.Prepared prepared = execution.prepare(request, httpRequest, null, traceId);
             try {
-                return execution.executeSync(prepared.request(), prepared.ctx(), httpRequest).response();
+                ChatResponse response = execution.executeSync(prepared.request(), prepared.ctx(), httpRequest).response();
+                return new InternalChatResult(response, text(httpRequest.getAttribute(AccessLogFilter.ATTR_PROVIDER)),
+                        text(httpRequest.getAttribute(ProviderDispatcher.SERVED_MODEL_ATTR)));
             } finally {
                 execution.releasePriority(prepared.ctx());
             }
@@ -119,6 +132,10 @@ public class GovernedInternalChatClient implements InternalChatClient {
         putIfPresent(payload, "policy_id", httpRequest.getAttribute("policy.policyId"));
         putIfPresent(payload, "policy_rule_id", httpRequest.getAttribute("policy.ruleId"));
         auditWriter.write(new AuditEvent(Ids.newId(), Instant.now(), call.workspaceId(), AUDIT_EVENT, payload));
+    }
+
+    private static String text(Object value) {
+        return value == null ? null : value.toString();
     }
 
     private static void putIfPresent(Map<String, Object> map, String key, Object value) {

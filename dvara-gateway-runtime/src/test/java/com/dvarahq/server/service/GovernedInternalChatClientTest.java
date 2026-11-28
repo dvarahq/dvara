@@ -19,6 +19,7 @@ import com.dvarahq.core.audit.AuditEvent;
 import com.dvarahq.core.audit.AuditWriter;
 import com.dvarahq.core.cache.ResponseCache;
 import com.dvarahq.core.call.InternalCall;
+import com.dvarahq.core.call.InternalChatResult;
 import com.dvarahq.core.cost.CostCalculationService;
 import com.dvarahq.core.cost.CostEstimator;
 import com.dvarahq.core.exception.GatewayException;
@@ -112,6 +113,51 @@ class GovernedInternalChatClientTest {
                     .usage(ChatResponse.Usage.builder().promptTokens(10).completionTokens(5).totalTokens(15).build())
                     .build();
         });
+    }
+
+    @Test
+    void theResultNamesTheProviderAndModelThatServedTheCall() {
+        dispatchServedBy("openai", "judge-model-2", new AtomicReference<>());
+
+        InternalChatResult result = client.call(request(), CALL);
+
+        assertThat(result.provider()).isEqualTo("openai");
+        assertThat(result.model()).as("the model the call was sent to, not the one asked for").isEqualTo("judge-model-2");
+        assertThat(result.response().getId()).isEqualTo("r1");
+    }
+
+    /**
+     * After a fallback the dispatcher records the provider that answered over the one that failed
+     * (ProviderDispatcherTest covers that); the result names the last one recorded.
+     */
+    @Test
+    void afterAFallbackTheResultNamesTheProviderThatAnswered() {
+        when(dispatcher.chat(any())).thenAnswer(inv -> {
+            var attrs = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+            attrs.getRequest().setAttribute(AccessLogFilter.ATTR_PROVIDER, "openai");
+            attrs.getRequest().setAttribute(ProviderDispatcher.SERVED_MODEL_ATTR, "gpt-4o");
+            // the primary failed; the fallback answered and is recorded over it
+            attrs.getRequest().setAttribute(AccessLogFilter.ATTR_PROVIDER, "gemini");
+            attrs.getRequest().setAttribute(ProviderDispatcher.SERVED_MODEL_ATTR, "gemini-pro");
+            return ChatResponse.builder().id("r2").model("gemini-pro").choices(List.of()).build();
+        });
+
+        InternalChatResult result = client.call(request(), CALL);
+
+        assertThat(result.provider()).isEqualTo("gemini");
+        assertThat(result.model()).isEqualTo("gemini-pro");
+    }
+
+    @Test
+    void whenNothingRecordsTheProviderTheResultSaysSoAndChatStillAnswers() {
+        when(dispatcher.chat(any())).thenReturn(ChatResponse.builder().id("r3").model("judge-model").choices(List.of()).build());
+
+        InternalChatResult result = client.call(request(), CALL);
+        ChatResponse viaChat = client.chat(request(), CALL);
+
+        assertThat(result.provider()).isNull();
+        assertThat(result.model()).isNull();
+        assertThat(viaChat.getId()).isEqualTo("r3");
     }
 
     @Test

@@ -40,4 +40,14 @@ public interface InternalChatClient {
      *         an internal call never starts another
      */
     ChatResponse chat(ChatRequest request, InternalCall call);
+
+    /**
+     * Runs one non-streaming chat request as {@code call}, as {@link #chat}, and says which provider and model served
+     * it. An implementation that cannot tell returns null for both.
+     *
+     * @return the governed response, with the provider and model that served it
+     */
+    default InternalChatResult call(ChatRequest request, InternalCall call) {
+        return new InternalChatResult(chat(request, call), null, null);
+    }
 }
