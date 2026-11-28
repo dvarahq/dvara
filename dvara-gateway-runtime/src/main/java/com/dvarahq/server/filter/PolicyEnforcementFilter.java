@@ -24,6 +24,7 @@ import com.dvarahq.core.filter.FilterOrder;
 import com.dvarahq.core.id.Ids;
 import com.dvarahq.core.model.ChatRequest;
 import com.dvarahq.core.policy.PolicyContext;
+import com.dvarahq.core.policy.PolicyApprovalGate;
 import com.dvarahq.core.policy.PolicyDecision;
 import com.dvarahq.core.policy.PolicyEngine;
 import com.dvarahq.core.region.RegionContext;
@@ -49,16 +50,29 @@ public class PolicyEnforcementFilter implements ChatFilter {
     private final SecurityContext securityContext;
     private final RegionContext regionContext;
     private final Optional<WorkspaceRepository> workspaceRepository;
+    private final Optional<PolicyApprovalGate> approvalGate;
 
     public PolicyEnforcementFilter(PolicyEngine policyEngine, AuditWriter auditWriter,
                                     SecurityContext securityContext, RegionContext regionContext,
                                     Optional<WorkspaceRepository> workspaceRepository) {
+        this(policyEngine, auditWriter, securityContext, regionContext, workspaceRepository, Optional.empty());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PolicyEnforcementFilter(PolicyEngine policyEngine, AuditWriter auditWriter,
+                                    SecurityContext securityContext, RegionContext regionContext,
+                                    Optional<WorkspaceRepository> workspaceRepository,
+                                    Optional<PolicyApprovalGate> approvalGate) {
         this.policyEngine = policyEngine;
         this.auditWriter = auditWriter;
         this.securityContext = securityContext;
         this.regionContext = regionContext;
         this.workspaceRepository = workspaceRepository;
+        this.approvalGate = approvalGate;
     }
+
+    /** The code a request held for approval gets when this build has no approval gate. */
+    public static final String APPROVAL_UNAVAILABLE = "POLICY_APPROVAL_UNAVAILABLE";
 
     /** What {@code GlobalExceptionHandler} answers a {@code POLICY_DENIED} with. */
     static final int DENIED_STATUS = 403;
@@ -94,6 +108,21 @@ public class PolicyEnforcementFilter implements ChatFilter {
         PolicyDecision decision = policyEngine.evaluate(policyCtx, request);
         ctx.setPolicyDecision(decision);
         remember(policyCtx, request.getModel());
+
+        if (decision.approvalRequired()) {
+            if (approvalGate.isEmpty()) {
+                // No gate: a held request is refused, never let through unapproved.
+                auditPolicyDenial(auditWriter, request, policyCtx, decision);
+                throw new GatewayException(APPROVAL_UNAVAILABLE, "This request needs a person's approval (policy "
+                        + decision.policyId() + ", rule " + decision.ruleId()
+                        + "), and this gateway has no approval gate, so it is refused.");
+            }
+            ChatRequest approved = approvalGate.get().hold(request, ctx, decision);
+            // Held, then approved: it runs, and what is recorded says it was allowed after a hold.
+            ctx.setPolicyDecision(new PolicyDecision(true, decision.reason(), decision.policyId(), decision.ruleId(),
+                    decision.warnings(), true));
+            return approved;
+        }
 
         if (!decision.allowed()) {
             auditPolicyDenial(auditWriter, request, policyCtx, decision);

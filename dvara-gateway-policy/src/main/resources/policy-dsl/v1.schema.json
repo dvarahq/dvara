@@ -41,13 +41,17 @@
         },
         "action": {
           "type": "string",
-          "description": "DENY (default) or WARN_AGENT, case-insensitive."
+          "description": "DENY (default), WARN_AGENT or REQUIRE_APPROVAL, case-insensitive. REQUIRE_APPROVAL holds the request for a person; a build with no approval gate refuses it."
         },
         "deny_message": {
           "type": "string"
         },
         "warn_message": {
           "type": "string"
+        },
+        "approval_message": {
+          "type": "string",
+          "description": "What the person deciding a REQUIRE_APPROVAL hold reads."
         },
         "conditions": {
           "$ref": "#/$defs/conditions"

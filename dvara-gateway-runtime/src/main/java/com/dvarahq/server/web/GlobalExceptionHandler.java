@@ -165,7 +165,7 @@ public class GlobalExceptionHandler {
         } else if ("NO_PROVIDER".equals(code) || "NO_CAPABLE_PROVIDER".equals(code)) {
             status = HttpStatus.BAD_REQUEST;
             type = "invalid_request_error";
-        } else if ("POLICY_DENIED".equals(code)) {
+        } else if ("POLICY_DENIED".equals(code) || "POLICY_APPROVAL_UNAVAILABLE".equals(code)) {
             status = HttpStatus.FORBIDDEN;
             type = "policy_violation";
         } else if ("DATA_RESIDENCY_VIOLATION".equals(code)) {

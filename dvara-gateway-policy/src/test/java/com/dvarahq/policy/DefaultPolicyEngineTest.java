@@ -318,6 +318,103 @@ class DefaultPolicyEngineTest {
                 .satisfies(w -> assertThat(w.message()).isEqualTo("Warning from policy rule: no-message-warn"));
     }
 
+    // -------------------------------------------------------------------------
+    // REQUIRE_APPROVAL action
+    // -------------------------------------------------------------------------
+
+    private static final String HOLD_DSL = """
+            version: "1"
+            rules:
+              - id: hold-gpt4o
+                priority: 10
+                conditions:
+                  model:
+                    denylist: [gpt-4o]
+                action: REQUIRE_APPROVAL
+                approval_message: A person checks calls to gpt-4o
+            """;
+
+    @Test
+    void requireApproval_holdsTheRequest_andIsNotAllowed() {
+        when(policyRepository.findAll()).thenReturn(List.of(buildPolicy("p-hold", null, PolicyStatus.ACTIVE, HOLD_DSL)));
+        engine.rebuildIndex();
+
+        PolicyDecision decision = engine.evaluate(new PolicyContext("t-1", null, null, java.util.Map.of()),
+                ChatRequest.builder().model("gpt-4o").build());
+
+        assertThat(decision.approvalRequired()).isTrue();
+        assertThat(decision.allowed()).as("held, so code that reads only allowed() refuses it").isFalse();
+        assertThat(decision.policyId()).isEqualTo("p-hold");
+        assertThat(decision.ruleId()).isEqualTo("hold-gpt4o");
+        assertThat(decision.reason()).isEqualTo("A person checks calls to gpt-4o");
+    }
+
+    @Test
+    void requireApproval_doesNotMatchOtherModels() {
+        when(policyRepository.findAll()).thenReturn(List.of(buildPolicy("p-hold", null, PolicyStatus.ACTIVE, HOLD_DSL)));
+        engine.rebuildIndex();
+
+        PolicyDecision decision = engine.evaluate(new PolicyContext("t-1", null, null, java.util.Map.of()),
+                ChatRequest.builder().model("gpt-4o-mini").build());
+
+        assertThat(decision.approvalRequired()).isFalse();
+        assertThat(decision.allowed()).isTrue();
+    }
+
+    @Test
+    void deny_winsOverRequireApproval_inEitherOrder() {
+        for (int denyPriority : new int[] {5, 50}) {
+            String dsl = HOLD_DSL + """
+                      - id: deny-gpt4o
+                        priority: %d
+                        conditions:
+                          model:
+                            denylist: [gpt-4o]
+                        action: DENY
+                    """.formatted(denyPriority);
+            when(policyRepository.findAll()).thenReturn(List.of(buildPolicy("p-both", null, PolicyStatus.ACTIVE, dsl)));
+            engine.rebuildIndex();
+
+            PolicyDecision decision = engine.evaluate(new PolicyContext("t-1", null, null, java.util.Map.of()),
+                    ChatRequest.builder().model("gpt-4o").build());
+
+            assertThat(decision.allowed()).as("deny at priority %d", denyPriority).isFalse();
+            assertThat(decision.approvalRequired()).as("deny at priority %d", denyPriority).isFalse();
+            assertThat(decision.ruleId()).isEqualTo("deny-gpt4o");
+        }
+    }
+
+    @Test
+    void requireApproval_keepsTheWarningsOfOtherRules() {
+        String dsl = HOLD_DSL + """
+                  - id: warn-gpt4o
+                    priority: 20
+                    conditions:
+                      model:
+                        denylist: [gpt-4o]
+                    action: WARN_AGENT
+                    warn_message: costly model
+                """;
+        when(policyRepository.findAll()).thenReturn(List.of(buildPolicy("p-hw", null, PolicyStatus.ACTIVE, dsl)));
+        engine.rebuildIndex();
+
+        PolicyDecision decision = engine.evaluate(new PolicyContext("t-1", null, null, java.util.Map.of()),
+                ChatRequest.builder().model("gpt-4o").build());
+
+        assertThat(decision.approvalRequired()).isTrue();
+        assertThat(decision.warnings()).singleElement().satisfies(w -> assertThat(w.message()).isEqualTo("costly model"));
+    }
+
+    @Test
+    void evaluateDsl_reportsTheHold() {
+        PolicyDecision decision = engine.evaluateDsl(HOLD_DSL, new PolicyContext("t-1", null, null, java.util.Map.of()),
+                ChatRequest.builder().model("gpt-4o").build());
+
+        assertThat(decision.approvalRequired()).isTrue();
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.ruleId()).isEqualTo("hold-gpt4o");
+    }
+
     @Test
     void evaluate_shadowPolicy_isNotEvaluatedByThisBuild() {
         // A SHADOW policy is left out of the index like a DRAFT, so it neither denies nor warns.
