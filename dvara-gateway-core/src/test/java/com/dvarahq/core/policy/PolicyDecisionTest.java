@@ -83,4 +83,24 @@ class PolicyDecisionTest {
         assertThat(decision.warnings()).isEmpty();
         assertThat(decision.hasWarnings()).isFalse();
     }
+
+    @org.junit.jupiter.api.Test
+    void approvalRequired_isNotAllowed_andNamesThePolicyAndRule() {
+        PolicyDecision decision = PolicyDecision.approvalRequired("check it", "p1", "r1", null);
+
+        org.assertj.core.api.Assertions.assertThat(decision.approvalRequired()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(decision.allowed()).isFalse();
+        org.assertj.core.api.Assertions.assertThat(decision.policyId()).isEqualTo("p1");
+        org.assertj.core.api.Assertions.assertThat(decision.ruleId()).isEqualTo("r1");
+        org.assertj.core.api.Assertions.assertThat(decision.warnings()).isEmpty();
+    }
+
+    @org.junit.jupiter.api.Test
+    void theFiveArgumentConstructor_holdsNothing() {
+        PolicyDecision decision = new PolicyDecision(false, "no", "p1", "r1", java.util.List.of());
+
+        org.assertj.core.api.Assertions.assertThat(decision.approvalRequired()).isFalse();
+        org.assertj.core.api.Assertions.assertThat(decision)
+                .isEqualTo(new PolicyDecision(false, "no", "p1", "r1", java.util.List.of(), false));
+    }
 }

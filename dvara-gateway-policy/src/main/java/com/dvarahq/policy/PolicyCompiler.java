@@ -89,8 +89,9 @@ public class PolicyCompiler {
     /** Allowed `action:` values on a rule. Anything else is rejected at compile
      *  time so authoring typos (e.g. lowercase `warn`, made-up `shadow`) surface
      *  immediately instead of silently falling through to DENY. SHADOW is a
-     *  policy-LIFECYCLE status (PolicyStatus.SHADOW), not a per-rule action. */
-    private static final Set<String> ALLOWED_ACTIONS = Set.of("DENY", "WARN_AGENT");
+     *  policy-LIFECYCLE status (PolicyStatus.SHADOW), not a per-rule action. REQUIRE_APPROVAL holds the request
+     *  for a person; a build with no approval gate refuses it. */
+    private static final Set<String> ALLOWED_ACTIONS = Set.of("DENY", "WARN_AGENT", "REQUIRE_APPROVAL");
 
     private final ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
 
@@ -214,9 +215,11 @@ public class PolicyCompiler {
                             + "and this build evaluates only ACTIVE policies.",
                     null);
         }
-        String message = "WARN_AGENT".equals(normalizedAction)
-                ? rule.getWarnMessage()
-                : rule.getDenyMessage();
+        String message = switch (normalizedAction) {
+            case "WARN_AGENT" -> rule.getWarnMessage();
+            case "REQUIRE_APPROVAL" -> rule.getApprovalMessage();
+            default -> rule.getDenyMessage();
+        };
         return new CompiledRule(
                 rule.getId(),
                 rule.getPriority(),

@@ -36,6 +36,9 @@ public class RuleDsl {
     @JsonProperty("warn_message")
     private String warnMessage;
 
+    @JsonProperty("approval_message")
+    private String approvalMessage;
+
     /**
      * Optional CEL (Common Expression Language) expression, mutually exclusive with
      * {@link #conditions}. When set, the rule matches when the expression evaluates to

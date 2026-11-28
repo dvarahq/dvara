@@ -103,6 +103,36 @@ class GoogleAccessTokensTest {
         assertThat(other.signed(jwt)).isTrue();
     }
 
+    // ---- a token minted now, from a key file's content ---------------------------------------------------------
+
+    @Test
+    void aKeyFilesContentIsTradedForANewToken_thatIsNotKept() {
+        expectToken("ya29.check-1", 3600);
+        expectToken("ya29.check-2", 3600);
+
+        GoogleAccessTokens.AccessToken first = tokens.mint(KEYS.serviceAccountJson());
+        GoogleAccessTokens.AccessToken second = tokens.mint(KEYS.serviceAccountJson());
+
+        assertThat(first.value()).isEqualTo("ya29.check-1");
+        assertThat(second.value()).as("asked again, not reused").isEqualTo("ya29.check-2");
+        assertThat(forms).hasSize(2);
+        assertThat(forms.getFirst().get("grant_type")).isEqualTo("urn:ietf:params:oauth:grant-type:jwt-bearer");
+        String jwt = forms.getFirst().get("assertion");
+        assertThat(KEYS.signed(jwt)).isTrue();
+        assertThat(TestKeys.part(jwt, 1).get("aud")).isEqualTo(TOKEN_URL);
+        google.verify();
+    }
+
+    @Test
+    void contentThatIsNotAKeyFileIsRefused_withoutACall_andWithoutEchoingIt() {
+        assertThatThrownBy(() -> tokens.mint("{\"type\":\"service_account\",\"client_email\":\"x\"}"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("private_key");
+        assertThatThrownBy(() -> tokens.mint("not json at all, secret-looking"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageNotContaining("secret-looking");
+        assertThatThrownBy(() -> tokens.mint((String) null)).isInstanceOf(IllegalArgumentException.class);
+        google.verify();
+    }
+
     // ---- kept, refreshed before expiry -----------------------------------------------------------------------
 
     @Test

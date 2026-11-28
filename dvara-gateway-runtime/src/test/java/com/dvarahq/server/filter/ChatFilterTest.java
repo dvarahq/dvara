@@ -86,6 +86,66 @@ class ChatFilterTest {
         assertThat(ctx.getPolicyDecision()).isEqualTo(PolicyDecision.ALLOW);
     }
 
+    private static PolicyEnforcementFilter policyFilter(PolicyEngine engine, AuditWriter audit,
+                                                        Optional<com.dvarahq.core.policy.PolicyApprovalGate> gate) {
+        SecurityContext sec = mock(SecurityContext.class);
+        when(sec.currentUserId()).thenReturn(Optional.empty());
+        RegionContext region = mock(RegionContext.class);
+        when(region.currentRegion()).thenReturn(Optional.empty());
+        return new PolicyEnforcementFilter(engine, audit, sec, region, Optional.empty(), gate);
+    }
+
+    private static final PolicyDecision HELD = PolicyDecision.approvalRequired("a person checks this", "p1", "r1", List.of());
+
+    /** A build with no approval gate never lets a held request through: it is refused before any provider. */
+    @Test
+    void policyFilter_heldWithNoGate_isRefusedWithApprovalUnavailable() {
+        PolicyEngine engine = mock(PolicyEngine.class);
+        when(engine.evaluate(any(), any())).thenReturn(HELD);
+        AuditWriter audit = mock(AuditWriter.class);
+        var filter = policyFilter(engine, audit, Optional.empty());
+
+        FilterContext ctx = FilterContext.builder().workspaceId("t1").apiKey("key-1").build();
+        assertThatThrownBy(() -> filter.preDispatch(ChatRequest.builder().model("gpt-4o").build(), ctx))
+                .isInstanceOf(GatewayException.class)
+                .satisfies(e -> assertThat(((GatewayException) e).getCode()).isEqualTo("POLICY_APPROVAL_UNAVAILABLE"))
+                .hasMessageContaining("p1").hasMessageContaining("r1");
+        verify(audit).write(any());
+    }
+
+    @Test
+    void policyFilter_heldAndApproved_runsAndIsRecordedAsAllowedAfterAHold() {
+        PolicyEngine engine = mock(PolicyEngine.class);
+        when(engine.evaluate(any(), any())).thenReturn(HELD);
+        var gate = mock(com.dvarahq.core.policy.PolicyApprovalGate.class);
+        ChatRequest request = ChatRequest.builder().model("gpt-4o").build();
+        when(gate.hold(any(), any(), any())).thenAnswer(inv -> inv.getArgument(0));
+        var filter = policyFilter(engine, mock(AuditWriter.class), Optional.of(gate));
+
+        FilterContext ctx = FilterContext.builder().workspaceId("t1").build();
+        ChatRequest out = filter.preDispatch(request, ctx);
+
+        assertThat(out).isSameAs(request);
+        verify(gate).hold(org.mockito.ArgumentMatchers.same(request), org.mockito.ArgumentMatchers.same(ctx),
+                org.mockito.ArgumentMatchers.eq(HELD));
+        assertThat(ctx.getPolicyDecision().allowed()).isTrue();
+        assertThat(ctx.getPolicyDecision().approvalRequired()).isTrue();
+        assertThat(ctx.getPolicyDecision().ruleId()).isEqualTo("r1");
+    }
+
+    @Test
+    void policyFilter_heldAndRefusedByTheGate_passesTheRefusalOn() {
+        PolicyEngine engine = mock(PolicyEngine.class);
+        when(engine.evaluate(any(), any())).thenReturn(HELD);
+        var gate = mock(com.dvarahq.core.policy.PolicyApprovalGate.class);
+        when(gate.hold(any(), any(), any())).thenThrow(new GatewayException("POLICY_DENIED", "a person said no"));
+        var filter = policyFilter(engine, mock(AuditWriter.class), Optional.of(gate));
+
+        assertThatThrownBy(() -> filter.preDispatch(ChatRequest.builder().model("gpt-4o").build(),
+                FilterContext.builder().workspaceId("t1").build()))
+                .isInstanceOf(GatewayException.class).hasMessageContaining("a person said no");
+    }
+
     @Test
     void policyFilter_denied_throws() {
         PolicyEngine engine = mock(PolicyEngine.class);

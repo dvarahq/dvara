@@ -187,6 +187,42 @@ class PolicyCompilerTest {
     }
 
     @Test
+    void compile_requireApproval_inAnyCase_compilesWithItsApprovalMessage() {
+        for (String action : new String[] {"REQUIRE_APPROVAL", "require_approval"}) {
+            String dsl = """
+                    version: "1"
+                    rules:
+                      - id: hold
+                        conditions:
+                          model:
+                            denylist: [gpt-4o]
+                        action: %s
+                        approval_message: a person checks this
+                    """.formatted(action);
+            var rule = compiler.compile(buildPolicy(dsl)).rules().getFirst();
+            assertThat(rule.action()).as(action).isEqualTo("REQUIRE_APPROVAL");
+            assertThat(rule.message()).as(action).isEqualTo("a person checks this");
+        }
+    }
+
+    @Test
+    void compile_aMisspeltRequireApproval_isRefused() {
+        String dsl = """
+                version: "1"
+                rules:
+                  - id: hold
+                    conditions:
+                      model:
+                        denylist: [gpt-4o]
+                    action: REQUIRE_APROVAL
+                """;
+        assertThatThrownBy(() -> compiler.compile(buildPolicy(dsl)))
+                .isInstanceOf(PolicyCompiler.PolicyCompilationException.class)
+                .hasMessageContaining("unknown action 'REQUIRE_APROVAL'")
+                .hasMessageContaining("REQUIRE_APPROVAL");
+    }
+
+    @Test
     void compile_unknownTopLevelKey_throws() {
         // PolicyDsl rejects unknown properties, so a stray top-level key surfaces as a
         // PolicyCompilationException naming it.

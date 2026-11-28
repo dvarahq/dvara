@@ -59,6 +59,9 @@ public class DefaultPolicyEngine implements PolicyEngine {
         // Pass 1: Active-only evaluation
         PolicyDecision activeDecision = null;
         List<PolicyWarning> warnings = new ArrayList<>();
+        // The first REQUIRE_APPROVAL rule that matches; a later DENY still wins over it.
+        CompiledRule hold = null;
+        CompiledPolicy holdPolicy = null;
 
         for (PolicyIndex.PolicyScopedRule scoped : scopedRules) {
             CompiledPolicy policy = scoped.policy();
@@ -78,6 +81,14 @@ public class DefaultPolicyEngine implements PolicyEngine {
                 break;
             }
 
+            if ("REQUIRE_APPROVAL".equalsIgnoreCase(rule.action())) {
+                if (hold == null) {
+                    hold = rule;
+                    holdPolicy = policy;
+                }
+                continue;
+            }
+
             if ("WARN_AGENT".equalsIgnoreCase(rule.action())) {
                 String message = rule.message() != null ? rule.message()
                         : "Warning from policy rule: " + rule.ruleId();
@@ -86,6 +97,10 @@ public class DefaultPolicyEngine implements PolicyEngine {
             }
         }
 
+        if (activeDecision == null && hold != null) {
+            activeDecision = PolicyDecision.approvalRequired(holdReason(hold), holdPolicy.policyId(), hold.ruleId(),
+                    warnings);
+        }
         if (activeDecision == null) {
             activeDecision = warnings.isEmpty()
                     ? PolicyDecision.ALLOW
@@ -94,6 +109,10 @@ public class DefaultPolicyEngine implements PolicyEngine {
 
 
         return activeDecision;
+    }
+
+    private static String holdReason(CompiledRule rule) {
+        return rule.message() != null ? rule.message() : "Request held for approval by policy rule: " + rule.ruleId();
     }
 
     @Override
@@ -115,6 +134,7 @@ public class DefaultPolicyEngine implements PolicyEngine {
             return PolicyDecision.deny("DSL compilation error: " + e.getMessage());
         }
 
+        CompiledRule hold = null;
         for (CompiledRule rule : compiled.rules()) {
             if (rule.matcher().matches(context, request)) {
                 if ("DENY".equalsIgnoreCase(rule.action())) {
@@ -122,10 +142,14 @@ public class DefaultPolicyEngine implements PolicyEngine {
                             : "Request blocked by policy rule: " + rule.ruleId();
                     return PolicyDecision.deny(reason, null, rule.ruleId());
                 }
+                if (hold == null && "REQUIRE_APPROVAL".equalsIgnoreCase(rule.action())) {
+                    hold = rule;
+                }
             }
         }
 
-        return PolicyDecision.ALLOW;
+        return hold != null ? PolicyDecision.approvalRequired(holdReason(hold), null, hold.ruleId(), List.of())
+                : PolicyDecision.ALLOW;
     }
 
     @Override

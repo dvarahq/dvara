@@ -17,8 +17,20 @@ package com.dvarahq.core.policy;
 
 import java.util.List;
 
+/**
+ * What a policy decided for a request.
+ *
+ * <p>{@code approvalRequired} marks a request a rule holds for a person ({@code REQUIRE_APPROVAL}). Such a decision is
+ * not {@code allowed}: code that looks only at {@code allowed()} refuses the request rather than letting it through,
+ * and only an approval gate that knows about holds can let it run once a person approves.
+ */
 public record PolicyDecision(boolean allowed, String reason, String policyId, String ruleId,
-                              List<PolicyWarning> warnings) {
+                              List<PolicyWarning> warnings, boolean approvalRequired) {
+
+    /** A decision that holds nothing for approval. */
+    public PolicyDecision(boolean allowed, String reason, String policyId, String ruleId, List<PolicyWarning> warnings) {
+        this(allowed, reason, policyId, ruleId, warnings, false);
+    }
 
     /**
      * Null warnings become an empty list, so a decision built directly rather than through the
@@ -40,6 +52,14 @@ public record PolicyDecision(boolean allowed, String reason, String policyId, St
 
     public static PolicyDecision allowWithWarnings(List<PolicyWarning> warnings) {
         return new PolicyDecision(true, null, null, null, warnings != null ? warnings : List.of());
+    }
+
+    /**
+     * The request needs a person's approval before it runs. It is not allowed until then: {@code allowed()} is false.
+     */
+    public static PolicyDecision approvalRequired(String reason, String policyId, String ruleId,
+                                                  List<PolicyWarning> warnings) {
+        return new PolicyDecision(false, reason, policyId, ruleId, warnings != null ? warnings : List.of(), true);
     }
 
     public boolean hasWarnings() {
