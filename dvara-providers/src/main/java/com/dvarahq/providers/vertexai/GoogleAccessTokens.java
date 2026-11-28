@@ -153,6 +153,20 @@ public class GoogleAccessTokens {
         return token != null && clock.instant().isBefore(token.expiresAt().minus(REFRESH_BEFORE_EXPIRY));
     }
 
+    /**
+     * A new token for a credential file's JSON content (a service account key, or gcloud's application default
+     * credentials), asked from the token endpoint now and not kept. For a check that must show whether the credential
+     * signs in today, such as a credential test, rather than reuse a token minted earlier.
+     *
+     * @throws IllegalArgumentException when the content is not a usable credential; the message names the kind of
+     *                                  problem, never the content
+     * @throws GatewayException         when the token endpoint refuses the request or cannot be reached; the message
+     *                                  carries Google's error code and description, never a key or a token
+     */
+    public AccessToken mint(String credentialJson) {
+        return mint(GoogleCredential.parse(credentialJson));
+    }
+
     AccessToken mint(GoogleCredential credential) {
         return switch (credential) {
             case GoogleCredential.ServiceAccount sa -> {

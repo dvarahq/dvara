@@ -170,6 +170,22 @@ class SigV4InterceptorTest {
         assertThat(a).isNotEqualTo(b);
     }
 
+    /** The interceptor signs with the public signer, so other code that uses it signs as live calls do. */
+    @Test
+    void theInterceptorSignsExactlyAsThePublicSignerDoes() throws IOException {
+        MockClientHttpRequest r = request();
+        byte[] body = "{\"prompt\":\"hi\"}".getBytes(StandardCharsets.UTF_8);
+        HttpHeaders headers = sign(r, body);
+
+        java.time.Instant at = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'")
+                .withZone(java.time.ZoneOffset.UTC).parse(headers.getFirst("x-amz-date"), java.time.Instant::from);
+        AwsSigV4.Signed expected = AwsSigV4.sign("POST", r.getURI(), "application/json", body, "AKIDEXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "us-east-1", "bedrock", at);
+
+        assertThat(headers.getFirst("Authorization")).isEqualTo(expected.authorization());
+        assertThat(headers.getFirst("x-amz-content-sha256")).isEqualTo(expected.contentSha256());
+    }
+
     /** The region is in both the credential scope and the derived signing key. */
     @Test
     void signatureVariesWithTheRegion() throws IOException {

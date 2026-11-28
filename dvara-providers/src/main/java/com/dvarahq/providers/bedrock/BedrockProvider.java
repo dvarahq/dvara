@@ -40,15 +40,9 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpRequestInterceptor;
 import org.springframework.web.client.RestClient;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -59,8 +53,6 @@ import java.util.stream.Collectors;
 
 public class BedrockProvider extends AbstractLlmProvider {
 
-    private static final DateTimeFormatter DATE_STAMP = DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC);
-    private static final DateTimeFormatter AMZ_DATE = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
 
     private final RestClient restClient;
     /** Fetches an https image URL to inline it (#55); off unless the operator turned fetching on. */
@@ -732,81 +724,22 @@ public class BedrockProvider extends AbstractLlmProvider {
                 // A report about a leaked AWS key names its access key id, so the call is attributed to that.
                 com.dvarahq.providers.support.CredentialInterceptor.recordFingerprint(accessKey);
 
-                Instant now = Instant.now();
-                String dateStamp = DATE_STAMP.format(now);
-                String amzDate = AMZ_DATE.format(now);
-                String service = "bedrock";
-
                 URI uri = request.getURI();
-                String host = uri.getHost();
-                String path = uri.getPath();
-                String method = request.getMethod().name();
+                AwsSigV4.Signed signed = AwsSigV4.sign(request.getMethod().name(), uri,
+                        request.getHeaders().getFirst("Content-Type"), body, accessKey, secretKey, region, "bedrock",
+                        Instant.now());
 
-                String payloadHash = sha256Hex(body);
-
-                request.getHeaders().set("x-amz-date", amzDate);
-                request.getHeaders().set("x-amz-content-sha256", payloadHash);
+                request.getHeaders().set("x-amz-date", signed.amzDate());
+                request.getHeaders().set("x-amz-content-sha256", signed.contentSha256());
                 if (request.getHeaders().getFirst("Host") == null) {
-                    request.getHeaders().set("Host", host);
+                    request.getHeaders().set("Host", uri.getHost());
                 }
-
-                String signedHeaders = "content-type;host;x-amz-content-sha256;x-amz-date";
-                String canonicalHeaders =
-                        "content-type:" + request.getHeaders().getFirst("Content-Type") + "\n" +
-                        "host:" + host + "\n" +
-                        "x-amz-content-sha256:" + payloadHash + "\n" +
-                        "x-amz-date:" + amzDate + "\n";
-
-                String canonicalRequest = method + "\n" + path + "\n" + "\n" +
-                        canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash;
-
-                String credentialScope = dateStamp + "/" + region + "/" + service + "/aws4_request";
-                String stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n" + credentialScope + "\n" +
-                        sha256Hex(canonicalRequest.getBytes(StandardCharsets.UTF_8));
-
-                byte[] signingKey = getSignatureKey(secretKey, dateStamp, region, service);
-                String signature = hexEncode(hmacSha256(signingKey, stringToSign));
-
-                String authorization = "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + credentialScope +
-                        ", SignedHeaders=" + signedHeaders + ", Signature=" + signature;
-
-                request.getHeaders().set("Authorization", authorization);
+                request.getHeaders().set("Authorization", signed.authorization());
             } catch (Exception e) {
                 throw new IOException("SigV4 signing failed", e);
             }
 
             return execution.execute(request, body);
-        }
-
-        private static byte[] hmacSha256(byte[] key, String data) throws Exception {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(key, "HmacSHA256"));
-            return mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-        }
-
-        private static byte[] getSignatureKey(String key, String dateStamp, String region, String service) throws Exception {
-            byte[] kSecret = ("AWS4" + key).getBytes(StandardCharsets.UTF_8);
-            byte[] kDate = hmacSha256(kSecret, dateStamp);
-            byte[] kRegion = hmacSha256(kDate, region);
-            byte[] kService = hmacSha256(kRegion, service);
-            return hmacSha256(kService, "aws4_request");
-        }
-
-        private static String sha256Hex(byte[] data) {
-            try {
-                MessageDigest md = MessageDigest.getInstance("SHA-256");
-                return hexEncode(md.digest(data));
-            } catch (Exception e) {
-                throw new RuntimeException("SHA-256 not available", e);
-            }
-        }
-
-        private static String hexEncode(byte[] bytes) {
-            StringBuilder sb = new StringBuilder(bytes.length * 2);
-            for (byte b : bytes) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
         }
     }
 
